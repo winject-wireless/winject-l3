@@ -1,0 +1,8 @@
+build_manager_*/
+build_test_*/
+src/manager/build/
+src/test/build/
+compile_commands.json
+__pycache__/
+scripts/.venv/
+.DS_Store
