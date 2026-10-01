@@ -1,6 +1,7 @@
 #include "radio/TxMux.h"
 
 #include "endpoint/Upstream.h"
+#include "endpoint/UpstreamStats.h"
 #include "frames/Mpdu.h"
 #include "radio/WifiUdp.h"
 #include "utils/Log.h"
@@ -8,6 +9,7 @@
 
 #include <bfc/buffer.hpp>
 #include <bfc/sized_buffer.hpp>
+#include <cassert>
 #include <string.h>
 #include <utility>
 
@@ -16,7 +18,7 @@ namespace
 struct TxMpduEntryPlan
 {
     size_t entry_index = 0;
-    size_t sdu_bytes = 0;
+    bfc::sized_buffer sdu;
     size_t framed_bytes = 0;
 };
 }  // namespace
@@ -26,11 +28,14 @@ namespace winject
 
 TxMux::TxMux(RadioUpstreamTable& table) : table_(table) {}
 
-void TxMux::configure(uint32_t max_rate_kbps, uint16_t domain,
-                      size_t max_data_per_tick, size_t tx_burst_size,
-                      uint32_t tx_burst_interval_us)
+TxMux::~TxMux()
 {
-    rate_kbps = max_rate_kbps < 64 ? 64 : max_rate_kbps;
+    stop();
+}
+
+void TxMux::configure(uint16_t domain, size_t max_data_per_tick,
+                      size_t tx_burst_size, uint32_t tx_burst_interval_us)
+{
     domain_ = domain;
     max_data_per_tick_ = max_data_per_tick < 1 ? 1 : max_data_per_tick;
     if (max_data_per_tick_ > 32)
@@ -43,18 +48,37 @@ void TxMux::configure(uint32_t max_rate_kbps, uint16_t domain,
         tx_burst_size_ = k_radio_tx_queue_depth;
     }
     tx_burst_interval_us_ = tx_burst_interval_us;
-    burst = k_wifi_payload_max * 2;
-    tokens = burst;
     burst_data_sent_ = 0;
     burst_cooldown_until_ = {};
-    last_refill = std::chrono::steady_clock::now();
+    next_tx_at_ = std::chrono::steady_clock::now();
 }
 
-bool TxMux::set_max_rate_kbps(uint32_t max_rate_kbps)
+void TxMux::set_phy_mode(const PhyMode& mode, uint32_t gap_us,
+                         uint32_t rate_cap_kbps)
 {
     std::lock_guard<std::mutex> lock(table_.mutex());
-    rate_kbps = max_rate_kbps < 64 ? 64 : max_rate_kbps;
-    return true;
+    phy_ = mode;
+    gap_us_ = gap_us == 0 ? phy_default_gap_us(mode) : gap_us;
+    rate_cap_kbps_ = rate_cap_kbps;
+    const uint32_t full_iv =
+        phy_txtime_us(phy_, k_pacing_full_psdu_bytes) + gap_us_;
+    pacing_credit_us_ = full_iv * 2;
+    next_tx_at_ = std::chrono::steady_clock::now();
+    LOG_INF("tx pacing: %uus+%uus per full frame (cap=%u kbps)",
+            phy_txtime_us(phy_, k_pacing_full_psdu_bytes), gap_us_,
+            rate_cap_kbps_);
+}
+
+uint32_t TxMux::pacing_txtime_full_us() const
+{
+    std::lock_guard<std::mutex> lock(table_.mutex());
+    return phy_txtime_us(phy_, k_pacing_full_psdu_bytes);
+}
+
+uint32_t TxMux::pacing_gap_us() const
+{
+    std::lock_guard<std::mutex> lock(table_.mutex());
+    return gap_us_;
 }
 
 bool TxMux::set_max_data_per_tick(size_t max_data_per_tick)
@@ -105,23 +129,17 @@ void TxMux::note_data_burst_emit()
     burst_data_sent_ = 0;
 }
 
-void TxMux::refill()
+bool TxMux::has_pending_tx_data() const
 {
-    const auto now = std::chrono::steady_clock::now();
-    auto us =
-        std::chrono::duration_cast<std::chrono::microseconds>(now - last_refill)
-            .count();
-    if (us < 0)
+    const auto& entries = table_.entries();
+    for (const auto& s : entries)
     {
-        us = 0;
+        if (s.up != nullptr && s.up->get_tx_size() > 0)
+        {
+            return true;
+        }
     }
-    last_refill = now;
-    tokens +=
-        (static_cast<uint64_t>(rate_kbps) * static_cast<uint64_t>(us)) / 8000;
-    if (tokens > burst)
-    {
-        tokens = burst;
-    }
+    return false;
 }
 
 void TxMux::init_schedule_shares(std::vector<size_t>& shares) const
@@ -157,7 +175,8 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
     {
         return false;
     }
-    if (tokens == 0 || *data_sent >= max_data_per_tick_)
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_tx_at_ || *data_sent >= max_data_per_tick_)
     {
         return false;
     }
@@ -201,17 +220,13 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         }
 
         const size_t room = k_wifi_payload_max - body_total;
-        if (room < k_lc_sequence_len + 1)
+        if (room < k_lc_header_len + 1)
         {
             return false;
         }
-        const size_t room_payload = room - k_lc_sequence_len;
+        const size_t room_payload = room - k_lc_header_len;
 
         size_t max_sdu = k_stream_payload_max;
-        if (tokens < max_sdu)
-        {
-            max_sdu = static_cast<size_t>(tokens);
-        }
         if (schedule_shares[i] < max_sdu)
         {
             max_sdu = schedule_shares[i];
@@ -225,22 +240,25 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
             return false;
         }
 
-        const size_t framed = first_sdu + k_lc_sequence_len;
+        bfc::sized_buffer sdu = s.up->pull_tx(max_sdu);
+        if (sdu.empty())
+        {
+            schedule_shares[i] = 0;
+            return false;
+        }
+        const size_t pulled = sdu.size();
+        const size_t framed = pulled + k_lc_header_len;
         if (framed > schedule_shares[i])
         {
             return false;
         }
 
-        plan.push_back(TxMpduEntryPlan{i, first_sdu, framed});
+        TxMpduEntryPlan entry;
+        entry.entry_index = i;
+        entry.sdu = std::move(sdu);
+        entry.framed_bytes = framed;
+        plan.push_back(std::move(entry));
         body_total += framed;
-        if (framed <= tokens)
-        {
-            tokens -= framed;
-        }
-        else
-        {
-            tokens = 0;
-        }
         n++;
         return true;
     };
@@ -259,25 +277,16 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
     {
         const TxMpduEntryPlan& entry_plan = plan[p];
         auto& s = entries[entry_plan.entry_index];
-        size_t max = entry_plan.sdu_bytes;
-
-        bfc::sized_buffer sdu = s.up->pull_tx(max);
-        if (sdu.empty() || sdu.size() != max)
-        {
-            return false;
-        }
-        const uint8_t* payload = reinterpret_cast<const uint8_t*>(sdu.data());
-        const size_t pulled = sdu.size();
+        const uint8_t* payload =
+            reinterpret_cast<const uint8_t*>(entry_plan.sdu.data());
+        const size_t pulled = entry_plan.sdu.size();
         size_t framed = 0;
-        if (!s.up->stamp_air(framed_buf[p], sizeof(framed_buf[p]), payload,
-                             pulled, &framed))
+        if (!stamp_air_payload(&bus_air_tx_[s.bus_tx], s.bus_tx, framed_buf[p],
+                               sizeof(framed_buf[p]), payload, pulled, &framed))
         {
             return false;
         }
-        if (framed != entry_plan.framed_bytes)
-        {
-            return false;
-        }
+        assert(framed == entry_plan.framed_bytes);
         any_data = true;
     }
 
@@ -289,25 +298,15 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
     Mpdu mpdu(mpdu_buf, mpdu_len);
     for (size_t p = 0; p < plan.size(); p++)
     {
-        const TxMpduEntryPlan& entry_plan = plan[p];
-        mpdu.set_slot_payload(
-            static_cast<uint8_t>(entry_plan.entry_index),
-            static_cast<uint16_t>(entry_plan.framed_bytes));
+        mpdu.set_slot_payload(static_cast<uint8_t>(p),
+                            static_cast<uint16_t>(plan[p].framed_bytes));
     }
-    if (!mpdu.rescan())
-    {
-        return false;
-    }
+    assert(mpdu.rescan());
     for (size_t p = 0; p < plan.size(); p++)
     {
-        const TxMpduEntryPlan& entry_plan = plan[p];
-        bfc::buffer_view slot = mpdu.get_slot_payload(
-            static_cast<uint8_t>(entry_plan.entry_index));
-        if (slot.empty() || slot.size() != entry_plan.framed_bytes)
-        {
-            return false;
-        }
-        memcpy(slot.data(), framed_buf[p], entry_plan.framed_bytes);
+        bfc::buffer_view slot = mpdu.get_slot_payload(static_cast<uint8_t>(p));
+        assert(!slot.empty() && slot.size() == plan[p].framed_bytes);
+        memcpy(slot.data(), framed_buf[p], plan[p].framed_bytes);
     }
     ieee_802_11::SeqControl* seq = mpdu.ieee().seq_ctl;
     if (seq == nullptr)
@@ -319,8 +318,25 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
     mpdu.set_domain(domain_);
     if (!s0.radio->send(mpdu_buf, mpdu_len))
     {
+        tx_send_fail_mpdu_.fetch_add(1, std::memory_order_relaxed);
+        tx_send_fail_byt_.fetch_add(mpdu_len, std::memory_order_relaxed);
         return false;
     }
+    const size_t psdu_bytes = mpdu_len + 4;
+    uint32_t interval_us = phy_txtime_us(phy_, psdu_bytes) + gap_us_;
+    if (rate_cap_kbps_ > 0)
+    {
+        const uint32_t cap_us = static_cast<uint32_t>(
+            (psdu_bytes * 8000ULL + rate_cap_kbps_ - 1) / rate_cap_kbps_);
+        if (cap_us > interval_us)
+        {
+            interval_us = cap_us;
+        }
+    }
+    const auto floor_time =
+        now - std::chrono::microseconds(pacing_credit_us_);
+    next_tx_at_ = std::max(next_tx_at_, floor_time) +
+                  std::chrono::microseconds(interval_us);
     for (const TxMpduEntryPlan& entry_plan : plan)
     {
         auto& s = entries[entry_plan.entry_index];
@@ -353,19 +369,16 @@ void TxMux::tick_impl()
     {
         return;
     }
-    refill();
-
     std::vector<size_t> schedule_shares;
     init_schedule_shares(schedule_shares);
 
     size_t data_sent = 0;
 
     bool progress = true;
-    while (progress && tokens > 0 && data_sent < max_data_per_tick_)
+    while (progress && data_sent < max_data_per_tick_)
     {
         progress = false;
-        for (size_t n = 0;
-             n < entries.size() && tokens > 0 && data_sent < max_data_per_tick_;
+        for (size_t n = 0; n < entries.size() && data_sent < max_data_per_tick_;
              n++)
         {
             const size_t i = (next + n) % entries.size();
@@ -386,10 +399,14 @@ uint64_t TxMux::take_air_bytes()
     return n;
 }
 
-uint64_t TxMux::peek_air_bytes() const
+uint64_t TxMux::tx_send_fail_mpdu() const
 {
-    std::lock_guard<std::mutex> lock(table_.mutex());
-    return air_bytes_interval;
+    return tx_send_fail_mpdu_.load(std::memory_order_relaxed);
+}
+
+uint64_t TxMux::tx_send_fail_byt() const
+{
+    return tx_send_fail_byt_.load(std::memory_order_relaxed);
 }
 
 void TxMux::log_stats(double interval_sec)
@@ -472,16 +489,43 @@ void TxMux::tx_thread_main()
         }
         for (;;)
         {
+            bool pending = false;
+            std::chrono::steady_clock::time_point pacing_until;
             {
                 std::lock_guard<std::mutex> lock(table_.mutex());
                 tick_impl();
+                pending = has_pending_tx_data();
+                pacing_until = next_tx_at_;
             }
-            std::lock_guard<std::mutex> lock(wake_mu_);
-            if (tx_work_.empty())
+            std::unique_lock<std::mutex> wlock(wake_mu_);
+            if (!tx_work_.empty())
+            {
+                tx_work_.clear();
+                break;
+            }
+            if (!pending ||
+                std::chrono::steady_clock::now() >= pacing_until)
             {
                 break;
             }
-            tx_work_.clear();
+            const auto now = std::chrono::steady_clock::now();
+            const auto until =
+                std::min(pacing_until,
+                         now + std::chrono::microseconds(k_tx_tick_interval_us));
+            wake_cv_.wait_until(wlock, until,
+                                [this]()
+                                {
+                                    return !tx_work_.empty() || tx_stop_.load();
+                                });
+            if (tx_stop_)
+            {
+                break;
+            }
+            if (!tx_work_.empty())
+            {
+                tx_work_.clear();
+                break;
+            }
         }
     }
 }

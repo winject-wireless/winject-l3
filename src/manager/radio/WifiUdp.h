@@ -5,6 +5,7 @@
 #include "utils/NetUtil.h"
 
 #include <bfcext/shared_sized_buffer.hpp>
+#include <atomic>
 #include <functional>
 #include <netinet/in.h>
 #include <stdint.h>
@@ -28,6 +29,7 @@ public:
 
     bool open(IOReactor& reactor, const sockaddr_in& inject,
               uint16_t forward_port, rx on_rx, idle on_idle = {});
+    bool register_forward();
     void close();
     bool send(const uint8_t* mpdu, size_t len);
     uint16_t forward_port() const
@@ -45,14 +47,16 @@ public:
         uint64_t rx_byte = 0;
         uint64_t tx_pkt = 0;
         uint64_t rx_pkt = 0;
+        uint64_t fcs_error_pkt = 0;
     };
     counters_s peek_counters() const
     {
         counters_s c;
-        c.tx_byte = tx_byte_;
-        c.rx_byte = rx_byte_;
-        c.tx_pkt = tx_pkt_;
-        c.rx_pkt = rx_pkt_;
+        c.tx_byte = tx_byte_.load(std::memory_order_relaxed);
+        c.rx_byte = rx_byte_.load(std::memory_order_relaxed);
+        c.tx_pkt = tx_pkt_.load(std::memory_order_relaxed);
+        c.rx_pkt = rx_pkt_.load(std::memory_order_relaxed);
+        c.fcs_error_pkt = fcs_error_pkt_.load(std::memory_order_relaxed);
         return c;
     }
 
@@ -65,10 +69,11 @@ private:
     sockaddr_in inject{};
     rx on_rx;
     idle on_idle;
-    uint64_t tx_byte_ = 0;
-    uint64_t rx_byte_ = 0;
-    uint64_t tx_pkt_ = 0;
-    uint64_t rx_pkt_ = 0;
+    std::atomic<uint64_t> tx_byte_{0};
+    std::atomic<uint64_t> rx_byte_{0};
+    std::atomic<uint64_t> tx_pkt_{0};
+    std::atomic<uint64_t> rx_pkt_{0};
+    std::atomic<uint64_t> fcs_error_pkt_{0};
     static constexpr size_t k_recv_capacity = 2048;
     bfcext::shared_sized_buffer rx_buf_;
 };

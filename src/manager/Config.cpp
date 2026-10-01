@@ -1,5 +1,7 @@
 #include "Config.h"
 
+#include "fec/RsBlockErasure.h"
+#include "radio/PhyAirtime.h"
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
 
@@ -64,64 +66,14 @@ static bool require_arg(const bfc::configuration_parser& p,
     return true;
 }
 
-namespace
-{
-struct phy_entry_s
-{
-    const char* name;
-    uint32_t kbps;
-};
-
-// Named rates from docs/winject.md (20 MHz MCS column).
-static constexpr phy_entry_s k_phy_table[] = {
-    {"DSS_1M_L", 1000},       {"DSS_2M_S", 2000},
-    {"DSS_2M_L", 2000},       {"CCK_5M_L", 5500},
-    {"CCK_5M_S", 5500},       {"CCK_11M_L", 11000},
-    {"CCK_11M_S", 11000},     {"OFDM_6M", 6000},
-    {"OFDM_9M", 9000},        {"OFDM_12M", 12000},
-    {"OFDM_18M", 18000},      {"OFDM_24M", 24000},
-    {"OFDM_36M", 36000},      {"OFDM_48M", 48000},
-    {"OFDM_54M", 54000},      {"OFDM_MCS0_LGI", 6500},
-    {"OFDM_MCS1_LGI", 13000}, {"OFDM_MCS2_LGI", 19500},
-    {"OFDM_MCS3_LGI", 26000}, {"OFDM_MCS4_LGI", 39000},
-    {"OFDM_MCS5_LGI", 52000}, {"OFDM_MCS6_LGI", 58500},
-    {"OFDM_MCS7_LGI", 65000}, {"OFDM_MCS0_SGI", 7200},
-    {"OFDM_MCS1_SGI", 14400}, {"OFDM_MCS2_SGI", 21700},
-    {"OFDM_MCS3_SGI", 28900}, {"OFDM_MCS4_SGI", 43300},
-    {"OFDM_MCS5_SGI", 57800}, {"OFDM_MCS6_SGI", 65000},
-    {"OFDM_MCS7_SGI", 72200},
-};
-
-const phy_entry_s* find_phy(const std::string& modulation)
-{
-    std::string upper;
-    upper.reserve(modulation.size());
-    for (char c : modulation)
-    {
-        upper.push_back(
-            static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-    }
-    for (const auto& e : k_phy_table)
-    {
-        if (upper == e.name)
-        {
-            return &e;
-        }
-    }
-    return nullptr;
-}
-}  // namespace
-
 uint32_t Config::phy_rate_kbps(const std::string& modulation)
 {
-    const phy_entry_s* e = find_phy(modulation);
-    return e != nullptr ? e->kbps : 0;
+    return phy_nominal_kbps(modulation);
 }
 
 std::string Config::canonical_modulation(const std::string& modulation)
 {
-    const phy_entry_s* e = find_phy(modulation);
-    return e != nullptr ? e->name : "";
+    return phy_canonical_name(modulation);
 }
 
 bool Config::modulation_ok_for_channel(const std::string& modulation,
@@ -137,32 +89,6 @@ bool Config::modulation_ok_for_channel(const std::string& modulation,
         return true;
     }
     return name.rfind("DSS_", 0) == 0 || name.rfind("CCK_", 0) == 0;
-}
-
-uint32_t Config::derive_max_rate_kbps(const std::string& modulation)
-{
-    const uint32_t phy = phy_rate_kbps(modulation);
-    if (phy == 0)
-    {
-        return 10000;  // fallback if modulation string is unknown
-    }
-    // Match tools/bw_test.py auto_offer for a full MPDU. Scheduler/ingest
-    // ceiling is ~70% of that UDP estimate (~10 Mbps for OFDM_24M).
-    constexpr size_t k_payload = 1400;
-    const double preamble_us = phy <= 11000 ? 200.0 : 40.0;
-    const double mac_us = phy <= 11000 ? 400.0 : 150.0;
-    const double mpdu_bits = (24.0 + static_cast<double>(k_payload)) * 8.0;
-    const double air_us =
-        preamble_us + (mpdu_bits / static_cast<double>(phy)) * 1000.0 + mac_us;
-    const double udp_kbps =
-        (static_cast<double>(k_payload) * 8.0) / (air_us / 1000.0) * 0.85;
-    const double tcp_kbps = udp_kbps * 0.70;
-    uint32_t out = static_cast<uint32_t>(tcp_kbps + 0.5);
-    if (out < 64)
-    {
-        out = 64;
-    }
-    return out;
 }
 
 bool Config::load(const std::string& path, std::string* error)
@@ -210,16 +136,17 @@ bool Config::load(const std::string& path, std::string* error)
     {
         return false;
     }
-    if (channel == 14)
+    const std::string canon = canonical_modulation(modulation);
+    if (canon.empty())
     {
-        // Match firmware: channel 14 is DSSS/CCK only.
-        const bool is_11b = modulation.rfind("DSS_", 0) == 0 ||
-                            modulation.rfind("CCK_", 0) == 0;
-        if (!is_11b)
-        {
-            *error = "winject.channel 14 requires DSSS/CCK winject.modulation";
-            return false;
-        }
+        *error = "invalid winject.modulation";
+        return false;
+    }
+    modulation = canon;
+    if (!modulation_ok_for_channel(modulation, channel))
+    {
+        *error = "winject.modulation not valid for winject.channel";
+        return false;
     }
     auto pwr = parser.as<int>("winject.power");
     if (!pwr || *pwr < 2 || *pwr > 20)
@@ -239,15 +166,31 @@ bool Config::load(const std::string& path, std::string* error)
         *error = "invalid winject.domain";
         return false;
     }
+    if (domain == 0)
+    {
+        *error = "winject.domain must be non-zero";
+        return false;
+    }
 
     auto rate = parser.as<unsigned>("winject.max_rate_kbps");
     if (rate && *rate > 0)
     {
         max_rate_kbps = *rate;
+        max_rate_kbps_explicit = true;
     }
     else
     {
-        max_rate_kbps = 10000;
+        max_rate_kbps = 0;
+        max_rate_kbps_explicit = false;
+    }
+    if (auto gap = parser.as<unsigned>("winject.tx_gap_us"))
+    {
+        if (*gap > 10000u)
+        {
+            *error = "invalid winject.tx_gap_us";
+            return false;
+        }
+        tx_gap_us = static_cast<uint32_t>(*gap);
     }
     local_ip = parser.arg("winject.local_ip").value_or("");
     if (auto skip = parser.arg("winject.skip_console"))
@@ -256,24 +199,30 @@ bool Config::load(const std::string& path, std::string* error)
     }
     if (auto mpt = parser.as<unsigned>("winject.max_data_per_tick"))
     {
-        if (*mpt >= 1 && *mpt <= 32)
+        if (*mpt < 1 || *mpt > 32)
         {
-            max_data_per_tick = *mpt;
+            *error = "invalid winject.max_data_per_tick";
+            return false;
         }
+        max_data_per_tick = *mpt;
     }
     if (auto bs = parser.as<unsigned>("winject.tx_burst_size"))
     {
-        if (*bs >= 1 && *bs <= k_radio_tx_queue_depth)
+        if (*bs < 1 || *bs > k_radio_tx_queue_depth)
         {
-            tx_burst_size = *bs;
+            *error = "invalid winject.tx_burst_size";
+            return false;
         }
+        tx_burst_size = *bs;
     }
     if (auto bi = parser.as<unsigned>("winject.tx_burst_interval_us"))
     {
-        if (*bi <= 1000000u)
+        if (*bi > 1000000u)
         {
-            tx_burst_interval_us = static_cast<uint32_t>(*bi);
+            *error = "invalid winject.tx_burst_interval_us";
+            return false;
         }
+        tx_burst_interval_us = static_cast<uint32_t>(*bi);
     }
     manager_console_in = parser.arg("manager.console_in").value_or("");
     manager_console_out = parser.arg("manager.console_out").value_or("");
@@ -383,12 +332,6 @@ bool Config::load(const std::string& path, std::string* error)
                 "upstream-" + std::to_string(i) + " needs tx_bus and/or rx_bus";
             return false;
         }
-        if (u.bus_tx != 0 && u.bus_tx == u.bus_rx)
-        {
-            *error = key_of(i, "tx_bus") + " and " + key_of(i, "rx_bus") +
-                     " must differ";
-            return false;
-        }
         auto budget = parser.as<unsigned>(key_of(i, "scheduler_budget"));
         if (!budget || *budget == 0)
         {
@@ -475,19 +418,147 @@ bool Config::load(const std::string& path, std::string* error)
             return false;
         }
         u.endpoint = UdpPeerEndpoint{std::move(rx), std::move(tx)};
-        auto bus_used = [](uint8_t bus, const UpstreamConfig& o)
+        upstreams.push_back(u);
+    }
+    if (!validate_upstreams(upstreams, error))
+    {
+        return false;
+    }
+    return true;
+}
+
+bool Config::validate_upstreams(const std::vector<UpstreamConfig>& upstreams,
+                                std::string* error)
+{
+    for (size_t i = 0; i < upstreams.size(); ++i)
+    {
+        const UpstreamConfig& u = upstreams[i];
+        if (u.bus_tx == 0 && u.bus_rx == 0)
         {
-            return bus != 0 && (bus == o.bus_tx || bus == o.bus_rx);
-        };
-        for (const auto& prev : upstreams)
-        {
-            if (bus_used(u.bus_tx, prev) || bus_used(u.bus_rx, prev))
+            if (error != nullptr)
             {
-                *error = "duplicate bus on upstream-" + std::to_string(i);
-                return false;
+                *error = "upstream needs tx_bus and/or rx_bus";
+            }
+            return false;
+        }
+    }
+    for (uint8_t bus = 1; bus != 0; ++bus)
+    {
+        size_t count = 0;
+        bool fec_on_bus = false;
+        for (const auto& u : upstreams)
+        {
+            if (u.bus_tx != bus)
+            {
+                continue;
+            }
+            ++count;
+            if (u.fec_type == FecType::RsBlockErasure)
+            {
+                fec_on_bus = true;
             }
         }
-        upstreams.push_back(u);
+        if (count > 1 && fec_on_bus)
+        {
+            if (error != nullptr)
+            {
+                *error = "shared tx_bus with FEC enabled";
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Config::validate_upstream_update(
+    const UpstreamConfig& current, FecType fec_type, int fec_k, int fec_n,
+    int fec_timeout_ms, size_t quanta, bool have_fec, bool have_k, bool have_n,
+    bool have_fec_timeout, bool have_quanta,
+    const std::vector<UpstreamConfig>& all, UpstreamConfig* out,
+    std::string* error)
+{
+    if (out == nullptr)
+    {
+        if (error != nullptr)
+        {
+            *error = "invalid argument";
+        }
+        return false;
+    }
+    *out = current;
+    if (have_quanta)
+    {
+        if (quanta == 0)
+        {
+            if (error != nullptr)
+            {
+                *error = "invalid quanta";
+            }
+            return false;
+        }
+        out->scheduler_budget = quanta;
+    }
+    if (have_fec_timeout)
+    {
+        if (fec_timeout_ms < 1)
+        {
+            if (error != nullptr)
+            {
+                *error = "invalid fec_timeout";
+            }
+            return false;
+        }
+        out->fec_timeout_ms = fec_timeout_ms;
+    }
+    FecType type = current.fec_type;
+    int k = current.fec_k;
+    int n = current.fec_n;
+    if (have_fec)
+    {
+        type = fec_type;
+    }
+    if (have_k)
+    {
+        k = fec_k;
+    }
+    if (have_n)
+    {
+        n = fec_n;
+    }
+    if (type == FecType::none)
+    {
+        k = 0;
+        n = 0;
+    }
+    else
+    {
+        RsBlockErasure codec;
+        const int timeout =
+            have_fec_timeout ? fec_timeout_ms : out->fec_timeout_ms;
+        if (!codec.init(k, n, timeout))
+        {
+            if (error != nullptr)
+            {
+                *error = "invalid fec k/n";
+            }
+            return false;
+        }
+    }
+    out->fec_type = type;
+    out->fec_k = k;
+    out->fec_n = n;
+    std::vector<UpstreamConfig> candidate = all;
+    for (auto& u : candidate)
+    {
+        if (u.index == current.index)
+        {
+            u = *out;
+            break;
+        }
+    }
+    if (!validate_upstreams(candidate, error))
+    {
+        return false;
     }
     return true;
 }

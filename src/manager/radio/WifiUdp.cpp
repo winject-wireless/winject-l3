@@ -1,5 +1,6 @@
 #include "radio/WifiUdp.h"
 
+#include "radio/WifiFcs.h"
 #include "utils/Log.h"
 
 #include <errno.h>
@@ -30,15 +31,10 @@ bool WifiUdp::open(IOReactor& reactor, const sockaddr_in& inject,
         close();
         return false;
     }
-    // Forward port bind must be exclusive or a stale manager can keep stealing
-    // unicast packets while this process shows radio_rx=0.
-    sockaddr_in bind_addr = {};
-    bind_addr.sin_family = AF_INET;
-    bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    bind_addr.sin_port = htons(forward_port_);
-    if (sock.bind(bind_addr) < 0)
+    // D-plane RX is server mode on the radio: register with an empty datagram
+    // so the radio learns our return address for forwarded MPDUs.
+    if (!register_forward())
     {
-        LOG_ERR("radio udp bind %u failed: %s", forward_port_, strerror(errno));
         close();
         return false;
     }
@@ -49,6 +45,28 @@ bool WifiUdp::open(IOReactor& reactor, const sockaddr_in& inject,
                               }))
     {
         close();
+        return false;
+    }
+    return true;
+}
+
+bool WifiUdp::register_forward()
+{
+    if (sock.fd() < 0 || forward_port_ == 0)
+    {
+        return false;
+    }
+    sockaddr_in reg = inject;
+    reg.sin_port = htons(forward_port_);
+    static const uint8_t k_reg = 0;
+    const bfc::const_buffer_view reg_view(
+        reinterpret_cast<const std::byte*>(&k_reg), 1);
+    const ssize_t sent = sock.send(
+        reg_view, 0, reinterpret_cast<const sockaddr*>(&reg), sizeof(reg));
+    if (sent < 0)
+    {
+        LOG_ERR("radio dplane_rx register %u failed: %s", forward_port_,
+                strerror(errno));
         return false;
     }
     return true;
@@ -78,22 +96,23 @@ bool WifiUdp::send(const uint8_t* mpdu, size_t len)
         return false;
     }
     const bfc::const_buffer_view view(reinterpret_cast<const std::byte*>(mpdu),
-                                       len);
+                                      len);
     const ssize_t sent = sock.send(
         view, 0, reinterpret_cast<const sockaddr*>(&inject), sizeof(inject));
     if (sent != static_cast<ssize_t>(len))
     {
         return false;
     }
-    tx_pkt_++;
-    tx_byte_ += len;
+    tx_pkt_.fetch_add(1, std::memory_order_relaxed);
+    tx_byte_.fetch_add(len, std::memory_order_relaxed);
     return true;
 }
 
 void WifiUdp::on_forward()
 {
     bool any = false;
-    while (true)
+    constexpr int k_max_rx_per_wakeup = 8;
+    for (int drained = 0; drained < k_max_rx_per_wakeup; ++drained)
     {
         sockaddr_in peer = {};
         socklen_t peer_len = sizeof(peer);
@@ -102,14 +121,19 @@ void WifiUdp::on_forward()
             rx_buf_.reserve(k_recv_capacity);
         }
         rx_buf_.resize(k_recv_capacity);
-        const ssize_t n = sock.recv(
-            rx_buf_, 0, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+        const ssize_t n =
+            sock.recv(rx_buf_, MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&peer),
+                      &peer_len);
         if (n >= 0)
         {
             rx_buf_.resize(static_cast<size_t>(n));
         }
         if (n < 0)
         {
+            if (errno == EINTR)
+            {
+                continue;
+            }
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
                 break;
@@ -119,11 +143,23 @@ void WifiUdp::on_forward()
         }
         if (n == 0)
         {
-            break;
+            continue;
         }
         any = true;
-        rx_pkt_++;
-        rx_byte_ += static_cast<uint64_t>(n);
+        rx_pkt_.fetch_add(1, std::memory_order_relaxed);
+        rx_byte_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+        const size_t len = static_cast<size_t>(n);
+        if (len < 28 || len > k_mpdu_max + 4)
+        {
+            continue;
+        }
+        const uint8_t* frame = reinterpret_cast<const uint8_t*>(rx_buf_.data());
+        if (!wifi_fcs_matches(frame, len))
+        {
+            fcs_error_pkt_.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        rx_buf_.resize(len - 4);
         if (on_rx)
         {
             on_rx(std::move(rx_buf_));

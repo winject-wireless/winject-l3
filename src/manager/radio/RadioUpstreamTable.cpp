@@ -6,10 +6,22 @@
 namespace winject
 {
 
+bool RadioUpstreamTable::remove(size_t index)
+{
+    std::lock_guard<std::mutex> lock(mu_);
+    if (index >= entries_.size())
+    {
+        return false;
+    }
+    entries_.erase(entries_.begin() + static_cast<ptrdiff_t>(index));
+    return true;
+}
+
 void RadioUpstreamTable::add(const std::shared_ptr<Upstream>& up,
                              const std::shared_ptr<WifiUdp>& radio,
                              uint8_t bus_tx, uint8_t bus_rx, size_t budget)
 {
+    std::lock_guard<std::mutex> lock(mu_);
     entries_.push_back(RadioUpstreamEntry{up, radio, bus_tx, bus_rx, budget});
 }
 

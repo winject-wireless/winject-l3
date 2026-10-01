@@ -1,18 +1,28 @@
 #include "console/ConsoleClient.h"
 
+#include "console/MplaneCorrelation.h"
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
 
-#include <chrono>
-#include <cstdlib>
 #include <errno.h>
-#include <poll.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <vector>
 
 namespace winject
 {
+
+namespace
+{
+
+std::string format_radio_tx_cmd(uint16_t channel, int tx_power,
+                                const std::string& modulation)
+{
+    return "radio_tx channel=" + std::to_string(channel) + " tx_power=" +
+           std::to_string(tx_power) + " modulation=" + modulation;
+}
+
+}  // namespace
 
 ConsoleClient::~ConsoleClient()
 {
@@ -21,9 +31,9 @@ ConsoleClient::~ConsoleClient()
 
 void ConsoleClient::close()
 {
+    cancel_pending();
     bfc::socket(std::move(sock));
     pending.clear();
-    pong_seen_ = false;
 }
 
 bool ConsoleClient::start_connect(const Config& cfg, std::string* error)
@@ -80,470 +90,13 @@ bool ConsoleClient::finish_connect(std::string* error)
     return true;
 }
 
-bool ConsoleClient::recv_datagram(std::string* payload, std::string* error)
+bool ConsoleClient::send_wire(const std::string& wire, std::string* error)
 {
-    using clock = std::chrono::steady_clock;
-    const auto deadline = clock::now() + std::chrono::seconds(3);
-    while (true)
-    {
-        const auto now = clock::now();
-        if (now >= deadline)
-        {
-            *error = "console read timeout";
-            return false;
-        }
-        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              deadline - now)
-                              .count();
-        pollfd pfd = {};
-        pfd.fd = sock.fd();
-        pfd.events = POLLIN;
-        const int pr = poll(&pfd, 1, static_cast<int>(left));
-        if (pr == 0)
-        {
-            *error = "console read timeout";
-            return false;
-        }
-        if (pr < 0)
-        {
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            *error = strerror(errno);
-            return false;
-        }
-        char buf[16384];
-        const ssize_t n = recv(sock.fd(), buf, sizeof(buf), 0);
-        if (n < 0)
-        {
-            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
-            {
-                continue;
-            }
-            *error = strerror(errno);
-            return false;
-        }
-        if (n == 0)
-        {
-            continue;
-        }
-        payload->assign(buf, static_cast<size_t>(n));
-        return true;
-    }
-}
-
-bool ConsoleClient::send_cmd(const std::string& cmd, std::string* error)
-{
-    std::string wire = cmd;
-    if (wire.empty() || wire.back() != '\n')
-    {
-        wire.push_back('\n');
-    }
-    using clock = std::chrono::steady_clock;
-    constexpr int k_attempts = 3;
-    std::string last_err = "console read timeout";
-
-    for (int attempt = 0; attempt < k_attempts; ++attempt)
-    {
-        // Drop stale datagrams so a late reply to a prior attempt is not
-        // mistaken for this command's ok/nok.
-        while (true)
-        {
-            char junk[2048];
-            const ssize_t n = recv(sock.fd(), junk, sizeof(junk), MSG_DONTWAIT);
-            if (n < 0)
-            {
-                break;
-            }
-        }
-
-        const auto write_deadline = clock::now() + std::chrono::seconds(3);
-        bool sent = false;
-        while (!sent)
-        {
-            const ssize_t n =
-                send(sock.fd(), wire.data(), wire.size(), MSG_NOSIGNAL);
-            if (n > 0)
-            {
-                sent = true;
-                break;
-            }
-            if (n == 0)
-            {
-                *error = "console send failed";
-                return false;
-            }
-            if (errno == EINTR)
-            {
-                continue;
-            }
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-            {
-                const auto now = clock::now();
-                if (now >= write_deadline)
-                {
-                    last_err = "console write timeout";
-                    break;
-                }
-                const auto left =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        write_deadline - now)
-                        .count();
-                pollfd pfd = {};
-                pfd.fd = sock.fd();
-                pfd.events = POLLOUT;
-                const int pr = poll(&pfd, 1, static_cast<int>(left));
-                if (pr == 0)
-                {
-                    last_err = "console write timeout";
-                    break;
-                }
-                if (pr < 0)
-                {
-                    if (errno == EINTR)
-                    {
-                        continue;
-                    }
-                    *error = strerror(errno);
-                    return false;
-                }
-                continue;
-            }
-            *error = strerror(errno);
-            return false;
-        }
-        if (!sent)
-        {
-            if (attempt + 1 < k_attempts)
-            {
-                LOG_WRN("console %s write timeout, retry %d/%d", cmd.c_str(),
-                        attempt + 1, k_attempts - 1);
-                continue;
-            }
-            *error = last_err;
-            return false;
-        }
-
-        while (true)
-        {
-            std::string dgram;
-            std::string recv_err;
-            if (!recv_datagram(&dgram, &recv_err))
-            {
-                last_err = recv_err;
-                break;
-            }
-            std::string line = dgram;
-            const auto nl = line.find('\n');
-            if (nl != std::string::npos)
-            {
-                line.resize(nl);
-            }
-            if (!line.empty() && line.back() == '\r')
-            {
-                line.pop_back();
-            }
-            if (line == "pong")
-            {
-                pong_seen_ = true;
-                continue;
-            }
-            if (line == "ok" || line.rfind("ok ", 0) == 0)
-            {
-                return true;
-            }
-            if (line.rfind("nok ", 0) == 0)
-            {
-                // Soft / transient: retry. Hard command errors still fail.
-                const bool soft = line.find("timeout") != std::string::npos ||
-                                  line.find("busy") != std::string::npos ||
-                                  line.find("no mem") != std::string::npos;
-                last_err = cmd + " -> " + line;
-                if (soft && attempt + 1 < k_attempts)
-                {
-                    LOG_WRN("console %s, retry %d/%d", last_err.c_str(),
-                            attempt + 1, k_attempts - 1);
-                    break;
-                }
-                *error = last_err;
-                return false;
-            }
-        }
-        if (attempt + 1 < k_attempts)
-        {
-            LOG_WRN("console %s: %s, retry %d/%d", cmd.c_str(),
-                    last_err.c_str(), attempt + 1, k_attempts - 1);
-        }
-    }
-    *error = last_err;
-    return false;
-}
-
-bool ConsoleClient::set_modulation(const std::string& name, std::string* error)
-{
-    return send_cmd("set_modulation " + name, error);
-}
-
-static bool parse_upstream_tx_port(const std::string& line,
-                                   uint16_t* inject_port)
-{
-    static const char k_prefix[] = "upstream_tx ";
-    if (line.rfind(k_prefix, 0) != 0 || inject_port == nullptr)
-    {
-        return false;
-    }
-    const auto port_pos = line.find("port=");
-    if (port_pos == std::string::npos)
-    {
-        return false;
-    }
-    char* end = nullptr;
-    const unsigned long port = strtoul(line.c_str() + port_pos + 5, &end, 10);
-    if (end == line.c_str() + port_pos + 5 || port == 0 || port > 65535)
-    {
-        return false;
-    }
-    *inject_port = static_cast<uint16_t>(port);
-    return true;
-}
-
-static void split_lines(const std::string& dgram,
-                        std::vector<std::string>* lines)
-{
-    lines->clear();
     size_t off = 0;
-    while (off < dgram.size())
+    while (off < wire.size())
     {
-        const auto nl = dgram.find('\n', off);
-        std::string line = nl == std::string::npos
-                               ? dgram.substr(off)
-                               : dgram.substr(off, nl - off);
-        if (!line.empty() && line.back() == '\r')
-        {
-            line.pop_back();
-        }
-        if (!line.empty())
-        {
-            lines->push_back(std::move(line));
-        }
-        if (nl == std::string::npos)
-        {
-            break;
-        }
-        off = nl + 1;
-    }
-}
-
-bool ConsoleClient::query_status(std::vector<std::string>* lines,
-                                 std::string* error)
-{
-    lines->clear();
-    const char* wire = "status\n";
-    while (true)
-    {
-        const ssize_t n = send(sock.fd(), wire, 7, MSG_NOSIGNAL);
-        if (n > 0)
-        {
-            break;
-        }
-        if (n < 0 && errno == EINTR)
-        {
-            continue;
-        }
-        *error = strerror(errno);
-        return false;
-    }
-
-    while (true)
-    {
-        std::string dgram;
-        if (!recv_datagram(&dgram, error))
-        {
-            return false;
-        }
-        std::vector<std::string> body;
-        split_lines(dgram, &body);
-        if (body.empty())
-        {
-            continue;
-        }
-        if (body[0] == "pong")
-        {
-            pong_seen_ = true;
-            continue;
-        }
-        if (body[0].rfind("nok ", 0) == 0)
-        {
-            *error = std::string("status -> ") + body[0];
-            return false;
-        }
-        if (body[0] == "ok" || body[0].rfind("ok ", 0) == 0)
-        {
-            if (body[0] == "ok")
-            {
-                body.erase(body.begin());
-            }
-            else
-            {
-                body[0].erase(0, 3);
-            }
-            *lines = std::move(body);
-            return true;
-        }
-    }
-}
-
-bool ConsoleClient::release_inject_port(uint16_t port, std::string* error)
-{
-    std::vector<std::string> lines;
-    std::string status_err;
-    if (!query_status(&lines, &status_err))
-    {
-        LOG_INF("status unavailable (%s); trying set_upstream_tx anyway",
-                status_err.c_str());
-        return true;
-    }
-    for (const auto& line : lines)
-    {
-        uint16_t inject_port = 0;
-        if (!parse_upstream_tx_port(line, &inject_port) || inject_port != port)
-        {
-            continue;
-        }
-        LOG_INF("unset stale upstream_tx (held inject %u)", port);
-        if (!send_cmd("unset_upstream_tx", error))
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool ConsoleClient::program(const Config& cfg,
-                            const std::vector<uint16_t>& inject_ports,
-                            const std::vector<uint16_t>& forward_ports,
-                            in_addr* local_ip_out, std::string* error)
-{
-    if (local_ip_out == nullptr)
-    {
-        *error = "local_ip_out is null";
-        return false;
-    }
-    if (!start_connect(cfg, error) || !finish_connect(error))
-    {
-        close();
-        return false;
-    }
-    *local_ip_out = local_ip_;
-
-    // Channel 14 is 802.11b-only: apply DSSS/CCK before switching to 14,
-    // and leave 14 before applying OFDM (matches firmware
-    // settings::apply_snapshot). Addr3 prefix+domain are stamped by the manager
-    // (TxMux + frames/mpdu); do not send set_mode to the radio.
-    if (cfg.channel == 14)
-    {
-        if (!send_cmd("set_modulation " + cfg.modulation, error) ||
-            !send_cmd("set_channel " + std::to_string(cfg.channel), error))
-        {
-            close();
-            return false;
-        }
-    }
-    else if (!send_cmd("set_channel " + std::to_string(cfg.channel), error) ||
-             !send_cmd("set_modulation " + cfg.modulation, error))
-    {
-        close();
-        return false;
-    }
-    if (!send_cmd("set_tx_power " + std::to_string(cfg.power_dbm), error) ||
-        !send_cmd("set_domain " + domain_to_string(cfg.domain), error))
-    {
-        close();
-        return false;
-    }
-    LOG_INF("radio programmed ch=%u mod=%s pwr=%d domain=%s",
-            cfg.channel, cfg.modulation.c_str(), cfg.power_dbm,
-            domain_to_string(cfg.domain).c_str());
-
-    if (inject_ports.empty() || forward_ports.empty())
-    {
-        *error = "inject/forward port missing";
-        close();
-        return false;
-    }
-    if (!apply_upstream(cfg, inject_ports[0], forward_ports[0], local_ip_,
-                        error))
-    {
-        close();
-        return false;
-    }
-    pending.clear();
-    return true;
-}
-
-bool ConsoleClient::apply_radio(const Config& cfg, std::string* error)
-{
-    // Addr3 prefix+domain: TxMux + frames/mpdu; do not send set_mode.
-    // set_mode to the radio.
-    if (cfg.channel == 14)
-    {
-        if (!send_cmd("set_modulation " + cfg.modulation, error) ||
-            !send_cmd("set_channel " + std::to_string(cfg.channel), error))
-        {
-            return false;
-        }
-    }
-    else if (!send_cmd("set_channel " + std::to_string(cfg.channel), error) ||
-             !send_cmd("set_modulation " + cfg.modulation, error))
-    {
-        return false;
-    }
-    if (!send_cmd("set_tx_power " + std::to_string(cfg.power_dbm), error) ||
-        !send_cmd("set_domain " + domain_to_string(cfg.domain), error))
-    {
-        return false;
-    }
-    LOG_INF("radio programmed ch=%u mod=%s pwr=%d domain=%s",
-            cfg.channel, cfg.modulation.c_str(), cfg.power_dbm,
-            domain_to_string(cfg.domain).c_str());
-    return true;
-}
-
-bool ConsoleClient::apply_upstream(const Config& cfg, uint16_t inject_port,
-                                   uint16_t forward_port, in_addr local_ip,
-                                   std::string* error)
-{
-    (void)cfg;
-    if (!release_inject_port(inject_port, error))
-    {
-        return false;
-    }
-    const std::string sut =
-        "set_upstream_tx port=" + std::to_string(inject_port);
-    if (!send_cmd(sut, error))
-    {
-        return false;
-    }
-    const std::string sur = "set_upstream_rx host=" + ipv4_to_string(local_ip) +
-                            " port=" + std::to_string(forward_port);
-    if (!send_cmd(sur, error))
-    {
-        return false;
-    }
-    LOG_INF("radio upstream inject=%u forward=%s:%u", inject_port,
-            ipv4_to_string(local_ip).c_str(), forward_port);
-    return true;
-}
-
-bool ConsoleClient::send_ping(std::string* error)
-{
-    static const char k_wire[] = "ping\n";
-    size_t off = 0;
-    while (off < sizeof(k_wire) - 1)
-    {
-        const ssize_t n = send(sock.fd(), k_wire + off,
-                               sizeof(k_wire) - 1 - off, MSG_NOSIGNAL);
+        const ssize_t n =
+            send(sock.fd(), wire.data() + off, wire.size() - off, MSG_NOSIGNAL);
         if (n < 0)
         {
             if (errno == EINTR)
@@ -552,7 +105,7 @@ bool ConsoleClient::send_ping(std::string* error)
             }
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
-                *error = "console ping would block";
+                *error = "console send would block";
                 return false;
             }
             *error = strerror(errno);
@@ -566,6 +119,143 @@ bool ConsoleClient::send_ping(std::string* error)
         off += static_cast<size_t>(n);
     }
     return true;
+}
+
+void ConsoleClient::cancel_pending()
+{
+    for (auto& entry : pending_reqs_)
+    {
+        if (entry.second.done)
+        {
+            MplaneResult r;
+            r.ok = false;
+            r.error = "cancelled";
+            entry.second.done(std::move(r));
+        }
+    }
+    pending_reqs_.clear();
+}
+
+void ConsoleClient::complete(uint8_t id, MplaneResult result)
+{
+    auto it = pending_reqs_.find(id);
+    if (it == pending_reqs_.end())
+    {
+        return;
+    }
+    DoneFn done = std::move(it->second.done);
+    pending_reqs_.erase(it);
+    if (done)
+    {
+        done(std::move(result));
+    }
+}
+
+bool ConsoleClient::request(const std::string& mplane_line, DoneFn done)
+{
+    return request(mplane_line, default_timeout_, std::move(done));
+}
+
+bool ConsoleClient::request(const std::string& mplane_line,
+                            std::chrono::milliseconds timeout, DoneFn done)
+{
+    if (!done)
+    {
+        return false;
+    }
+    if (sock.fd() < 0)
+    {
+        MplaneResult r;
+        r.error = "no socket";
+        done(std::move(r));
+        return false;
+    }
+    const uint8_t id = next_req_id_++;
+    if (next_req_id_ == 0)
+    {
+        next_req_id_ = 1;
+    }
+    const std::string wire = format_mplane_cmd(id, mplane_line);
+    LOG_INF(">> %s", wire.c_str());
+    std::string err;
+    if (!send_wire(wire, &err))
+    {
+        MplaneResult r;
+        r.error = err;
+        done(std::move(r));
+        return false;
+    }
+    Pending p;
+    p.cmd = mplane_line;
+    p.deadline = std::chrono::steady_clock::now() + timeout;
+    p.done = std::move(done);
+    pending_reqs_[id] = std::move(p);
+    return true;
+}
+
+void ConsoleClient::on_line(const std::string& line)
+{
+    uint8_t id = 0;
+    bool ok = false;
+    std::string payload;
+    if (!parse_correlated_reply(line, &id, &ok, &payload))
+    {
+        return;
+    }
+    auto it = pending_reqs_.find(id);
+    if (it == pending_reqs_.end())
+    {
+        LOG_WRN("mplane reply for unknown id %u: %s", static_cast<unsigned>(id),
+                line.c_str());
+        return;
+    }
+    LOG_INF("<< %s", line.c_str());
+    if (ok && payload == "pong")
+    {
+        MplaneResult r;
+        r.ok = true;
+        r.payload = "pong";
+        complete(id, std::move(r));
+        return;
+    }
+    if (ok && !payload.empty())
+    {
+        it->second.body_lines.push_back(payload);
+    }
+    if (ok)
+    {
+        MplaneResult r;
+        r.ok = true;
+        r.body_lines = it->second.body_lines;
+        r.payload = payload;
+        complete(id, std::move(r));
+        return;
+    }
+    MplaneResult r;
+    r.ok = false;
+    r.error = payload.empty() ? "NOK" : payload;
+    complete(id, std::move(r));
+}
+
+void ConsoleClient::poll_deadlines(std::chrono::steady_clock::time_point now)
+{
+    for (auto it = pending_reqs_.begin(); it != pending_reqs_.end();)
+    {
+        if (now < it->second.deadline)
+        {
+            ++it;
+            continue;
+        }
+        DoneFn done = std::move(it->second.done);
+        pending_reqs_.erase(it++);
+        if (done)
+        {
+            MplaneResult r;
+            r.ok = false;
+            r.error = "timeout";
+            done(std::move(r));
+        }
+    }
 }
 
 void ConsoleClient::append_recv(const char* data, size_t n)
@@ -598,11 +288,155 @@ void ConsoleClient::clear_pending()
     pending.clear();
 }
 
-bool ConsoleClient::take_pong()
+void ConsoleClient::send_ping(DoneFn done)
 {
-    const bool seen = pong_seen_;
-    pong_seen_ = false;
-    return seen;
+    request("ping", std::move(done));
+}
+
+void ConsoleClient::send_rx_filter(uint16_t domain, DoneFn done)
+{
+    if (domain == 0)
+    {
+        MplaneResult r;
+        r.ok = true;
+        if (done)
+        {
+            done(std::move(r));
+        }
+        return;
+    }
+    std::string mac;
+    if (!domain_to_filter_mac(domain, &mac))
+    {
+        MplaneResult r;
+        r.error = "invalid domain for rx filter";
+        if (done)
+        {
+            done(std::move(r));
+        }
+        return;
+    }
+    request("rx_filter_addr3 addr=" + mac, std::move(done));
+}
+
+void ConsoleClient::send_save_slot(uint8_t slot, DoneFn done)
+{
+    request("save " + std::to_string(slot), std::move(done));
+}
+
+void ConsoleClient::send_load_slot(uint8_t slot, DoneFn done)
+{
+    request("load " + std::to_string(slot), std::move(done));
+}
+
+void ConsoleClient::query_radio_info(DoneFn done)
+{
+    request("radio_tx_info",
+            [done = std::move(done)](MplaneResult r)
+            {
+                if (!r.ok)
+                {
+                    done(std::move(r));
+                    return;
+                }
+                if (r.body_lines.empty() && !r.payload.empty())
+                {
+                    r.body_lines.push_back(r.payload);
+                }
+                done(std::move(r));
+            });
+}
+
+void ConsoleClient::send_radio_tx(const std::string& kv_args, DoneFn done)
+{
+    if (kv_args.empty())
+    {
+        MplaneResult r;
+        r.error = "empty radio_tx";
+        if (done)
+        {
+            done(std::move(r));
+        }
+        return;
+    }
+    request("radio_tx " + kv_args, std::move(done));
+}
+
+void ConsoleClient::send_radio_reset(uint8_t id, DoneFn done)
+{
+    request("reset id=" + std::to_string(id), std::move(done));
+}
+
+void ConsoleClient::apply_radio(const Config& cfg, uint8_t save_slot,
+                                DoneFn done)
+{
+    request(format_radio_tx_cmd(cfg.channel, cfg.power_dbm, cfg.modulation),
+            [this, cfg, save_slot, done = std::move(done)](MplaneResult r1)
+            {
+                if (!r1.ok)
+                {
+                    done(std::move(r1));
+                    return;
+                }
+                send_rx_filter(
+                    cfg.domain,
+                    [this, cfg, save_slot,
+                     done = std::move(done)](MplaneResult r2)
+                    {
+                        if (!r2.ok)
+                        {
+                            done(std::move(r2));
+                            return;
+                        }
+                        send_save_slot(
+                            save_slot,
+                            [cfg, save_slot, done = std::move(done)](MplaneResult r3)
+                            {
+                                if (!r3.ok)
+                                {
+                                    done(std::move(r3));
+                                    return;
+                                }
+                                LOG_INF(
+                                    "radio programmed ch=%u mod=%s pwr=%d "
+                                    "domain=%s save=%u",
+                                    cfg.channel, cfg.modulation.c_str(),
+                                    cfg.power_dbm,
+                                    domain_to_string(cfg.domain).c_str(),
+                                    static_cast<unsigned>(save_slot));
+                                MplaneResult ok;
+                                ok.ok = true;
+                                done(std::move(ok));
+                            });
+                    });
+            });
+}
+
+void ConsoleClient::program(const Config& cfg, DoneFn done)
+{
+    std::string err;
+    if (!start_connect(cfg, &err) || !finish_connect(&err))
+    {
+        MplaneResult r;
+        r.error = err;
+        if (done)
+        {
+            done(std::move(r));
+        }
+        return;
+    }
+    apply_radio(cfg, cfg.config_slot,
+                [this, done = std::move(done)](MplaneResult r)
+                {
+                    if (!r.ok)
+                    {
+                        close();
+                        done(std::move(r));
+                        return;
+                    }
+                    pending.clear();
+                    done(std::move(r));
+                });
 }
 
 }  // namespace winject

@@ -128,6 +128,22 @@ std::string domain_to_string(uint16_t domain)
     return buf;
 }
 
+bool domain_to_filter_mac(uint16_t domain, std::string* mac_out)
+{
+    if (domain == 0 || mac_out == nullptr)
+    {
+        return false;
+    }
+    const uint8_t addr[6] = {0xca, 0xfe, 0xba, 0xbe,
+                             static_cast<uint8_t>(domain >> 8),
+                             static_cast<uint8_t>(domain)};
+    char buf[18];
+    snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x", addr[0],
+             addr[1], addr[2], addr[3], addr[4], addr[5]);
+    *mac_out = buf;
+    return true;
+}
+
 std::string ipv4_to_string(in_addr addr)
 {
     char host[INET_ADDRSTRLEN] = {};

@@ -587,6 +587,30 @@ void RsBlockErasure::drain_tx_shards(std::vector<std::vector<uint8_t>>* out)
     }
 }
 
+void RsBlockErasure::tx_pending_stats(uint64_t* pkt, uint64_t* byt) const
+{
+    uint64_t p = 0;
+    uint64_t b = 0;
+    for (const auto& shard : tx_shards_)
+    {
+        p++;
+        b += static_cast<uint64_t>(shard.size());
+    }
+    for (const auto& app : pending)
+    {
+        p++;
+        b += static_cast<uint64_t>(app.size());
+    }
+    if (pkt != nullptr)
+    {
+        *pkt = p;
+    }
+    if (byt != nullptr)
+    {
+        *byt = b;
+    }
+}
+
 int RsBlockErasure::rx_hold_ms() const
 {
     return std::max(timeout_ms * 5, 100);

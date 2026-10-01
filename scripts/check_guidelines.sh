@@ -57,4 +57,9 @@ cmake --build "$BUILD_DIR" -j"$(nproc)"
 echo "== ctest =="
 ctest --test-dir "$BUILD_DIR" --output-on-failure
 
+MANAGER_BUILD_DIR="${WINJECT_MANAGER_BUILD_DIR:-build_manager_ci}"
+echo "== configure/build manager ($MANAGER_BUILD_DIR) =="
+cmake -S src/manager -B "$MANAGER_BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$MANAGER_BUILD_DIR" -j"$(nproc)"
+
 echo "check_guidelines: OK"

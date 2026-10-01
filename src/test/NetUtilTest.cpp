@@ -32,6 +32,14 @@ TEST(NetUtilTest, ParseDomain)
     EXPECT_FALSE(parse_domain("10000", &domain));
 }
 
+TEST(NetUtilTest, DomainToFilterMac)
+{
+    std::string mac;
+    EXPECT_TRUE(domain_to_filter_mac(0x1234, &mac));
+    EXPECT_EQ(mac, "ca:fe:ba:be:12:34");
+    EXPECT_FALSE(domain_to_filter_mac(0, &mac));
+}
+
 TEST(NetUtilTest, ParseHostPort)
 {
     sockaddr_in addr = {};

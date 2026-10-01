@@ -9,6 +9,7 @@
 
 #include <bfc/sized_buffer.hpp>
 #include <bfc/timer.hpp>
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -23,7 +24,8 @@ class UdpEndpoint : public Upstream
 public:
     UdpEndpoint() = default;
     ~UdpEndpoint() override;
-    bool open(IOReactor& reactor, const UpstreamConfig& cfg, std::function<void()> tx_wake = nullptr);
+    bool open(IOReactor& reactor, const UpstreamConfig& cfg,
+              std::function<void()> tx_wake = nullptr);
     void close();
 
     void on_radio_rx(bfcext::shared_sized_buffer pkt) override;
@@ -35,6 +37,50 @@ public:
 
     bool set_fec(FecType type, int k, int n, std::string* error);
     void get_fec(FecType* type, int* k, int* n) const;
+    bool set_fec_timeout_ms(int timeout_ms, std::string* error);
+    int fec_timeout_ms() const
+    {
+        return fec_timeout_ms_;
+    }
+    const UdpPeerEndpoint& peer_endpoints() const
+    {
+        return peer_endpoints_;
+    }
+    uint64_t app_rx_bytes() const
+    {
+        return app_rx_bytes_.load(std::memory_order_relaxed);
+    }
+    uint64_t app_rx_packets() const
+    {
+        return app_rx_packets_.load(std::memory_order_relaxed);
+    }
+    uint64_t app_tx_bytes() const
+    {
+        return app_tx_bytes_.load(std::memory_order_relaxed);
+    }
+    uint64_t app_tx_packets() const
+    {
+        return app_tx_packets_.load(std::memory_order_relaxed);
+    }
+    uint64_t fec_air_rx_bytes() const
+    {
+        return fec_air_rx_bytes_.load(std::memory_order_relaxed);
+    }
+    uint64_t fec_air_rx_packets() const
+    {
+        return fec_air_rx_packets_.load(std::memory_order_relaxed);
+    }
+    uint64_t fec_air_tx_bytes() const
+    {
+        return fec_air_tx_bytes_.load(std::memory_order_relaxed);
+    }
+    uint64_t fec_air_tx_packets() const
+    {
+        return fec_air_tx_packets_.load(std::memory_order_relaxed);
+    }
+    void tx_pending_stats(uint64_t* pkt, uint64_t* byt) const;
+    uint64_t fec_recovered() const;
+    uint64_t fec_decode_fail() const;
 
 private:
     void on_app();
@@ -52,13 +98,22 @@ private:
     std::function<void()> tx_wake_;
     bfc::socket sock;
     UpstreamMode mode = UpstreamMode::udp_static;
+    UdpPeerEndpoint peer_endpoints_;
     sockaddr_in dest{};
     bool dest_valid = false;
     mutable std::mutex tx_mu_;
     std::deque<bfc::sized_buffer> txq;
     bfc::sized_buffer rx_buf;
     RsBlockErasure fec;
-    int fec_timeout_ms = RsBlockErasure::k_default_timeout_ms;
+    int fec_timeout_ms_ = RsBlockErasure::k_default_timeout_ms;
+    std::atomic<uint64_t> app_rx_bytes_{0};
+    std::atomic<uint64_t> app_rx_packets_{0};
+    std::atomic<uint64_t> app_tx_bytes_{0};
+    std::atomic<uint64_t> app_tx_packets_{0};
+    std::atomic<uint64_t> fec_air_rx_bytes_{0};
+    std::atomic<uint64_t> fec_air_rx_packets_{0};
+    std::atomic<uint64_t> fec_air_tx_bytes_{0};
+    std::atomic<uint64_t> fec_air_tx_packets_{0};
     bool fec_timer_armed_ = false;
     FecTimerId fec_timer_id_{};
 };

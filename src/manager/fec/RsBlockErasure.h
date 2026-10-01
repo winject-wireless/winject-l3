@@ -90,6 +90,9 @@ public:
     uint64_t take_recovered();
     uint64_t take_decode_fail();
 
+    // Shards not yet pulled for TX plus app datagrams awaiting encode.
+    void tx_pending_stats(uint64_t* pkt, uint64_t* byt) const;
+
     // Encode one block. packets.size() may be < k (empty pads). Empty / short
     // systematic shards omit trailing zeros on the wire; parity is full width.
     bool encode_block(const std::vector<std::vector<uint8_t>>& packets,

@@ -5,7 +5,7 @@
 - **C/C++:** [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) with **Allman braces** (opening `{` on its own line). When they conflict, Allman wins for braces.
 - **Formatting:** Root [`.clang-format`](../.clang-format). Format touched files with `clang-format -i` or rely on the check script below.
 - **Types:** PascalCase class/struct/enum names match **PascalCase** file names (e.g. `ConsoleService` in `ConsoleService.h`, `UdpEndpoint` in `UdpEndpoint.cpp`, entry `Main.cpp`, CMake helpers `BfcFetch.cmake` / `IsalEc.cmake`). **`CMakeLists.txt`** stays as-is (CMake requirement).
-- **802.11 MPDU:** Winject slot/domain stamping in [`src/manager/frames/Mpdu.*`](../src/manager/frames/) Manager code lives in `winject` (`App`, `Config`, `Mpdu`, radio/endpoint types, etc.); nested `winject::ieee_802_11` groups 802.11 layout; air LCP [`LCSequence`](../src/manager/frames/LCSequence.h) (logical channel sequence) with counters on [`UpstreamStats`](../src/manager/endpoint/UpstreamStats.h). `src/bfcext/` stays in `bfcext` on top of `bfc`. IEEE 802.11 layout in [`Frame.*`](../src/manager/frames/) (`Frame` in `winject::ieee_802_11`, from archived [winject](https://github.com/therooftopprinz/winject)). UDP transport: [`src/manager/radio/`](../src/manager/radio/).
+- **802.11 MPDU:** Winject slot/domain stamping in [`src/manager/frames/Mpdu.*`](../src/manager/frames/) Manager code lives in `winject` (`App`, `Config`, `Mpdu`, radio/endpoint types, etc.); nested `winject::ieee_802_11` groups 802.11 layout; air LCP [`LCHeader`](../src/manager/frames/LCHeader.h) (logical channel bus + sequence) with counters on [`UpstreamStats`](../src/manager/endpoint/UpstreamStats.h). `src/bfcext/` stays in `bfcext` on top of `bfc`. IEEE 802.11 layout in [`Frame.*`](../src/manager/frames/) (`Frame` in `winject::ieee_802_11`, from archived [winject](https://github.com/therooftopprinz/winject)). UDP transport: [`src/manager/radio/`](../src/manager/radio/).
 
 ## Refactors
 
@@ -22,7 +22,7 @@ Global refactor discipline for agents also lives in machine **User Rules** / `co
 
 - Host unit tests: GoogleTest target **`winject-tests`** under [`src/test/`](../src/test/).
 - Add `your_module_test.cpp` and register it in [`src/test/CMakeLists.txt`](../src/test/CMakeLists.txt); link any required manager `.cpp` sources the same way existing tests do.
-- Logging in manager code: `LOG_INF`, `LOG_ERR`, `LOG_WRN` from [`log.h`](../src/manager/utils/log.h).
+- Logging in manager code: `LOG_INF`, `LOG_ERR`, `LOG_WRN` from [`Log.h`](../src/manager/utils/Log.h).
 
 ## IDE (clangd)
 

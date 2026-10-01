@@ -1,6 +1,6 @@
 # Winject framing protocol
 
-Host **winject-manager** bridges UDP applications and a winject radio. The radio data plane is opaque **full 802.11 MPDU** bytes over UDP (see [`WifiUdp`](../../src/manager/radio/WifiUdp.h)). Inside each MPDU, winject multiplexes several independent **logical channels** (one per configured upstream). Optional **FEC** sits between the user datagram and the logical-channel payload.
+Host **winject-manager** bridges UDP applications and a winject radio. The radio data plane is opaque **full 802.11 MPDU** bytes over UDP (see [`WifiUdp`](../src/manager/radio/WifiUdp.h)). Inside each MPDU, winject multiplexes several independent **logical channels** (one per configured upstream). Optional **FEC** sits between the user datagram and the logical-channel payload.
 
 ## Layering (TX)
 
@@ -10,7 +10,7 @@ UDP application datagram          (user SDU)
         v  optional RsBlockErasure (k-of-n Reed–Solomon shards)
 air SDU (FEC shard or raw UDP)
         |
-        v  LCSequence: 2-byte big-endian seq + SDU
+        v  LCHeader: 2-byte big-endian seq + SDU
 logical-channel payload (LCP body)  per upstream / MPDU slot
         |
         v  Mpdu: up to 5 slots in one 802.11 DATA frame body
@@ -22,7 +22,7 @@ ESP32 / NIC radio (on-air transmit)
 
 RX reverses the chain: demux slots → strip LC seq → FEC decode (if present) → deliver UDP.
 
-Implementation references: [`Frame.*`](../../src/manager/frames/Frame.*) (IEEE layout), [`Mpdu.*`](../../src/manager/frames/Mpdu.*) (winject slot/domain), [`LCSequence`](../../src/manager/frames/LCSequence.h), [`TxMux`](../../src/manager/radio/TxMux.cpp) / [`RxDemux`](../../src/manager/radio/RxDemux.cpp), [`RsBlockErasure`](../../src/manager/fec/RsBlockErasure.h).
+Implementation references: [`Frame.*`](../src/manager/frames/Frame.*) (IEEE layout), [`Mpdu.*`](../src/manager/frames/Mpdu.*) (winject slot/domain), [`LCHeader`](../src/manager/frames/LCHeader.h), [`TxMux`](../src/manager/radio/TxMux.cpp) / [`RxDemux`](../src/manager/radio/RxDemux.cpp), [`RsBlockErasure`](../src/manager/fec/RsBlockErasure.h).
 
 ## 802.11
 
@@ -36,15 +36,15 @@ Winject uses a plain **non-QoS DATA** frame:
 | Address 3 | **Winject domain** (BSSID-like tag); see below |
 | Sequence control | 12-bit **MPDU** sequence + fragment number (`0`) assigned by the manager on TX |
 | Frame body | Concatenation of all non-empty slot payloads |
-| FCS | Not relied on in manager parsing (`set_enable_fcs(false)`) |
+| FCS | Verified on d-plane RX in [`WifiUdp`](../src/manager/radio/WifiUdp.cpp); MPDU buffers exclude FCS (`set_enable_fcs(false)`) |
 
-Limits ([`RadioDefs.h`](../../src/manager/radio/RadioDefs.h), [`NetUtil.h`](../../src/manager/utils/NetUtil.h)):
+Limits ([`RadioDefs.h`](../src/manager/radio/RadioDefs.h), [`NetUtil.h`](../src/manager/utils/NetUtil.h)):
 
 - Maximum MPDU size on the radio UDP wire: **1500** bytes (`WIFI_RADIO_INJECT_MAX`).
 - 802.11 header: **24** bytes (`WIFI_HDR_LEN`).
 - Maximum frame body (all slots combined): **1476** bytes (`k_wifi_payload_max` / `WIFI_PAYLOAD_MAX`).
 
-The manager validates incoming frames as DATA with zero flags and checks that declared slot sizes exactly fill the frame body ([`Mpdu::rescan`](../../src/manager/frames/Mpdu.cpp)).
+The manager validates incoming frames as DATA with zero flags and checks that declared slot sizes exactly fill the frame body ([`Mpdu::rescan`](../src/manager/frames/Mpdu.cpp)).
 
 ## MPDU (winject multiplexing)
 
@@ -57,11 +57,11 @@ Peers on the same RF channel are separated by a 16-bit **domain** configured as 
 - Bytes 0–3: fixed prefix `CA:FE:BA:BE` (`WIFI_BSSID_PREFIX`)
 - Bytes 4–5: domain, big-endian
 
-[`Mpdu::is_valid_winject_frame`](../../src/manager/frames/Mpdu.cpp) checks the prefix; [`get_domain` / `set_domain`](../../src/manager/frames/Mpdu.h) read/write the domain field. The manager programs the radio with the same domain via the radio console (`set_domain`).
+[`Mpdu::is_valid_winject_frame`](../src/manager/frames/Mpdu.cpp) checks the prefix; [`get_domain` / `set_domain`](../src/manager/frames/Mpdu.h) read/write the domain field. The manager programs the radio filter with the same domain via **`rx_filter_addr3`** (`domain_to_filter_mac` in [`NetUtil`](../src/manager/utils/NetUtil.cpp)).
 
 ### PDU slots (frame body)
 
-The frame body holds up to **`WIFI_PDU_SLOTS` (5)** back-to-back payloads. Slot **i** corresponds to **upstream index `i`** in the manager config when that upstream is active on the bus ([`RxDemux`](../../src/manager/radio/RxDemux.cpp), [`TxMux::emit_mpdu`](../../src/manager/radio/TxMux.cpp)).
+The frame body holds up to **`WIFI_PDU_SLOTS` (5)** back-to-back payloads. Slot **i** corresponds to **upstream index `i`** in the manager config when that upstream is active on the bus ([`RxDemux`](../src/manager/radio/RxDemux.cpp), [`TxMux::emit_mpdu`](../src/manager/radio/TxMux.cpp)).
 
 Slot **lengths** (0–2047 bytes each, 11 bits per slot) are bit-packed into **Address 1 and Address 2** (12 bytes total: 1 flag bit + 5×11 bits). Length `0` means the slot is empty. Non-empty slots are stored in order in the frame body with no per-slot headers.
 
@@ -70,7 +70,7 @@ On TX, the mux may place multiple upstreams into one MPDU (primary upstream firs
 ### MPDU sequence vs logical-channel sequence
 
 - **Sequence control** (802.11 header): global per-radio TX counter (`next_tx_sequence()`, 12-bit), one value per emitted MPDU.
-- **LCSequence** (inside each slot): per-upstream logical-channel sequence; see below.
+- **LCHeader** (inside each slot): per-upstream logical-channel sequence; see below.
 
 ## Logical channel (LCP)
 
@@ -83,12 +83,12 @@ Each upstream owns a **logical channel** on the shared air bus. Every payload pl
 +----------+------------------+
 ```
 
-- [`LCSequence`](../../src/manager/frames/LCSequence.h): big-endian `uint16` **air sequence** (`UpstreamStats::air_tx` on TX).
+- [`LCHeader`](../src/manager/frames/LCHeader.h): big-endian `uint16` **air sequence** (`UpstreamStats::air_tx` on TX).
 - After the prefix: the **air SDU** (user bytes or FEC shard).
 
-TX: [`stamp_air_payload`](../../src/manager/endpoint/UpstreamStats.cpp) prepends the sequence and increments `air_tx`.
+TX: [`stamp_air_payload`](../src/manager/endpoint/UpstreamStats.cpp) prepends the sequence and increments `air_tx`.
 
-RX: [`accept_air_payload`](../../src/manager/endpoint/UpstreamStats.cpp):
+RX: [`accept_air_payload`](../src/manager/endpoint/UpstreamStats.cpp):
 
 - Rejects duplicates (same seq as last accepted).
 - Tracks gaps for metrics (`air_rx_gap_loss`) using 16-bit wrap-aware “ahead” comparison.
@@ -102,11 +102,11 @@ Config **bus** IDs (`upstream-N.tx_bus` / `rx_bus`) select which radio path an u
 
 ### User SDU
 
-The **user SDU** is the application payload—typically one **UDP datagram** received or sent by [`UdpEndpoint`](../../src/manager/endpoint/UdpEndpoint.cpp). Without FEC, that datagram (up to `k_stream_payload_max` bytes) is the air SDU after LC stamping.
+The **user SDU** is the application payload—typically one **UDP datagram** received or sent by [`UdpEndpoint`](../src/manager/endpoint/UdpEndpoint.cpp). Without FEC, that datagram (up to `k_stream_payload_max` bytes) is the air SDU after LC stamping.
 
 ### FEC (optional, UDP upstreams)
 
-When `RS_BLOCK_ERASURE` is enabled (`set_upstream_fec` / config), [`RsBlockErasure`](../../src/manager/fec/RsBlockErasure.h) groups **k** user datagrams into **n** on-air shards (`1 <= k < n <= 255`). Any **k** received shards recover the block (Reed–Solomon erasure, ISA-L).
+When `RS_BLOCK_ERASURE` is enabled (`set_upstream_fec` / config), [`RsBlockErasure`](../src/manager/fec/RsBlockErasure.h) groups **k** user datagrams into **n** on-air shards (`1 <= k < n <= 255`). Any **k** received shards recover the block (Reed–Solomon erasure, ISA-L).
 
 **TX:** UDP → `push_app` → shards queued → `pull_tx` → LC stamp → MPDU slot.
 
@@ -114,7 +114,7 @@ When `RS_BLOCK_ERASURE` is enabled (`set_upstream_fec` / config), [`RsBlockErasu
 
 #### FEC shard layout (air SDU before LC stamp)
 
-8-byte header ([`RsBlockErasure::pack_header`](../../src/manager/fec/RsBlockErasure.cpp)):
+8-byte header ([`RsBlockErasure::pack_header`](../src/manager/fec/RsBlockErasure.cpp)):
 
 | Offset | Field |
 |--------|--------|
@@ -126,7 +126,7 @@ When `RS_BLOCK_ERASURE` is enabled (`set_upstream_fec` / config), [`RsBlockErasu
 | 6 | n |
 | 7 | Flags (e.g. parity `0x01`) |
 
-Systematic shard body: **2-byte BE length** + original UDP bytes (padded for RS math on parity shards). Max original UDP size per shard is reduced by header and length prefix ([`max_original()`](../../src/manager/fec/RsBlockErasure.cpp): `k_stream_payload_max - 8 - 2`).
+Systematic shard body: **2-byte BE length** + original UDP bytes (padded for RS math on parity shards). Max original UDP size per shard is reduced by header and length prefix ([`max_original()`](../src/manager/fec/RsBlockErasure.cpp): `k_stream_payload_max - 8 - 2`).
 
 FEC is configured on **TX encode**; **RX is always FEC-aware** and reads **k/n from each shard header**, so peers can use different encode settings as long as the wire format matches.
 

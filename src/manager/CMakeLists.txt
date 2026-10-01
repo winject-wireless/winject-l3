@@ -15,7 +15,9 @@ add_executable(winject-manager
     App.cpp
     Config.cpp
     utils/Log.cpp
+    utils/MetricsRegistry.cpp
     console/ConsoleClient.cpp
+    console/MplaneCorrelation.cpp
     console/ConsoleService.cpp
     console/ConsoleParse.cpp
     frames/Frame.cpp
@@ -23,7 +25,11 @@ add_executable(winject-manager
     fec/RsBlockErasure.cpp
     utils/NetUtil.cpp
     radio/WifiUdp.cpp
+    radio/WifiFcs.cpp
     radio/RadioUpstreamTable.cpp
+    radio/RadioMplaneParse.cpp
+    radio/RadioManager.cpp
+    radio/PhyAirtime.cpp
     radio/TxMux.cpp
     radio/RxDemux.cpp
     endpoint/Upstream.cpp
@@ -34,7 +40,6 @@ add_executable(winject-manager
 target_include_directories(winject-manager PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../test
     ${bfc_SOURCE_DIR}/src
 )
 

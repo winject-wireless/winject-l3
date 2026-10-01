@@ -1,17 +1,42 @@
 #include "App.h"
 
+#include "console/ConsoleParse.h"
 #include "endpoint/UdpEndpoint.h"
+#include "frames/Mpdu.h"
+#include "radio/RadioDefs.h"
+#include "radio/RadioMplaneParse.h"
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
-#include "frames/Mpdu.h"
 
 #include <errno.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <thread>
 #include <time.h>
 
 namespace winject
 {
+
+namespace
+{
+
+bool mplane_nok_token(const std::string& err, std::string* token)
+{
+    const auto nok = err.find(" -> nok ");
+    const auto nok_upper = err.find(" -> NOK ");
+    const size_t pos =
+        nok != std::string::npos
+            ? nok
+            : (nok_upper != std::string::npos ? nok_upper : std::string::npos);
+    if (pos == std::string::npos)
+    {
+        return false;
+    }
+    *token = err.substr(pos + 8);
+    return true;
+}
+
+}  // namespace
 
 bool App::load(const std::string& path)
 {
@@ -42,12 +67,15 @@ bool App::add_upstream(const UpstreamConfig& uc)
     }
     auto up = std::make_shared<UdpEndpoint>();
     if (!up->open(reactor, uc,
-                  [this]() { tx_mux_.request_tick(); }))
+                  [this]()
+                  {
+                      tx_mux_.request_tick();
+                  }))
     {
         return false;
     }
     radio_upstream_table_.add(up, radio, uc.bus_tx, uc.bus_rx,
-                            uc.scheduler_budget);
+                              uc.scheduler_budget);
     upstreams.push_back(up);
     LOG_INF("upstream-%zu bus_tx=%s bus_rx=%s", uc.index,
             uc.bus_tx ? bus_to_string(uc.bus_tx).c_str() : "-",
@@ -82,12 +110,13 @@ bool App::setup_radio()
 
 bool App::setup_upstreams()
 {
-    tx_mux_.configure(cfg.max_rate_kbps, cfg.domain, cfg.max_data_per_tick,
-                      cfg.tx_burst_size, cfg.tx_burst_interval_us);
     if (!setup_radio())
     {
         return false;
     }
+    radio_manager_.bind(&cfg, &tx_mux_, radio.get());
+    radio_manager_.configure_tx_mux();
+    rx_demux_.set_domain(cfg.domain);
     for (const auto& uc : cfg.upstreams)
     {
         if (!add_upstream(uc))
@@ -182,8 +211,68 @@ bool App::set_upstream_scheduler_budget(size_t index, size_t budget,
     return true;
 }
 
-bool App::get_upstream_scheduler_budget(size_t index, size_t* budget,
-                                        std::string* error)
+bool App::fill_upstream_view(size_t index, ManagerUpstreamView* out) const
+{
+    if (out == nullptr || index >= upstreams.size() ||
+        index >= cfg.upstreams.size())
+    {
+        return false;
+    }
+    const UpstreamConfig& uc = cfg.upstreams[index];
+    const auto* udp = dynamic_cast<const UdpEndpoint*>(upstreams[index].get());
+    out->id = static_cast<uint8_t>(uc.index);
+    out->bus_tx = uc.bus_tx;
+    out->bus_rx = uc.bus_rx;
+    out->type = "UDP";
+    if (udp != nullptr)
+    {
+        out->rx = udp->peer_endpoints().rx;
+        out->tx = udp->peer_endpoints().tx;
+        out->fec_timeout_ms = udp->fec_timeout_ms();
+        udp->get_fec(&out->fec, &out->fec_k, &out->fec_n);
+    }
+    else
+    {
+        out->rx = uc.endpoint.rx;
+        out->tx = uc.endpoint.tx;
+        out->fec = uc.fec_type;
+        out->fec_k = uc.fec_k;
+        out->fec_n = uc.fec_n;
+        out->fec_timeout_ms = uc.fec_timeout_ms;
+    }
+    size_t budget = 0;
+    if (radio_upstream_table_.get_budget(index, &budget))
+    {
+        out->quanta = budget;
+    }
+    else
+    {
+        out->quanta = uc.scheduler_budget;
+    }
+    return true;
+}
+
+namespace
+{
+
+constexpr size_t k_upstream_not_found = static_cast<size_t>(-1);
+
+size_t find_upstream_vec_index(const Config& cfg, uint8_t id)
+{
+    for (size_t i = 0; i < cfg.upstreams.size(); ++i)
+    {
+        if (cfg.upstreams[i].index == id)
+        {
+            return i;
+        }
+    }
+    return k_upstream_not_found;
+}
+
+}  // namespace
+
+bool App::console_add_upstream(const ManagerUpstreamView& spec,
+                               std::string* error)
 {
     auto fail = [&](const char* msg) -> bool
     {
@@ -193,14 +282,49 @@ bool App::get_upstream_scheduler_budget(size_t index, size_t* budget,
         }
         return false;
     };
-    if (!radio_upstream_table_.get_budget(index, budget))
+    if (spec.bus_tx == 0 && spec.bus_rx == 0)
     {
-        return fail("invalid upstream index");
+        return fail("INVALID_ARGUMENT");
+    }
+    for (const auto& prev : cfg.upstreams)
+    {
+        if (prev.index == spec.id)
+        {
+            return fail("INVALID_ARGUMENT");
+        }
+    }
+    UpstreamConfig uc;
+    uc.index = spec.id;
+    uc.bus_tx = spec.bus_tx;
+    uc.bus_rx = spec.bus_rx;
+    uc.scheduler_budget = spec.quanta;
+    uc.endpoint = UdpPeerEndpoint{spec.rx, spec.tx};
+    uc.fec_type = spec.fec;
+    uc.fec_k = spec.fec_k;
+    uc.fec_n = spec.fec_n;
+    uc.fec_timeout_ms = spec.fec_timeout_ms;
+    if (uc.fec_type == FecType::none)
+    {
+        uc.fec_k = 0;
+        uc.fec_n = 0;
+    }
+    std::vector<UpstreamConfig> candidate = cfg.upstreams;
+    candidate.push_back(uc);
+    std::string val_err;
+    if (!Config::validate_upstreams(candidate, &val_err))
+    {
+        return fail("INVALID_ARGUMENT");
+    }
+    cfg.upstreams.push_back(uc);
+    if (!add_upstream(uc))
+    {
+        cfg.upstreams.pop_back();
+        return fail("INVALID_ARGUMENT");
     }
     return true;
 }
 
-bool App::set_modulation(const std::string& name, std::string* error)
+bool App::console_remove_upstream(uint8_t id, std::string* error)
 {
     auto fail = [&](const char* msg) -> bool
     {
@@ -210,148 +334,536 @@ bool App::set_modulation(const std::string& name, std::string* error)
         }
         return false;
     };
-    const std::string canonical = Config::canonical_modulation(name);
-    if (canonical.empty())
+    const size_t index = find_upstream_vec_index(cfg, id);
+    if (index == k_upstream_not_found)
     {
-        return fail("unknown modulation");
+        return fail("NOT_FOUND");
     }
-    if (!Config::modulation_ok_for_channel(canonical, cfg.channel))
+    if (!radio_upstream_table_.remove(index))
     {
-        return fail("channel 14 requires DSSS/CCK modulation");
+        return fail("NOT_FOUND");
     }
-    if (!console_ok)
+    if (upstreams[index])
     {
-        return fail("console not connected");
-    }
-    std::string err;
-    if (!console.set_modulation(canonical, &err))
-    {
-        if (console.take_pong())
+        auto* udp = dynamic_cast<UdpEndpoint*>(upstreams[index].get());
+        if (udp != nullptr)
         {
-            awaiting_pong = false;
+            udp->close();
         }
-        if (err.find(" -> error") == std::string::npos)
-        {
-            drop_console();
-        }
-        return fail(err.empty() ? "failed" : err.c_str());
     }
-    if (console.take_pong())
-    {
-        awaiting_pong = false;
-    }
-    cfg.modulation = canonical;
-    LOG_INF("modulation=%s", canonical.c_str());
+    upstreams.erase(upstreams.begin() + static_cast<ptrdiff_t>(index));
+    cfg.upstreams.erase(cfg.upstreams.begin() + static_cast<ptrdiff_t>(index));
+    metrics_registry_.remove_prefix("upstream_" + std::to_string(id) + "_");
     return true;
 }
 
-bool App::get_modulation(std::string* name, std::string* error)
-{
-    if (name == nullptr)
-    {
-        if (error != nullptr)
-        {
-            *error = "null out";
-        }
-        return false;
-    }
-    *name = cfg.modulation;
-    return true;
-}
-
-bool App::set_tx_pacing(const uint32_t* max_rate_kbps,
-                        const size_t* max_data_per_tick,
-                        const size_t* tx_burst_size,
-                        const uint32_t* tx_burst_interval_us,
-                        std::string* error)
-{
-    if (max_rate_kbps != nullptr)
-    {
-        cfg.max_rate_kbps = *max_rate_kbps;
-        tx_mux_.set_max_rate_kbps(*max_rate_kbps);
-    }
-    if (max_data_per_tick != nullptr)
-    {
-        cfg.max_data_per_tick = *max_data_per_tick;
-        tx_mux_.set_max_data_per_tick(*max_data_per_tick);
-    }
-    if (tx_burst_size != nullptr || tx_burst_interval_us != nullptr)
-    {
-        const size_t bs = tx_burst_size != nullptr ? *tx_burst_size
-                                                   : tx_mux_.tx_burst_size();
-        const uint32_t bi = tx_burst_interval_us != nullptr
-                                ? *tx_burst_interval_us
-                                : tx_mux_.tx_burst_interval_us();
-        cfg.tx_burst_size = bs;
-        cfg.tx_burst_interval_us = bi;
-        tx_mux_.set_tx_burst_pacing(bs, bi);
-    }
-    if (error != nullptr)
-    {
-        error->clear();
-    }
-    return true;
-}
-
-bool App::get_tx_pacing(uint32_t* max_rate_kbps, size_t* max_data_per_tick,
-                        size_t* tx_burst_size, uint32_t* tx_burst_interval_us,
-                        std::string* error) const
-{
-    if (max_rate_kbps == nullptr || max_data_per_tick == nullptr ||
-        tx_burst_size == nullptr || tx_burst_interval_us == nullptr)
-    {
-        if (error != nullptr)
-        {
-            *error = "null out";
-        }
-        return false;
-    }
-    *max_rate_kbps = tx_mux_.max_rate_kbps();
-    *max_data_per_tick = tx_mux_.max_data_per_tick();
-    *tx_burst_size = tx_mux_.tx_burst_size();
-    *tx_burst_interval_us = tx_mux_.tx_burst_interval_us();
-    if (error != nullptr)
-    {
-        error->clear();
-    }
-    return true;
-}
-
-void App::fill_ci_view(ChannelInfoView* out) const
+bool App::console_list_upstream(const std::vector<uint8_t>& ids,
+                                std::vector<ManagerUpstreamView>* out,
+                                std::string* error) const
 {
     if (out == nullptr)
     {
-        return;
-    }
-    out->flow_valid = false;
-    out->tx_queue_size = 0;
-    out->tx_queue_capacity = 0;
-    snprintf(out->flow_t, sizeof(out->flow_t), "-");
-    out->air_valid = false;
-    out->rssi = 0;
-    out->snr = 0;
-    snprintf(out->rssi_t, sizeof(out->rssi_t), "-");
-    out->tx_byte = 0;
-    out->rx_byte = 0;
-    out->tx_pkt = 0;
-    out->rx_pkt = 0;
-    out->rx_pkt_loss = 0;
-    for (size_t i = 0; i < upstreams.size(); i++)
-    {
-        uint64_t seq_lost = 0;
-        if (radio_upstream_table_.peek_seq_lost(i, &seq_lost))
+        if (error != nullptr)
         {
-            out->rx_pkt_loss += seq_lost;
+            *error = "INVALID_ARGUMENT";
+        }
+        return false;
+    }
+    out->clear();
+    if (ids.empty())
+    {
+        for (size_t i = 0; i < upstreams.size(); i++)
+        {
+            ManagerUpstreamView row;
+            if (!fill_upstream_view(i, &row))
+            {
+                continue;
+            }
+            out->push_back(row);
+        }
+        return true;
+    }
+    for (uint8_t id : ids)
+    {
+        const size_t index = find_upstream_vec_index(cfg, id);
+        if (index == k_upstream_not_found)
+        {
+            if (error != nullptr)
+            {
+                *error = "NOT_FOUND";
+            }
+            return false;
+        }
+        ManagerUpstreamView row;
+        if (!fill_upstream_view(index, &row))
+        {
+            if (error != nullptr)
+            {
+                *error = "NOT_FOUND";
+            }
+            return false;
+        }
+        out->push_back(row);
+    }
+    return true;
+}
+
+bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
+                                  ManagerUpstreamView* out, std::string* error)
+{
+    auto fail = [&](const char* msg) -> bool
+    {
+        if (error != nullptr)
+        {
+            *error = msg;
+        }
+        return false;
+    };
+    const size_t index = find_upstream_vec_index(cfg, patch.id);
+    if (index == k_upstream_not_found)
+    {
+        return fail("NOT_FOUND");
+    }
+    if (!patch.have_fec && !patch.have_k && !patch.have_n &&
+        !patch.have_fec_timeout && !patch.have_quanta)
+    {
+        return fail("INVALID_ARGUMENT");
+    }
+    UpstreamConfig candidate;
+    std::string val_err;
+    if (!Config::validate_upstream_update(
+            cfg.upstreams[index], patch.have_fec ? patch.fec : FecType::none,
+            patch.fec_k, patch.fec_n, patch.fec_timeout_ms, patch.quanta,
+            patch.have_fec, patch.have_k, patch.have_n, patch.have_fec_timeout,
+            patch.have_quanta, cfg.upstreams, &candidate, &val_err))
+    {
+        return fail("INVALID_ARGUMENT");
+    }
+    if (patch.have_quanta &&
+        !set_upstream_scheduler_budget(index, candidate.scheduler_budget, error))
+    {
+        return fail(error != nullptr && !error->empty() ? error->c_str()
+                                                        : "INVALID_ARGUMENT");
+    }
+    auto* udp = dynamic_cast<UdpEndpoint*>(upstreams[index].get());
+    if (patch.have_fec_timeout)
+    {
+        if (udp == nullptr ||
+            !udp->set_fec_timeout_ms(candidate.fec_timeout_ms, error))
+        {
+            return fail(error != nullptr && !error->empty()
+                            ? error->c_str()
+                            : "INVALID_ARGUMENT");
         }
     }
-    if (radio)
+    if (patch.have_fec || patch.have_k || patch.have_n)
     {
-        const auto c = radio->peek_counters();
-        out->tx_pkt = c.tx_pkt;
-        out->rx_pkt = c.rx_pkt;
-        out->tx_byte = c.tx_byte;
-        out->rx_byte = c.rx_byte;
+        if (!set_upstream_fec(index, candidate.fec_type, candidate.fec_k,
+                              candidate.fec_n, error))
+        {
+            return fail(error != nullptr && !error->empty() ? error->c_str()
+                                                          : "INVALID_ARGUMENT");
+        }
     }
+    cfg.upstreams[index] = candidate;
+    if (out == nullptr || !fill_upstream_view(index, out))
+    {
+        return fail("NOT_FOUND");
+    }
+    return true;
+}
+
+namespace
+{
+
+std::vector<uint8_t> console_upstream_ids(const std::vector<uint8_t>& ids,
+                                          const Config& cfg)
+{
+    if (!ids.empty())
+    {
+        return ids;
+    }
+    std::vector<uint8_t> want;
+    for (const UpstreamConfig& u : cfg.upstreams)
+    {
+        want.push_back(static_cast<uint8_t>(u.index));
+    }
+    return want;
+}
+
+void fill_upstream_fec_fields(const UdpEndpoint* udp, FecType* fec, int* k,
+                              int* n)
+{
+    if (fec == nullptr || k == nullptr || n == nullptr)
+    {
+        return;
+    }
+    if (udp != nullptr)
+    {
+        udp->get_fec(fec, k, n);
+        return;
+    }
+    *fec = FecType::none;
+    *k = 0;
+    *n = 0;
+}
+
+}  // namespace
+
+bool App::console_list_upstream_rx_stat(
+    const std::vector<uint8_t>& ids,
+    std::vector<ManagerUpstreamRxStatView>* out, std::string* error) const
+{
+    if (out == nullptr)
+    {
+        if (error != nullptr)
+        {
+            *error = "INVALID_ARGUMENT";
+        }
+        return false;
+    }
+    out->clear();
+    const std::vector<uint8_t> want =
+        console_upstream_ids(ids, cfg);
+    for (uint8_t id : want)
+    {
+        const size_t index = find_upstream_vec_index(cfg, id);
+        if (index == k_upstream_not_found)
+        {
+            if (error != nullptr)
+            {
+                *error = "NOT_FOUND";
+            }
+            return false;
+        }
+        const auto* udp =
+            dynamic_cast<const UdpEndpoint*>(upstreams[index].get());
+        ManagerUpstreamRxStatView row;
+        row.id = id;
+        fill_upstream_fec_fields(udp, &row.fec, &row.fec_k, &row.fec_n);
+        if (udp != nullptr)
+        {
+            row.rxbyt = udp->app_rx_bytes();
+            row.rxpkt = udp->app_rx_packets();
+            row.fec_rec = udp->fec_recovered();
+            row.fec_lost = udp->fec_decode_fail();
+            row.fec_rxbyt = udp->fec_air_rx_bytes();
+            row.fec_rxpkt = udp->fec_air_rx_packets();
+        }
+        uint64_t gap = 0;
+        if (radio_upstream_table_.peek_seq_lost(index, &gap))
+        {
+            row.rxgap = gap;
+        }
+        out->push_back(row);
+    }
+    return true;
+}
+
+bool App::console_list_upstream_tx_stat(
+    const std::vector<uint8_t>& ids,
+    std::vector<ManagerUpstreamTxStatView>* out, std::string* error) const
+{
+    if (out == nullptr)
+    {
+        if (error != nullptr)
+        {
+            *error = "INVALID_ARGUMENT";
+        }
+        return false;
+    }
+    out->clear();
+    const std::vector<uint8_t> want =
+        console_upstream_ids(ids, cfg);
+    for (uint8_t id : want)
+    {
+        const size_t index = find_upstream_vec_index(cfg, id);
+        if (index == k_upstream_not_found)
+        {
+            if (error != nullptr)
+            {
+                *error = "NOT_FOUND";
+            }
+            return false;
+        }
+        const auto* udp =
+            dynamic_cast<const UdpEndpoint*>(upstreams[index].get());
+        ManagerUpstreamTxStatView row;
+        row.id = id;
+        fill_upstream_fec_fields(udp, &row.fec, &row.fec_k, &row.fec_n);
+        if (udp != nullptr)
+        {
+            row.txbyt = udp->app_tx_bytes();
+            row.txpkt = udp->app_tx_packets();
+            row.fec_txbyt = udp->fec_air_tx_bytes();
+            row.fec_txpkt = udp->fec_air_tx_packets();
+            udp->tx_pending_stats(&row.tx_pending_pkt, &row.tx_pending_byt);
+        }
+        out->push_back(row);
+    }
+    return true;
+}
+
+void App::refresh_host_metrics()
+{
+    metrics_registry_.get_metrics<MetricU64>("rx_drop_domain")->store(
+        rx_demux_.rx_drop_domain());
+    metrics_registry_.get_metrics<MetricU64>("rx_drop_bus")->store(
+        rx_demux_.rx_drop_bus());
+    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_mpdu")->store(
+        tx_mux_.tx_send_fail_mpdu());
+    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_byt")->store(
+        tx_mux_.tx_send_fail_byt());
+    metrics_registry_.get_metrics<MetricU64>("tx_pacing_txtime_us")->store(
+        tx_mux_.pacing_txtime_full_us());
+    metrics_registry_.get_metrics<MetricU64>("tx_pacing_gap_us")->store(
+        tx_mux_.pacing_gap_us());
+    if (radio != nullptr)
+    {
+        const WifiUdp::counters_s rc = radio->peek_counters();
+        metrics_registry_.get_metrics<MetricU64>("radio_rx_pkt")->store(
+            rc.rx_pkt);
+        metrics_registry_.get_metrics<MetricU64>("radio_rx_byt")->store(
+            rc.rx_byte);
+        metrics_registry_.get_metrics<MetricU64>("radio_tx_pkt")->store(
+            rc.tx_pkt);
+        metrics_registry_.get_metrics<MetricU64>("radio_tx_byt")->store(
+            rc.tx_byte);
+        metrics_registry_.get_metrics<MetricU64>("radio_fcs_err_pkt")->store(
+            rc.fcs_error_pkt);
+    }
+    for (size_t i = 0; i < upstreams.size(); ++i)
+    {
+        const Upstream* up = upstreams[i].get();
+        if (up == nullptr)
+        {
+            continue;
+        }
+        ManagerUpstreamView view;
+        if (!fill_upstream_view(i, &view))
+        {
+            continue;
+        }
+        const std::string key =
+            "upstream_" + std::to_string(view.id) + "_air_rx_gap_loss";
+        metrics_registry_.get_metrics<MetricU64>(key)->store(
+            up->stats().air_rx_gap_loss);
+    }
+}
+
+bool App::console_get_metrics(const std::vector<std::string>& keys,
+                              std::vector<ManagerMetricView>* out,
+                              std::string* error)
+{
+    if (out == nullptr)
+    {
+        if (error != nullptr)
+        {
+            *error = "INVALID_ARGUMENT";
+        }
+        return false;
+    }
+    refresh_host_metrics();
+    const std::map<std::string, Metrics> snapshot =
+        metrics_registry_.getMetrics(keys);
+    out->clear();
+    for (const auto& entry : snapshot)
+    {
+        ManagerMetricView row;
+        row.key = entry.first;
+        row.value = metric_value_to_string(entry.second);
+        out->push_back(std::move(row));
+    }
+    return true;
+}
+
+namespace
+{
+
+std::string mplane_join_body(const MplaneResult& r)
+{
+    std::string body;
+    for (const auto& line : r.body_lines)
+    {
+        if (!body.empty())
+        {
+            body += '\n';
+        }
+        body += line;
+    }
+    if (body.empty() && !r.payload.empty())
+    {
+        body = r.payload;
+    }
+    return body;
+}
+
+std::string mplane_err_string(const std::string& err)
+{
+    std::string token;
+    if (mplane_nok_token(err, &token))
+    {
+        return token;
+    }
+    return err.empty() ? "error" : err;
+}
+
+}  // namespace
+
+void App::console_radio_info(ManagerConsoleReply reply)
+{
+    if (!console_ok)
+    {
+        reply.send_nok("NOT_FOUND");
+        return;
+    }
+    console.query_radio_info(
+        [this, reply](MplaneResult r)
+        {
+            if (!r.ok)
+            {
+                reply.send_nok(mplane_err_string(r.error).c_str());
+                return;
+            }
+            const std::string body = mplane_join_body(r);
+            ManagerRadioView view;
+            if (parse_radio_info_body(body, &view))
+            {
+                radio_manager_.set_actual_phy(view);
+            }
+            reply.send_text(body);
+        });
+}
+
+void App::console_radio_tx(const ManagerRadioUpdate& patch,
+                           ManagerConsoleReply reply)
+{
+    if (!console_ok)
+    {
+        reply.send_nok("NOT_FOUND");
+        return;
+    }
+    std::string kv;
+    if (patch.have_channel)
+    {
+        kv += "channel=" + std::to_string(patch.channel);
+    }
+    if (patch.have_tx_power)
+    {
+        if (!kv.empty())
+        {
+            kv += ' ';
+        }
+        kv += "tx_power=" + std::to_string(patch.tx_power);
+    }
+    if (patch.have_modulation)
+    {
+        const std::string canonical =
+            Config::canonical_modulation(patch.modulation);
+        if (canonical.empty() ||
+            !Config::modulation_ok_for_channel(
+                canonical, patch.have_channel ? patch.channel : cfg.channel))
+        {
+            reply.send_nok("INVALID_ARGUMENT");
+            return;
+        }
+        if (!kv.empty())
+        {
+            kv += ' ';
+        }
+        kv += "modulation=" + canonical;
+    }
+    console.send_radio_tx(
+        kv,
+        [this, patch, reply](MplaneResult r1)
+        {
+            if (!r1.ok)
+            {
+                reply.send_nok(mplane_err_string(r1.error).c_str());
+                return;
+            }
+            if (patch.have_channel)
+            {
+                cfg.channel = static_cast<uint8_t>(patch.channel);
+            }
+            if (patch.have_tx_power)
+            {
+                cfg.power_dbm = static_cast<int8_t>(patch.tx_power);
+            }
+            if (patch.have_modulation)
+            {
+                cfg.modulation =
+                    Config::canonical_modulation(patch.modulation);
+                radio_manager_.sync_pacing_for_modulation(cfg.modulation, true);
+            }
+            ManagerRadioView view;
+            if (parse_radio_info_body(mplane_join_body(r1), &view))
+            {
+                radio_manager_.set_actual_phy(view);
+            }
+            console.send_save_slot(
+                cfg.config_slot,
+                [r1, reply](MplaneResult r2)
+                {
+                    if (!r2.ok)
+                    {
+                        reply.send_nok(mplane_err_string(r2.error).c_str());
+                        return;
+                    }
+                    reply.send_text(mplane_join_body(r1));
+                });
+        });
+}
+
+void App::console_radio_reset(uint8_t id, ManagerConsoleReply reply)
+{
+    if (!console_ok)
+    {
+        reply.send_nok("NOT_FOUND");
+        return;
+    }
+    console.send_radio_reset(
+        id,
+        [reply](MplaneResult r)
+        {
+            if (!r.ok)
+            {
+                reply.send_nok(mplane_err_string(r.error).c_str());
+                return;
+            }
+            reply.send_text("");
+        });
+}
+
+void App::console_config_slot(uint8_t slot, ManagerConsoleReply reply)
+{
+    if (!console_ok)
+    {
+        reply.send_nok("NOT_FOUND");
+        return;
+    }
+    console.send_save_slot(
+        slot,
+        [this, slot, reply](MplaneResult r1)
+        {
+            if (!r1.ok)
+            {
+                reply.send_nok(mplane_err_string(r1.error).c_str());
+                return;
+            }
+            console.send_load_slot(
+                slot,
+                [this, slot, reply](MplaneResult r2)
+                {
+                    if (!r2.ok)
+                    {
+                        reply.send_nok(mplane_err_string(r2.error).c_str());
+                        return;
+                    }
+                    cfg.config_slot = slot;
+                    reply.send_text("");
+                });
+        });
 }
 
 bool App::start_manager_console()
@@ -368,64 +880,66 @@ bool App::start_manager_console()
         LOG_ERR("manager console: invalid console_in/out");
         return false;
     }
+    ManagerConsoleHandlers handlers;
+    handlers.add_upstream =
+        [this](const ManagerUpstreamView& spec, std::string* error)
+    {
+        return console_add_upstream(spec, error);
+    };
+    handlers.remove_upstream = [this](uint8_t id, std::string* error)
+    {
+        return console_remove_upstream(id, error);
+    };
+    handlers.list_upstream = [this](const std::vector<uint8_t>& ids,
+                                    std::vector<ManagerUpstreamView>* out,
+                                    std::string* error)
+    {
+        return console_list_upstream(ids, out, error);
+    };
+    handlers.update_upstream = [this](const ManagerUpstreamUpdate& patch,
+                                      ManagerUpstreamView* out,
+                                      std::string* error)
+    {
+        return console_update_upstream(patch, out, error);
+    };
+    handlers.list_upstream_rx_stat =
+        [this](const std::vector<uint8_t>& ids,
+               std::vector<ManagerUpstreamRxStatView>* out, std::string* error)
+    {
+        return console_list_upstream_rx_stat(ids, out, error);
+    };
+    handlers.list_upstream_tx_stat =
+        [this](const std::vector<uint8_t>& ids,
+               std::vector<ManagerUpstreamTxStatView>* out, std::string* error)
+    {
+        return console_list_upstream_tx_stat(ids, out, error);
+    };
+    handlers.get_metrics = [this](const std::vector<std::string>& keys,
+                                  std::vector<ManagerMetricView>* out,
+                                  std::string* error)
+    {
+        return console_get_metrics(keys, out, error);
+    };
+    handlers.radio_info = [this](ManagerConsoleReply reply)
+    {
+        console_radio_info(reply);
+    };
+    handlers.radio_reset = [this](uint8_t id, ManagerConsoleReply reply)
+    {
+        console_radio_reset(id, reply);
+    };
+    handlers.radio_tx = [this](const ManagerRadioUpdate& patch,
+                               ManagerConsoleReply reply)
+    {
+        console_radio_tx(patch, reply);
+    };
+    handlers.config_slot = [this](uint8_t slot, ManagerConsoleReply reply)
+    {
+        console_config_slot(slot, reply);
+    };
     std::string err;
-    if (!mgr_console.start(
-            reactor, in_addr, out_addr,
-            [this](size_t index, FecType type, int k, int n, std::string* error)
-            {
-                return set_upstream_fec(index, type, k, n, error);
-            },
-            [this](size_t index, size_t budget, std::string* error)
-            {
-                return set_upstream_scheduler_budget(index, budget, error);
-            },
-            [this](size_t index, FecType* type, int* k, int* n,
-                   std::string* error)
-            {
-                return get_upstream_fec(index, type, k, n, error);
-            },
-            [this](size_t index, size_t* budget, std::string* error)
-            {
-                return get_upstream_scheduler_budget(index, budget, error);
-            },
-            [this](ChannelInfoView* out, std::string* error)
-            {
-                if (out == nullptr)
-                {
-                    if (error != nullptr)
-                    {
-                        *error = "null out";
-                    }
-                    return false;
-                }
-                fill_ci_view(out);
-                return true;
-            },
-            [this](const std::string& name, std::string* error)
-            {
-                return set_modulation(name, error);
-            },
-            [this](std::string* name, std::string* error)
-            {
-                return get_modulation(name, error);
-            },
-            [this](const uint32_t* max_rate_kbps,
-                   const size_t* max_data_per_tick, const size_t* tx_burst_size,
-                   const uint32_t* tx_burst_interval_us, std::string* error)
-            {
-                return set_tx_pacing(max_rate_kbps, max_data_per_tick,
-                                     tx_burst_size, tx_burst_interval_us,
-                                     error);
-            },
-            [this](uint32_t* max_rate_kbps, size_t* max_data_per_tick,
-                   size_t* tx_burst_size, uint32_t* tx_burst_interval_us,
-                   std::string* error)
-            {
-                return get_tx_pacing(max_rate_kbps, max_data_per_tick,
-                                     tx_burst_size, tx_burst_interval_us,
-                                     error);
-            },
-            &err))
+    if (!mgr_console.start(reactor, in_addr, out_addr, std::move(handlers),
+                           &err))
     {
         LOG_ERR("manager console: %s", err.c_str());
         return false;
@@ -433,37 +947,63 @@ bool App::start_manager_console()
     return true;
 }
 
+void App::reapply_radio_console(std::function<void(bool ok)> done)
+{
+    if (!console_ok || !radio)
+    {
+        if (done)
+        {
+            done(false);
+        }
+        return;
+    }
+    console.apply_radio(
+        cfg, cfg.config_slot,
+        [this, done = std::move(done)](MplaneResult r)
+        {
+            if (!r.ok)
+            {
+                if (done)
+                {
+                    done(false);
+                }
+                return;
+            }
+            radio_manager_.on_phy_programmed();
+            if (done)
+            {
+                done(true);
+            }
+        });
+}
+
 bool App::apply_console()
 {
-    std::string err;
     if (cfg.local_ip.empty())
     {
         local_ip = console.local_ip();
     }
-    if (!console.apply_radio(cfg, &err))
+    if (!hold_console())
     {
-        LOG_ERR("%s", err.c_str());
         return false;
     }
-    if (!radio)
-    {
-        LOG_ERR("radio not open");
-        return false;
-    }
-    if (!console.apply_upstream(cfg, radio->inject_port(),
-                                radio->forward_port(), local_ip, &err))
-    {
-        LOG_ERR("%s", err.c_str());
-        return false;
-    }
-    return hold_console();
+    reapply_radio_console(
+        [this](bool ok)
+        {
+            if (!ok)
+            {
+                LOG_ERR("radio reapply failed");
+                drop_console();
+                return;
+            }
+            radio_manager_.on_phy_programmed();
+        });
+    return true;
 }
 
 bool App::hold_console()
 {
     console.clear_pending();
-    awaiting_pong = false;
-    heartbeat_ticks = 0;
     console_ok = true;
     if (!reactor.add_read_rdy(console.fd(),
                               [this]()
@@ -485,10 +1025,9 @@ void App::drop_console()
         reactor.rem_read_rdy(fd);
         reactor.rem_write_rdy(fd);
     }
+    console.cancel_pending();
     console.close();
     console_ok = false;
-    awaiting_pong = false;
-    heartbeat_ticks = 0;
 }
 
 void App::begin_console()
@@ -521,69 +1060,29 @@ void App::on_console()
     {
         return;
     }
-    while (true)
-    {
-        char buf[2048];
-        const ssize_t n = recv(console.fd(), buf, sizeof(buf), 0);
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-        {
-            break;
-        }
-        if (n < 0)
-        {
-            LOG_WRN("console recv: %s", strerror(errno));
-            drop_console();
-            return;
-        }
-        if (n == 0)
-        {
-            continue;
-        }
-        console.append_recv(buf, static_cast<size_t>(n));
-    }
-
-    std::string line;
-    while (console.pop_line(&line))
-    {
-        if (line == "pong")
-        {
-            awaiting_pong = false;
-            heartbeat_ticks = 0;
-            continue;
-        }
-        // Ignore unsolicited lines while holding the console.
-    }
-}
-
-void App::heartbeat_tick()
-{
-    if (!console_ok)
+    char buf[2048];
+    const ssize_t n = recv(console.fd(), buf, sizeof(buf), 0);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
     {
         return;
     }
-    heartbeat_ticks++;
-    if (awaiting_pong)
+    if (n < 0)
     {
-        if (heartbeat_ticks >= k_pong_timeout_ticks)
-        {
-            LOG_WRN("console ping timeout");
-            drop_console();
-        }
-        return;
-    }
-    if (heartbeat_ticks < k_ping_interval_ticks)
-    {
-        return;
-    }
-    heartbeat_ticks = 0;
-    std::string err;
-    if (!console.send_ping(&err))
-    {
-        LOG_WRN("console ping failed: %s", err.c_str());
+        LOG_WRN("console recv: %s", strerror(errno));
         drop_console();
         return;
     }
-    awaiting_pong = true;
+    if (n > 0)
+    {
+        console.append_recv(buf, static_cast<size_t>(n));
+    }
+
+    console.poll_deadlines(std::chrono::steady_clock::now());
+    std::string line;
+    while (console.pop_line(&line))
+    {
+        console.on_line(line);
+    }
 }
 
 void App::reconnect_tick()
@@ -595,7 +1094,9 @@ void App::reconnect_tick()
     if (console_ok)
     {
         reconnect_ticks = 0;
-        heartbeat_tick();
+        console.poll_deadlines(std::chrono::steady_clock::now());
+        radio_manager_.periodic_tick(console_ok);
+        radio_manager_.heartbeat_tick(console_ok);
         return;
     }
     reconnect_ticks++;
@@ -656,8 +1157,32 @@ void App::flush_shutdown()
             up->announce_down();
         }
     }
-    // CLOSE is ctrl (not rate-limited). One pass injects the repeats.
-    tx_mux_.sync_tick();
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    size_t queued_bytes = 0;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        bool pending = false;
+        for (const auto& up : upstreams)
+        {
+            if (up != nullptr && up->has_tx())
+            {
+                pending = true;
+                queued_bytes += up->get_tx_size();
+            }
+        }
+        if (!pending)
+        {
+            break;
+        }
+        tx_mux_.sync_tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (queued_bytes > 0)
+    {
+        LOG_INF("shutdown flush ended with ~%zu bytes still queued",
+                queued_bytes);
+    }
 }
 
 int App::run()
@@ -666,53 +1191,128 @@ int App::run()
     {
         return 1;
     }
+    radio_manager_.set_console_ops(
+        [this](std::function<void(bool, const ManagerRadioView&)> done)
+        {
+            if (!console_ok)
+            {
+                done(false, ManagerRadioView{});
+                return;
+            }
+            console.query_radio_info(
+                [this, done](MplaneResult r)
+                {
+                    ManagerRadioView view;
+                    if (!r.ok)
+                    {
+                        done(false, view);
+                        return;
+                    }
+                    const std::string body = mplane_join_body(r);
+                    if (!parse_radio_info_body(body, &view))
+                    {
+                        done(false, view);
+                        return;
+                    }
+                    radio_manager_.set_actual_phy(view);
+                    done(true, view);
+                });
+        },
+        [this](std::function<void(bool ok)> done)
+        {
+            reapply_radio_console(std::move(done));
+        },
+        [this](std::function<void(bool ok)> done)
+        {
+            console.send_ping(
+                [done = std::move(done)](MplaneResult r)
+                {
+                    if (done)
+                    {
+                        done(r.ok);
+                    }
+                });
+        },
+        [this]()
+        {
+            drop_console();
+        });
+    radio_manager_.set_reconcile_filter(
+        [this](std::function<void(bool ok)> done)
+        {
+            if (!console_ok)
+            {
+                done(false);
+                return;
+            }
+            console.send_rx_filter(
+                cfg.domain,
+                [this, done = std::move(done)](MplaneResult r)
+                {
+                    if (!r.ok)
+                    {
+                        done(false);
+                        return;
+                    }
+                    console.send_save_slot(
+                        cfg.config_slot,
+                        [done = std::move(done)](MplaneResult r2)
+                        {
+                            done(r2.ok);
+                        });
+                });
+        });
     if (!start_manager_console())
     {
         return 1;
-    }
-    std::vector<uint16_t> inject_ports;
-    std::vector<uint16_t> forward_ports;
-    if (radio)
-    {
-        inject_ports.push_back(radio->inject_port());
-        forward_ports.push_back(radio->forward_port());
     }
     if (!cfg.local_ip.empty() && parse_host(cfg.local_ip, &local_ip))
     {
         // keep configured local_ip for set_upstream_rx
     }
-    std::string err;
+    if (cfg.skip_console)
+    {
+        LOG_WRN("skip_console=1: radio rx_filter_addr3 is not managed");
+    }
     if (!cfg.skip_console)
     {
-        in_addr console_local = {};
-        bool held = false;
-        if (!console.program(cfg, inject_ports, forward_ports, &console_local,
-                             &err))
+        std::string err;
+        if (!console.start_connect(cfg, &err) || !console.finish_connect(&err))
         {
             LOG_ERR("%s", err.c_str());
+            reconnect_ticks = k_reconnect_ticks;
+        }
+        else if (!hold_console())
+        {
+            drop_console();
+            reconnect_ticks = k_reconnect_ticks;
         }
         else
         {
-            if (cfg.local_ip.empty())
-            {
-                local_ip = console_local;
-            }
-            held = hold_console();
-            if (!held)
-            {
-                drop_console();
-            }
+            console.apply_radio(
+                cfg, cfg.config_slot,
+                [this](MplaneResult r)
+                {
+                    if (!r.ok)
+                    {
+                        LOG_ERR("radio program failed: %s", r.error.c_str());
+                        drop_console();
+                        reconnect_ticks = k_reconnect_ticks;
+                        return;
+                    }
+                    if (cfg.local_ip.empty())
+                    {
+                        local_ip = console.local_ip();
+                    }
+                    radio_manager_.on_phy_programmed();
+                    LOG_INF("console ready %s:%u", cfg.device.c_str(),
+                            cfg.console_port);
+                });
         }
-        if (held)
-        {
-            LOG_INF("console ready %s:%u", cfg.device.c_str(),
-                    cfg.console_port);
-        }
-        else
+        if (!console_ok)
         {
             LOG_WRN("waiting for console %s:%u", cfg.device.c_str(),
                     cfg.console_port);
-            reconnect_ticks = k_reconnect_ticks;
         }
     }
     else if (!cfg.local_ip.empty())
@@ -739,8 +1339,8 @@ int App::run()
     tx_mux_.start();
     arm_tick();
     reactor.run();
-    flush_shutdown();
     tx_mux_.stop();
+    flush_shutdown();
     return 0;
 }
 

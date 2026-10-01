@@ -2,8 +2,11 @@
 #define WINJECT_MANAGER_CONSOLE_CLIENT_H_
 
 #include "Config.h"
-#include "utils/NetUtil.h"
 
+#include <bfc/socket.hpp>
+#include <chrono>
+#include <functional>
+#include <map>
 #include <netinet/in.h>
 #include <stdint.h>
 #include <string>
@@ -12,9 +15,19 @@
 namespace winject
 {
 
+struct MplaneResult
+{
+    bool ok = false;
+    std::vector<std::string> body_lines;
+    std::string payload;
+    std::string error;
+};
+
 class ConsoleClient
 {
 public:
+    using DoneFn = std::function<void(MplaneResult)>;
+
     ~ConsoleClient();
 
     bool start_connect(const Config& cfg, std::string* error);
@@ -28,31 +41,53 @@ public:
     {
         return local_ip_;
     }
-    bool apply_radio(const Config& cfg, std::string* error);
-    bool apply_upstream(const Config& cfg, uint16_t inject_port,
-                        uint16_t forward_port, in_addr local_ip,
-                        std::string* error);
-    bool program(const Config& cfg, const std::vector<uint16_t>& inject_ports,
-                 const std::vector<uint16_t>& forward_ports, in_addr* local_ip,
-                 std::string* error);
-    bool set_modulation(const std::string& name, std::string* error);
 
-    bool send_ping(std::string* error);
+    void set_default_timeout(std::chrono::milliseconds timeout)
+    {
+        default_timeout_ = timeout;
+    }
+
+    bool request(const std::string& mplane_line, DoneFn done);
+    bool request(const std::string& mplane_line, std::chrono::milliseconds timeout,
+                 DoneFn done);
+
+    void on_line(const std::string& line);
+    void poll_deadlines(std::chrono::steady_clock::time_point now);
+    void cancel_pending();
+
+    void program(const Config& cfg, DoneFn done);
+    void apply_radio(const Config& cfg, uint8_t save_slot, DoneFn done);
+    void query_radio_info(DoneFn done);
+    void send_radio_tx(const std::string& kv_args, DoneFn done);
+    void send_radio_reset(uint8_t id, DoneFn done);
+    void send_ping(DoneFn done);
+    void send_save_slot(uint8_t slot, DoneFn done);
+    void send_load_slot(uint8_t slot, DoneFn done);
+    void send_rx_filter(uint16_t domain, DoneFn done);
+
     void append_recv(const char* data, size_t n);
     bool pop_line(std::string* line);
     void clear_pending();
-    bool take_pong();
 
 private:
-    bool send_cmd(const std::string& cmd, std::string* error);
-    bool recv_datagram(std::string* payload, std::string* error);
-    bool query_status(std::vector<std::string>* lines, std::string* error);
-    bool release_inject_port(uint16_t port, std::string* error);
+    struct Pending
+    {
+        std::string cmd;
+        std::chrono::steady_clock::time_point deadline;
+        DoneFn done;
+        std::vector<std::string> body_lines;
+    };
+
+    bool send_wire(const std::string& wire, std::string* error);
+    void complete(uint8_t id, MplaneResult result);
+    void chain_after(bool ok, const std::string& err, DoneFn next);
 
     bfc::socket sock;
     in_addr local_ip_{};
     std::string pending;
-    bool pong_seen_ = false;
+    uint8_t next_req_id_ = 1;
+    std::map<uint8_t, Pending> pending_reqs_;
+    std::chrono::milliseconds default_timeout_{3000};
 };
 
 }  // namespace winject

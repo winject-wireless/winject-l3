@@ -17,6 +17,7 @@
 
 #include "frames/Frame.h"
 
+#include <algorithm>
 #include <cstdio>
 
 namespace winject
@@ -55,8 +56,9 @@ uint8_t SeqControl::get_fragment_num()
 
 void SeqControl::set_fragment_num(uint8_t value)
 {
-    frag_sec = le16toh(frag_sec) & 0xFFF0;
-    frag_sec = le16toh(frag_sec) | value;
+    uint16_t raw = le16toh(frag_sec);
+    raw = (raw & 0xFFF0u) | static_cast<uint16_t>(value & 0x0Fu);
+    frag_sec = htole16(raw);
 }
 
 uint16_t SeqControl::get_seq_num()
@@ -66,8 +68,9 @@ uint16_t SeqControl::get_seq_num()
 
 void SeqControl::set_seq_num(uint16_t value)
 {
-    frag_sec = le16toh(frag_sec) & 0xF;
-    frag_sec = le16toh(frag_sec) | (value << 4);
+    uint16_t raw = le16toh(frag_sec);
+    raw = (raw & 0x000Fu) | static_cast<uint16_t>((value & 0x0FFFu) << 4);
+    frag_sec = htole16(raw);
 }
 
 Frame::Frame(uint8_t* buffer, uint8_t* last) : last(last), is_enabled_fcs(true)
@@ -160,20 +163,26 @@ void Frame::set_body_size(uint16_t size)
 
 std::string to_string(Frame& frame80211)
 {
-    char buffer[1024];
+    char buffer[1024] = {};
     char* current = buffer;
     auto rem = [buffer, &current]()
     {
         return uintptr_t(buffer + sizeof(buffer) - current);
     };
 
-    auto check = [&current](int result) mutable
+    auto check = [&current, &rem](int result) mutable
     {
         if (result < 0)
         {
             return;
         }
-        current += result;
+        const size_t space = rem();
+        if (space == 0)
+        {
+            return;
+        }
+        const size_t n = std::min(static_cast<size_t>(result), space - 1);
+        current += n;
     };
 
     check(snprintf(current, rem(), "802.11:\n"));

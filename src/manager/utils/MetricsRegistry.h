@@ -1,16 +1,16 @@
 #ifndef WINJECT_MANAGER_UTILS_METRICS_REGISTRY_H_
 #define WINJECT_MANAGER_UTILS_METRICS_REGISTRY_H_
 
-#include "utils/AtomicString.h"
-
 #include <atomic>
 #include <cstdint>
 #include <map>
-#include <mutex>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 #if __cplusplus >= 202002L
 using atomic_uint64_t = std::atomic_uint64_t;
@@ -28,9 +28,9 @@ namespace winject
 using MetricU64 = std::shared_ptr<atomic_uint64_t>;
 using MetricI64 = std::shared_ptr<atomic_int64_t>;
 using MetricF64 = std::shared_ptr<atomic_double>;
-using MetricStr = std::shared_ptr<AtomicString>;
 using Metrics = std::variant<MetricU64, MetricI64, MetricF64>;
 
+std::string metric_value_to_string(const Metrics& metric);
 std::string to_string(const std::map<std::string, Metrics>& metrics);
 
 class MetricsRegistry
@@ -39,7 +39,13 @@ public:
     template <typename T>
     T get_metrics(const std::string& index);
 
-    std::map<std::string, Metrics> getMetrics();
+    // Lookup only; does not create entries (use get_metrics<T> to register).
+    std::optional<Metrics> get_metrics(const std::string& index) const;
+
+    std::map<std::string, Metrics> getMetrics(
+        const std::vector<std::string>& keys = {}) const;
+
+    void remove_prefix(const std::string& prefix);
 
 private:
     mutable std::mutex mu_;
@@ -84,10 +90,10 @@ struct MetricTraits<MetricF64>
 template <typename T>
 T MetricsRegistry::get_metrics(const std::string& index)
 {
-    static_assert(
-        std::is_same<T, MetricU64>::value || std::is_same<T, MetricI64>::value ||
-            std::is_same<T, MetricF64>::value,
-        "get_metrics T must be MetricU64, MetricI64, or MetricF64");
+    static_assert(std::is_same<T, MetricU64>::value ||
+                      std::is_same<T, MetricI64>::value ||
+                      std::is_same<T, MetricF64>::value,
+                  "get_metrics T must be MetricU64, MetricI64, or MetricF64");
 
     std::lock_guard<std::mutex> lock(mu_);
     const auto it = metrics_.find(index);

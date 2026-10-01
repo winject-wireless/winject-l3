@@ -11,9 +11,9 @@ src/manager/          winject-manager binary (802.11 MPDU in frames/Mpdu.*, IEEE
 src/test/             Host unit tests (GoogleTest)
 configuration/        Example manager configs and bench scripts
 scripts/              Manager bench helpers (bw/lat tests, ensure_manager.sh)
-docs/manager.md       Config reference and upstream modes
-docs/winject.md       802.11 MPDU layout, LC seq, radio console (manager view)
-docs/cd-protocol.md   Manager ↔ radio inject pacing
+docs/manager.md       Manager m-plane (client console)
+docs/radio.md         Radio UDP console (PHY, upstream, network)
+docs/winject.md       802.11 MPDU layout, LC header, radio console (manager view)
 docs/contributing.md  Code style, tests, and ./scripts/check_guidelines.sh
 ```
 
@@ -27,20 +27,22 @@ Google C++ with Allman braces; see [docs/contributing.md](docs/contributing.md).
 
 ## Build
 
+**Host requirement:** Linux kernel **5.11+** (manager reactor uses `epoll_pwait2` for accurate timers).
+
 ```bash
-cmake -S src/manager -B build_manager_arm -DCMAKE_BUILD_TYPE=Release
-cmake --build build_manager_arm -j"$(nproc)"
-./build_manager_arm/winject-manager src/manager/winject.conf.example
+cmake -S src/manager -B build_manager_host -DCMAKE_BUILD_TYPE=Release
+cmake --build build_manager_host -j"$(nproc)"
+./build_manager_host/winject-manager configuration/host_x86/config.cfg
 ```
 
-Cross-build for Orange Pi H3 (armhf): use `tools/cmake/arm-linux-gnueabihf.cmake` with `build_manager_h3`.
+Cross-build for Orange Pi H3 (armhf): use `tools/cmake/arm-linux-gnueabihf.cmake` with a dedicated build directory (see [docs/manager.md](docs/manager.md)).
 
 Host tests:
 
 ```bash
-cmake -S src/test -B build_test_arm -DCMAKE_BUILD_TYPE=Release
-cmake --build build_test_arm -j"$(nproc)"
-ctest --test-dir build_test_arm --output-on-failure
+cmake -S src/test -B build_test_ci -DCMAKE_BUILD_TYPE=Release
+cmake --build build_test_ci -j"$(nproc)"
+ctest --test-dir build_test_ci --output-on-failure
 ```
 
 See [docs/manager.md](docs/manager.md).

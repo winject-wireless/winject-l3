@@ -19,13 +19,20 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/IsalEc.cmake)
 winject_add_isal_ec()
 
 add_executable(winject-tests
+    ReactorDrainTest.cpp
+    EpollReactorTest.cpp
     MpduSlotTest.cpp
     MpduTest.cpp
     ConfigTest.cpp
     RsBlockErasureTest.cpp
     NetUtilTest.cpp
-    LCSequenceTest.cpp
+    LCHeaderTest.cpp
+    PhyAirtimeTest.cpp
+    RxDemuxTest.cpp
+    ConsoleClientTest.cpp
     ConsoleServiceTest.cpp
+    RadioMplaneParseTest.cpp
+    WifiFcsTest.cpp
     MetricsRegistryTest.cpp
     SharedSizedBufferTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
@@ -33,9 +40,20 @@ add_executable(winject-tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Mpdu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/RsBlockErasure.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UpstreamStats.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/Upstream.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UdpEndpoint.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleParse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleClient.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/MplaneCorrelation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/PhyAirtime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RxDemux.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioUpstreamTable.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiUdp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioMplaneParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/Log.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/NetUtil.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiFcs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/MetricsRegistry.cpp
 )
 

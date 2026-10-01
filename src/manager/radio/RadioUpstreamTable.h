@@ -22,6 +22,7 @@ public:
     void add(const std::shared_ptr<Upstream>& up,
              const std::shared_ptr<WifiUdp>& radio, uint8_t bus_tx,
              uint8_t bus_rx, size_t budget);
+    bool remove(size_t index);
     bool set_budget(size_t index, size_t budget);
     bool get_budget(size_t index, size_t* budget) const;
     bool peek_seq_lost(size_t index, uint64_t* lost) const;
@@ -35,10 +36,12 @@ public:
     {
         return mu_;
     }
+    // Caller must hold mutex().
     std::vector<RadioUpstreamEntry>& entries()
     {
         return entries_;
     }
+    // Caller must hold mutex().
     const std::vector<RadioUpstreamEntry>& entries() const
     {
         return entries_;

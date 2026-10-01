@@ -92,8 +92,6 @@ upstream-0.tx               = 127.0.0.1:21082
 TEST(ConfigTest, DefaultMaxRateWhenOmitted)
 {
     EXPECT_EQ(Config::phy_rate_kbps("OFDM_24M"), 24000u);
-    // Formula helper still exists; omitted Config uses a fixed 10000 default.
-
     const std::string path = write_conf(R"(
 winject.device        = 192.168.32.1
 winject.console       = 22
@@ -112,7 +110,8 @@ upstream-0.tx               = 127.0.0.1:21082
     Config cfg;
     std::string err;
     ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_EQ(cfg.max_rate_kbps, 10000u);
+    EXPECT_EQ(cfg.max_rate_kbps, 0u);
+    EXPECT_FALSE(cfg.max_rate_kbps_explicit);
     std::remove(path.c_str());
 }
 
@@ -140,7 +139,7 @@ upstream-0.bind_address     = 127.0.0.1:22081
     std::remove(path.c_str());
 }
 
-TEST(ConfigTest, RejectsSameBusTxRx)
+TEST(ConfigTest, LoadsSameBusTxRx)
 {
     const std::string path = write_conf(R"(
 winject.device        = 192.168.32.1
@@ -159,8 +158,59 @@ upstream-0.connect_address  = 127.0.0.1:9
 )");
     Config cfg;
     std::string err;
+    EXPECT_TRUE(cfg.load(path, &err)) << err;
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsUnknownModulation)
+{
+    const std::string path = write_conf(R"(
+winject.device        = 192.168.32.1
+winject.console       = 22
+winject.channel       = 1
+winject.modulation    = NOT_A_PHY
+winject.power         = 20
+winject.domain        = 1234
+upstream.size = 0
+)");
+    Config cfg;
+    std::string err;
     EXPECT_FALSE(cfg.load(path, &err));
-    EXPECT_NE(err.find("must differ"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsInvalidMaxDataPerTick)
+{
+    const std::string path = write_conf(R"(
+winject.device        = 192.168.32.1
+winject.console       = 22
+winject.channel       = 1
+winject.modulation    = OFDM_24M
+winject.power         = 20
+winject.domain        = 1234
+winject.max_data_per_tick = 99
+upstream.size = 0
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsZeroDomain)
+{
+    const std::string path = write_conf(R"(
+winject.device        = 192.168.32.1
+winject.console       = 22
+winject.channel       = 1
+winject.modulation    = OFDM_24M
+winject.power         = 20
+winject.domain        = 0
+upstream.size = 0
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
     std::remove(path.c_str());
 }
 
@@ -302,6 +352,6 @@ upstream-0.tx               = 127.0.0.1:21082
     Config cfg;
     std::string err;
     EXPECT_FALSE(cfg.load(path, &err));
-    EXPECT_NE(err.find("channel 14"), std::string::npos);
+    EXPECT_NE(err.find("modulation"), std::string::npos);
     std::remove(path.c_str());
 }

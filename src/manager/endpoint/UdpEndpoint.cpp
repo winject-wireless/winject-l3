@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <vector>
 
 namespace
@@ -29,7 +30,7 @@ bfc::sized_buffer make_pkt(std::vector<uint8_t>&& payload)
     }
     return make_pkt(payload.data(), payload.size());
 }
-}
+}  // namespace
 
 namespace winject
 {
@@ -55,6 +56,7 @@ bool UdpEndpoint::open(IOReactor& reactor, const UpstreamConfig& cfg,
     sock.set_sock_opt(SOL_SOCKET, SO_REUSEADDR, one);
 
     const UdpPeerEndpoint& ep = cfg.endpoint;
+    peer_endpoints_ = ep;
     bool opened = false;
     if (mode == UpstreamMode::udp_static)
     {
@@ -124,7 +126,7 @@ bool UdpEndpoint::open(IOReactor& reactor, const UpstreamConfig& cfg,
 
     if (cfg.fec_type == FecType::RsBlockErasure)
     {
-        fec_timeout_ms = cfg.fec_timeout_ms;
+        fec_timeout_ms_ = cfg.fec_timeout_ms;
         if (!fec.init(cfg.fec_k, cfg.fec_n, cfg.fec_timeout_ms))
         {
             LOG_ERR("udp fec init k=%d n=%d failed", cfg.fec_k, cfg.fec_n);
@@ -134,7 +136,11 @@ bool UdpEndpoint::open(IOReactor& reactor, const UpstreamConfig& cfg,
                 cfg.fec_k, cfg.fec_n, cfg.fec_timeout_ms, fec.impl_name());
     }
 
-    return reactor.add_read_rdy(sock.fd(), [this](){on_app();});
+    return reactor.add_read_rdy(sock.fd(),
+                                [this]()
+                                {
+                                    on_app();
+                                });
 }
 
 void UdpEndpoint::close()
@@ -171,7 +177,8 @@ void UdpEndpoint::enqueue_air(bfc::sized_buffer pkt)
 
 void UdpEndpoint::on_app()
 {
-    while (true)
+    constexpr int k_max_rx_per_wakeup = 8;
+    for (int drained = 0; drained < k_max_rx_per_wakeup; ++drained)
     {
         sockaddr_in from = {};
         socklen_t from_len = sizeof(from);
@@ -180,14 +187,19 @@ void UdpEndpoint::on_app()
             rx_buf.reserve(2048);
         }
         rx_buf.resize(2048);
-        const ssize_t n = sock.recv(
-            rx_buf, 0, reinterpret_cast<sockaddr*>(&from), &from_len);
+        const ssize_t n =
+            sock.recv(rx_buf, MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&from),
+                      &from_len);
         if (n >= 0)
         {
             rx_buf.resize(static_cast<size_t>(n));
         }
         if (n < 0)
         {
+            if (errno == EINTR)
+            {
+                continue;
+            }
             if (errno == ECONNREFUSED)
             {
                 // Reply dest is a closed local port; ICMP is queued on this
@@ -205,8 +217,11 @@ void UdpEndpoint::on_app()
         }
         if (n == 0)
         {
-            return;
+            continue;
         }
+        app_tx_bytes_.fetch_add(static_cast<uint64_t>(n),
+                                std::memory_order_relaxed);
+        app_tx_packets_.fetch_add(1, std::memory_order_relaxed);
         if (mode == UpstreamMode::udp_server)
         {
             // Last sender gets replies. Camera/master also seed with "ok\n"
@@ -222,7 +237,7 @@ void UdpEndpoint::on_app()
             {
                 std::lock_guard<std::mutex> lock(tx_mu_);
                 fec.push_app(reinterpret_cast<const uint8_t*>(rx_buf.data()),
-                               rx_buf.size(), nullptr);
+                             rx_buf.size(), nullptr);
                 sync_fec_timer_after_push();
                 wake_tx = fec.has_tx_shards();
             }
@@ -252,12 +267,22 @@ void UdpEndpoint::on_radio_rx(bfcext::shared_sized_buffer pkt)
     {
         return;
     }
+    const uint8_t* air = reinterpret_cast<const uint8_t*>(pkt.data());
+    const size_t air_len = pkt.size();
+    if (air_len > 0 && air[0] == RsBlockErasure::k_magic)
+    {
+        fec_air_rx_bytes_.fetch_add(static_cast<uint64_t>(air_len),
+                                    std::memory_order_relaxed);
+        fec_air_rx_packets_.fetch_add(1, std::memory_order_relaxed);
+    }
     // Always FEC-aware on RX: shard header carries k/n. Non-FEC passes through.
     std::vector<std::vector<uint8_t>> payloads;
-    fec.push_air(reinterpret_cast<const uint8_t*>(pkt.data()), pkt.size(),
-                 &payloads);
+    fec.push_air(air, air_len, &payloads);
     for (const auto& p : payloads)
     {
+        app_rx_bytes_.fetch_add(static_cast<uint64_t>(p.size()),
+                                std::memory_order_relaxed);
+        app_rx_packets_.fetch_add(1, std::memory_order_relaxed);
         const bfc::const_buffer_view view(
             reinterpret_cast<const std::byte*>(p.data()), p.size());
         sock.send(view, 0, reinterpret_cast<const sockaddr*>(&dest),
@@ -268,12 +293,15 @@ void UdpEndpoint::on_radio_rx(bfcext::shared_sized_buffer pkt)
 void UdpEndpoint::arm_fec_timer()
 {
     if (reactor == nullptr || !fec.enabled() || fec_timer_armed_ ||
-        fec_timeout_ms <= 0 || !fec.has_pending())
+        fec_timeout_ms_ <= 0 || !fec.has_pending())
     {
         return;
     }
-    fec_timer_id_ = reactor->get_timer().wait_ms(
-        fec_timeout_ms, [this]() { on_fec_timer(); });
+    fec_timer_id_ = reactor->get_timer().wait_ms(fec_timeout_ms_,
+                                                 [this]()
+                                                 {
+                                                     on_fec_timer();
+                                                 });
     fec_timer_armed_ = true;
 }
 
@@ -367,7 +395,9 @@ bool UdpEndpoint::set_fec(FecType type, int k, int n, std::string* error)
     {
         return fail("unsupported fec type");
     }
-    const int timeout_ms = fec_timeout_ms > 0 ? fec_timeout_ms : RsBlockErasure::k_default_timeout_ms;
+    const int timeout_ms = fec_timeout_ms_ > 0
+                               ? fec_timeout_ms_
+                               : RsBlockErasure::k_default_timeout_ms;
     if (!fec.init(k, n, timeout_ms))
     {
         return fail("invalid fec k/n (need 1 <= k < n <= 255)");
@@ -376,6 +406,58 @@ bool UdpEndpoint::set_fec(FecType type, int k, int n, std::string* error)
     LOG_INF("udp fec RS_BLOCK_ERASURE k=%d n=%d timeout=%d ms (%s)", k, n,
             timeout_ms, fec.impl_name());
     return true;
+}
+
+bool UdpEndpoint::set_fec_timeout_ms(int timeout_ms, std::string* error)
+{
+    if (timeout_ms < 0)
+    {
+        if (error != nullptr)
+        {
+            *error = "INVALID_ARGUMENT";
+        }
+        return false;
+    }
+    fec_timeout_ms_ = timeout_ms;
+    return true;
+}
+
+uint64_t UdpEndpoint::fec_recovered() const
+{
+    return fec.recovered();
+}
+
+uint64_t UdpEndpoint::fec_decode_fail() const
+{
+    return fec.decode_fail();
+}
+
+void UdpEndpoint::tx_pending_stats(uint64_t* pkt, uint64_t* byt) const
+{
+    uint64_t p = 0;
+    uint64_t b = 0;
+    std::lock_guard<std::mutex> lock(tx_mu_);
+    for (const auto& q : txq)
+    {
+        p++;
+        b += static_cast<uint64_t>(q.size());
+    }
+    if (fec.enabled())
+    {
+        uint64_t fp = 0;
+        uint64_t fb = 0;
+        fec.tx_pending_stats(&fp, &fb);
+        p += fp;
+        b += fb;
+    }
+    if (pkt != nullptr)
+    {
+        *pkt = p;
+    }
+    if (byt != nullptr)
+    {
+        *byt = b;
+    }
 }
 
 void UdpEndpoint::get_fec(FecType* type, int* k, int* n) const
@@ -433,6 +515,16 @@ bfc::sized_buffer UdpEndpoint::pull_tx(size_t max)
     }
     bfc::sized_buffer out = std::move(pkt);
     txq.pop_front();
+    if (!out.empty())
+    {
+        const uint8_t* data = reinterpret_cast<const uint8_t*>(out.data());
+        if (fec.enabled() && data[0] == RsBlockErasure::k_magic)
+        {
+            fec_air_tx_bytes_.fetch_add(static_cast<uint64_t>(out.size()),
+                                       std::memory_order_relaxed);
+            fec_air_tx_packets_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     return out;
 }
 
