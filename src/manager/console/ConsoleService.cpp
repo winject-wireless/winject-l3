@@ -31,7 +31,8 @@ constexpr const char k_help_text[] =
     "get_metrics|gm [keys=<string>,...]\n"
     "radio_info|ri\n"
     "radio_caps_info|rci\n"
-    "radio_tx|rt [channel= tx_power= modulation=]\n"
+    "radio_stats|rs\n"
+    "radio_tx|rt [channel= tx_power= modulation= cca=<0|1>]\n"
     "reset|r id=<u8>\n"
     "config slot=<u8>\n";
 
@@ -301,8 +302,8 @@ bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
         !handlers.list_upstream || !handlers.update_upstream ||
         !handlers.list_upstream_rx_stat || !handlers.list_upstream_tx_stat ||
         !handlers.get_metrics || !handlers.radio_info ||
-        !handlers.radio_caps_info || !handlers.radio_tx ||
-        !handlers.radio_reset || !handlers.config_slot)
+        !handlers.radio_caps_info || !handlers.radio_stats ||
+        !handlers.radio_tx || !handlers.radio_reset || !handlers.config_slot)
     {
         return fail("invalid manager console args");
     }
@@ -788,6 +789,31 @@ void ConsoleService::handle_line(const char* line)
         return;
     }
 
+    if (console_cmd_is(cmd, "radio_stats", "rs"))
+    {
+        if (strtok_r(nullptr, " \t", &save) != nullptr)
+        {
+            reply_nok("INVALID_ARGUMENT");
+            return;
+        }
+        ManagerConsoleReply cr;
+        cr.send_text = [this](const std::string& text)
+        {
+            std::string out = text;
+            if (!out.empty() && out.back() != '\n')
+            {
+                out += '\n';
+            }
+            reply(out.c_str());
+        };
+        cr.send_nok = [this](const char* msg)
+        {
+            reply_nok(msg);
+        };
+        handlers_.radio_stats(cr);
+        return;
+    }
+
     if (console_cmd_is(cmd, "radio_tx", "rt"))
     {
         ManagerRadioUpdate patch;
@@ -818,6 +844,14 @@ void ConsoleService::handle_line(const char* line)
             {
                 patch.modulation = value;
                 patch.have_modulation = true;
+                any = true;
+                continue;
+            }
+            if (console_parse_kv(a, "cca=", &value) &&
+                console_parse_u(value, &v) && v <= 1)
+            {
+                patch.cca = v == 1;
+                patch.have_cca = true;
                 any = true;
                 continue;
             }

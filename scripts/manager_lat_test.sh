@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-way air TX-RX latency through winject-manager on this host (ARM or x86).
-# Both radios stay STANDALONE; both managers run locally.
+# Both managers run locally and program their radios; no direct radio access.
 #
 # Cases (default all three):
 #   raw      raw UDP (no FEC)
@@ -9,7 +9,7 @@
 #
 # Usage:
 #   ./scripts/manager_lat_test.sh
-#   ./scripts/manager_lat_test.sh --a 192.168.127.181 --b 192.168.128.119 --no-cca --count 800
+#   ./scripts/manager_lat_test.sh --a 192.168.253.11 --b 192.168.253.12 --no-cca --count 800
 #   CASES=raw,fec10-15 ./scripts/manager_lat_test.sh
 #   ./scripts/manager_lat_test.sh 192.168.253.11 192.168.253.12 192.168.253.106
 
@@ -59,7 +59,8 @@ for a in "${LAT_ARGS[@]+"${LAT_ARGS[@]}"}"; do
 done
 
 # Strip runner-only flags from lat_test args.
-PREP_EXTRA=()
+# Radio CCA written into the manager configs (empty = keep the radio's).
+CFG_CCA=""
 PASS_ARGS=()
 i=0
 while [[ $i -lt ${#LAT_ARGS[@]} ]]; do
@@ -101,10 +102,10 @@ while [[ $i -lt ${#LAT_ARGS[@]} ]]; do
       HOST_SET=1
       ;;
     --no-cca)
-      PREP_EXTRA+=(--no-cca)
+      CFG_CCA=0
       ;;
     --cca)
-      PREP_EXTRA+=(--cca)
+      CFG_CCA=1
       ;;
     --cases)
       i=$((i + 1))
@@ -149,11 +150,16 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# The managers program the radios (PHY, CCA, domain filter) at startup.
 patch_conf() {
   local src="$1" device="$2" dest="$3"
   sed -e "s/^winject\.device.*/winject.device        = ${device}/" \
       -e "s/^winject\.local_ip.*/winject.local_ip      = ${HOST_IP}/" \
+      -e "s/^winject\.skip_console.*/winject.skip_console  = 0/" \
       "$src" >"$dest"
+  if [[ -n "$CFG_CCA" ]]; then
+    printf 'winject.cca           = %s\n' "$CFG_CCA" >>"$dest"
+  fi
 }
 
 append_fec() {
@@ -171,7 +177,6 @@ EOF
 start_managers() {
   local conf_a="$1" conf_b="$2" tag="$3"
   stop_managers
-  pkill -f "winject-manager.*winject" 2>/dev/null || true
   pkill -x winject-manager 2>/dev/null || true
   sleep 0.4
   echo "managers [$tag]: A=$RADIO_A B=$RADIO_B host=$HOST_IP"
@@ -197,11 +202,6 @@ start_managers() {
   tail -30 "$LOG_DIR/manager_b_${tag}.log" || true
   return 1
 }
-
-echo "configuring radios (radio d-plane: inject 9000, forward 9210)..."
-python3 "$ROOT/scripts/prepare_radios_for_manager.py" \
-  --a "$RADIO_A" --b "$RADIO_B" --host "$HOST_IP" --verbose "${PREP_EXTRA[@]+"${PREP_EXTRA[@]}"}" \
-  || exit 1
 
 RESULTS="$LOG_DIR/results.txt"
 : >"$RESULTS"

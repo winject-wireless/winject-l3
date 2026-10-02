@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""WT32-ETH01 WInject bandwidth test.
+"""WT32-ETH01 WInject bandwidth test through two running winject-managers.
 
-Paths (pick one):
-  --udp     winject-manager UDP (manager stamps MPDUs; scripts/manager_bw_test.sh)
-  --direct  host stamps MPDUs and injects to radios (scripts/stand_alone_test.py)
-
-Sets CCA / channel / modulation over the UDP console unless --skip-config.
+Sends UDP datagrams into the managers' forwarding ports (scripts/manager_bw_test.sh
+starts the managers). Reads and changes the radio PHY only through the managers'
+m-plane (`radio_info`, `radio_tx`); never talks to a radio directly.
 Peer air RX tests: use OFDM_24M on both radios (not HT MCS); see docs/winject.md.
 """
 
@@ -23,13 +21,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import mpdu
+from radio_stats import MGR_A, MGR_B, mgr_request, save_snapshot, snapshot_managers
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
-CONSOLE_PORT = 22
-INJECT_PORT = 9000
 HOST_PORT_A = 9001  # B→A: radio A forward / manager A demux listen
 HOST_PORT_B = 9002  # A→B: radio B forward / manager B demux listen
 DEFAULT_DOMAIN = "1234"
@@ -39,13 +35,6 @@ CHANNEL_MIN = 1
 CHANNEL_MAX = 14  # matches firmware WIFI_CHANNEL_*; 14 is 802.11b-only
 TCP_SEND_A = 29000  # manager A TCP_SERVER (host sends A->B)
 TCP_SEND_B = 29001  # manager B TCP_SERVER (host sends B->A)
-# Manager gci: bind console_out, send gci to console_in (scripts/manager_bw_test.sh).
-MGR_GCI_A_BIND = ("127.0.0.1", 2401)
-MGR_GCI_A_DEST = ("127.0.0.1", 2400)
-MGR_GCI_B_BIND = ("127.0.0.1", 2411)
-MGR_GCI_B_DEST = ("127.0.0.1", 2410)
-# Manager ARQ can stop reading when the window fills and reverse ACKs starve;
-# without a send timeout, sendall blocks forever and phase() never returns.
 TCP_SEND_TIMEOUT_S = 3.0
 LOSS_WINDOW_S = 1.0
 MAX_PAYLOAD = 1476
@@ -174,114 +163,28 @@ class TestInterrupted(Exception):
         self.results = results
 
 
-def detect_host(peer: str) -> str:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+# Manager m-plane reply timeout; radio_tx includes the radio's settings save.
+MGR_CMD_TIMEOUT_S = 5.0
+
+
+def mgr_console(mgr: tuple, cmd: str, label: str, quiet: bool) -> str:
+    """One manager m-plane command (forwarded to the radio for radio_* commands)."""
     try:
-        sock.connect((peer, CONSOLE_PORT))
-        return sock.getsockname()[0]
-    finally:
-        sock.close()
+        text = mgr_request(*mgr, cmd, timeout=MGR_CMD_TIMEOUT_S)
+    except OSError as err:
+        text = f"NOK {err}\n"
+    if quiet:
+        status = "ok" if not text.startswith("NOK") else text.strip().splitlines()[-1]
+        print(f"[{label}] {cmd}  {status}")
+    else:
+        print(f"[{label}] {cmd}")
+        if text.strip():
+            print(text.rstrip())
+    return text
 
 
-# Per-command console retries (UDP loss / radio busy during PHY apply).
-CONSOLE_CMD_RETRIES = 3
-CONSOLE_CMD_TIMEOUT_S = 3.0
-
-
-def console(
-    ip: str,
-    cmds: list[str],
-    timeout: float = CONSOLE_CMD_TIMEOUT_S,
-    quiet: bool = False,
-) -> list[str]:
-    last_err: Exception | None = None
-    for attempt in range(3):
-        try:
-            return _console_once(ip, cmds, timeout, quiet)
-        except OSError as err:
-            last_err = err
-            time.sleep(1.0 + attempt)
-    raise last_err  # type: ignore[misc]
-
-
-def _drain_console(sock: socket.socket) -> None:
-    """Drop any queued datagrams so a retry does not consume a stale reply."""
-    sock.settimeout(0.0)
-    while True:
-        try:
-            sock.recvfrom(16384)
-        except BlockingIOError:
-            break
-        except OSError:
-            break
-
-
-def _recv_reply(sock: socket.socket, timeout: float, *, accept_pong: bool = False) -> bytes:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        sock.settimeout(max(0.05, deadline - time.monotonic()))
-        try:
-            chunk, _ = sock.recvfrom(16384)
-        except socket.timeout:
-            continue
-        if not chunk:
-            continue
-        if not chunk.endswith(b"\n"):
-            chunk += b"\n"
-        if chunk.strip() == b"pong":
-            if accept_pong:
-                return chunk
-            continue
-        return chunk
-    raise TimeoutError("console read timeout")
-
-
-def _console_once(ip: str, cmds: list[str], timeout: float, quiet: bool) -> list[str]:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    dest = (ip, CONSOLE_PORT)
-    replies: list[str] = []
-    try:
-        for cmd in cmds:
-            wire = (cmd + "\n").encode()
-            accept_pong = cmd.strip().split(None, 1)[0] == "ping"
-            buf = b"nok timeout\n"
-            for attempt in range(CONSOLE_CMD_RETRIES):
-                _drain_console(sock)
-                sock.sendto(wire, dest)
-                try:
-                    buf = _recv_reply(sock, timeout, accept_pong=accept_pong)
-                    break
-                except TimeoutError:
-                    if attempt + 1 < CONSOLE_CMD_RETRIES:
-                        if not quiet:
-                            print(
-                                f"[{ip}] {cmd}  timeout, "
-                                f"retry {attempt + 1}/{CONSOLE_CMD_RETRIES - 1}"
-                            )
-                        time.sleep(0.2 * (attempt + 1))
-                        continue
-                    buf = b"nok timeout\n"
-            text = buf.decode("utf-8", "replace")
-            # ping -> pong is success (not an ok/nok line).
-            if accept_pong and text.strip() == "pong":
-                text = "ok\n"
-            replies.append(text)
-            if not quiet:
-                print(f"[{ip}] {cmd}")
-                if text.strip():
-                    print(text.rstrip())
-            else:
-                status = (
-                    "ok" if "nok " not in text else text.strip().splitlines()[-1]
-                )
-                print(f"[{ip}] {cmd}  {status}")
-    finally:
-        sock.close()
-    return replies
-
-
-def replies_ok(replies: list[str]) -> bool:
-    return all("nok " not in text for text in replies)
+def reply_ok(text: str) -> bool:
+    return not text.startswith("NOK")
 
 
 def fmt_bus(bus: str) -> str:
@@ -317,72 +220,6 @@ def fmt_domain(value: int | str) -> str:
     return f"{n:04x}"
 
 
-def upstream_bind_cmds(
-    host: str,
-    inject_port: int,
-    host_port: int,
-    bus_tx: str,
-    bus_rx: str,
-) -> list[str]:
-    # bus_tx / bus_rx are stamped by the manager; the radio only has a
-    # single inject/forward pair.
-    del bus_tx, bus_rx
-    return [
-        "unset_upstream_tx",
-        "unset_upstream_rx",
-        f"set_upstream_tx port={inject_port}",
-        f"set_upstream_rx host={host} port={host_port}",
-    ]
-
-
-def upstream_config_cmds(
-    host: str,
-    inject_port: int,
-    host_port: int,
-    bus_tx: str,
-    bus_rx: str,
-    domain: str,
-    extra_cmds: list[str] | None = None,
-) -> list[str]:
-    # Radio RX filters Addr3 by local mode prefix; must match host/manager stamp.
-    cmds: list[str] = [
-        "set_mode STANDALONE",
-        f"set_domain {domain}",
-    ]
-    cmds.extend(upstream_bind_cmds(host, inject_port, host_port, bus_tx, bus_rx))
-    if extra_cmds:
-        cmds.extend(extra_cmds)
-    return cmds
-
-
-def configure_upstream(
-    ip: str,
-    host: str,
-    *,
-    inject_port: int,
-    host_port: int,
-    bus_tx: str,
-    bus_rx: str,
-    domain: str,
-    quiet: bool,
-    extra_cmds: list[str] | None = None,
-) -> bool:
-    replies = console(
-        ip,
-        upstream_config_cmds(
-            host,
-            inject_port,
-            host_port,
-            bus_tx,
-            bus_rx,
-            domain,
-            extra_cmds=extra_cmds,
-        ),
-        quiet=quiet,
-    )
-    return replies_ok(replies)
-
-
 def parse_status_field(text: str, key: str) -> str | None:
     prefix = f"{key}="
     for line in text.splitlines():
@@ -407,65 +244,33 @@ def parse_status_modulation(text: str) -> str | None:
     return raw.upper() if raw else None
 
 
-def parse_status_domain(text: str) -> str | None:
-    raw = parse_status_field(text, "domain")
-    if raw:
-        return None if raw.lower() == "unset" else raw.upper()
-    for line in text.splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[0].lower() == "domain":
-            return None if parts[1].lower() == "unset" else parts[1].upper()
-    return None
-
-
-def parse_status_mode(text: str) -> str | None:
-    for line in text.splitlines():
-        if not (line.startswith("device ") or line.startswith("status ")):
-            continue
-        for part in line.split():
-            if part.lower().startswith("mode="):
-                return part.split("=", 1)[1].upper() or None
-        return None
-    for part in text.split():
-        if part.lower().startswith("mode="):
-            return part.split("=", 1)[1].upper() or None
-    return None
-
-
-def log_status(ip: str, label: str) -> str:
-    print(f"\n=== status {label} {ip} ===")
-    try:
-        return console(ip, ["status"], quiet=False)[0]
-    except OSError as err:
-        print(f"status failed: {err}")
-        return ""
+def log_radio_info(mgr: tuple, label: str) -> str:
+    """Radio PHY via the manager (`radio_info`); "" when unavailable."""
+    print(f"\n=== radio {label} (manager {mgr[1][0]}:{mgr[1][1]}) ===")
+    text = mgr_console(mgr, "radio_info", label, quiet=False)
+    return "" if text.startswith("NOK") else text
 
 
 def configure_radio(
-    ip: str,
+    mgr: tuple,
+    label: str,
     channel: int | None,
     modulation: str | None,
     cca: bool | None,
     quiet: bool,
 ) -> bool:
-    # Channel 14 is 802.11b-only: apply DSSS/CCK before switching to 14,
-    # and leave 14 before applying OFDM (matches firmware settings::apply_snapshot).
-    # STANDALONE matches manager Addr3 stamp (winject-l3).
-    # Channel / modulation / CCA are only sent when the caller asked for them.
-    cmds: list[str] = ["set_mode STANDALONE"]
-    if channel == 14:
-        if modulation is not None:
-            cmds.append(f"set_modulation {modulation}")
-        cmds.append(f"set_channel {channel}")
-    else:
-        if channel is not None:
-            cmds.append(f"set_channel {channel}")
-        if modulation is not None:
-            cmds.append(f"set_modulation {modulation}")
+    """One manager `radio_tx` with only the given fields (the firmware orders
+    channel 14 vs. modulation changes itself)."""
+    parts: list[str] = []
+    if channel is not None:
+        parts.append(f"channel={channel}")
+    if modulation is not None:
+        parts.append(f"modulation={modulation}")
     if cca is not None:
-        cmds.append(f"set_cca_enabled {1 if cca else 0}")
-    replies = console(ip, cmds, quiet=quiet)
-    return replies_ok(replies)
+        parts.append(f"cca={1 if cca else 0}")
+    if not parts:
+        return True
+    return reply_ok(mgr_console(mgr, "radio_tx " + " ".join(parts), label, quiet))
 
 
 def make_payload(tag: bytes, seq: int, size: int) -> bytes:
@@ -507,13 +312,10 @@ def recv_delivered(stats: RecvStats) -> int:
 
 
 class Listener:
-    """UDP receiver. For standalone air path, payloads are full MPDUs; filter by bus."""
+    """UDP receiver for datagrams a manager delivers."""
 
-    def __init__(
-        self, bind_ip: str, port: int, bus_filter: int | None = None
-    ) -> None:
+    def __init__(self, bind_ip: str, port: int) -> None:
         self.stats = RecvStats()
-        self.bus_filter = bus_filter
         self._stop = threading.Event()
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -541,13 +343,7 @@ class Listener:
                 continue
             except OSError:
                 break
-            if self.bus_filter is None:
-                self._note(data)
-                continue
-            for bus, body in mpdu.unpack_mpdu(data):
-                if bus != self.bus_filter:
-                    continue
-                self._note(body)
+            self._note(data)
 
 
 def send_exact(
@@ -556,18 +352,11 @@ def send_exact(
     count: int,
     size: int,
     gap: float,
-    *,
-    bus: int | None = None,
-    domain: int | None = None,
 ) -> int:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         for seq in range(count):
             payload = make_payload(tag, seq, size)
-            if bus is not None and domain is not None:
-                payload = mpdu.build_mpdu(
-                    payload, bus, domain, mode="STANDALONE"
-                )
             sock.sendto(payload, dest)
             if gap > 0:
                 time.sleep(gap)
@@ -585,9 +374,6 @@ def send_window(
     start: float,
     progress: list[int] | None = None,
     stop: threading.Event | None = None,
-    *,
-    bus: int | None = None,
-    domain: int | None = None,
 ) -> int:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sent = 0
@@ -601,10 +387,6 @@ def send_window(
                 time.sleep(min(0.001, next_t - now))
                 continue
             payload = make_payload(tag, seq, size)
-            if bus is not None and domain is not None:
-                payload = mpdu.build_mpdu(
-                    payload, bus, domain, mode="STANDALONE"
-                )
             sock.sendto(payload, dest)
             sent += 1
             if progress is not None:
@@ -879,15 +661,10 @@ def parse_modulations(text: str) -> list[str]:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="WT32-ETH01 WInject bandwidth test (--udp/--tcp managers, --direct radios)"
+        description="WT32-ETH01 WInject bandwidth test through two winject-managers"
     )
-    p.add_argument("--a", default="192.168.253.11", help="radio A Ethernet IP")
-    p.add_argument("--b", default="192.168.253.12", help="radio B Ethernet IP")
-    p.add_argument(
-        "--host",
-        default="",
-        help="host IP used when probing radio status (default: auto)",
-    )
+    p.add_argument("--a", default="192.168.253.11", help="radio A IP (label only)")
+    p.add_argument("--b", default="192.168.253.12", help="radio B IP (label only)")
     p.add_argument(
         "--domain",
         default=DEFAULT_DOMAIN,
@@ -907,7 +684,7 @@ def parse_args() -> argparse.Namespace:
         "--channel",
         type=int,
         default=None,
-        help=f"set_channel on both radios ({CHANNEL_MIN}-{CHANNEL_MAX}; "
+        help=f"radio channel via the managers ({CHANNEL_MIN}-{CHANNEL_MAX}; "
         "14 is 802.11b-only); omit to keep existing",
     )
     p.add_argument(
@@ -942,24 +719,17 @@ def parse_args() -> argparse.Namespace:
         "--cca",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="set_cca_enabled on both radios; omit to keep existing",
-    )
-    p.add_argument("--skip-config", action="store_true", help="do not touch the UDP console")
-    mode = p.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--udp",
-        action="store_true",
-        help="winject-manager UDP ports (datagrams; manager stamps MPDUs)",
-    )
-    mode.add_argument(
-        "--direct",
-        action="store_true",
-        help="stamp MPDUs on host and inject to radios (no manager)",
+        help="radio CCA via the managers; omit to keep existing",
     )
     p.add_argument(
-        "--skip-upstream",
+        "--skip-config",
         action="store_true",
-        help="--direct only: do not rebind sut/sur",
+        help="do not change the radio PHY (no manager radio_tx)",
+    )
+    p.add_argument(
+        "--udp",
+        action="store_true",
+        help="accepted for compatibility; manager UDP is the only path",
     )
     p.add_argument(
         "--tcp-send-a",
@@ -993,11 +763,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="run simultaneous A+B bandwidth phase",
     )
-    p.add_argument("--verbose", action="store_true", help="print full console replies")
+    p.add_argument("--verbose", action="store_true", help="print full manager replies")
     p.add_argument(
         "--drop-stages",
         action="store_true",
-        help="print per-stage drop counts after each unidirectional phase (manager gci + radio tx_info/rx_info)",
+        help="print per-stage drop counts after each unidirectional phase "
+        "(manager lut/lur/get_metrics + radio_stats)",
     )
     return p.parse_args()
 
@@ -1061,10 +832,7 @@ def main() -> int:
         args.test_integ = True
         args.test_ab = True
         args.test_ba = True
-    if not (args.udp or args.direct):
-        raise SystemExit("pick a path: --udp or --direct (see scripts/manager_bw_test.sh)")
     skip_phy = args.skip_config
-    skip_upstream = (not args.direct) or args.skip_upstream or args.skip_config
     if args.size < 16 or args.size > MAX_PAYLOAD:
         raise SystemExit(f"--size must be 16..{MAX_PAYLOAD}")
     if args.channel is not None and not channel_ok(args.channel):
@@ -1085,7 +853,6 @@ def main() -> int:
     else:
         mods = []
 
-    host = args.host or detect_host(args.a)
     quiet = not args.verbose
     if args.cca is None:
         cca_label = "unchanged"
@@ -1096,11 +863,10 @@ def main() -> int:
     bus_ba = fmt_bus(args.bus_ba)
     if bus_ab == bus_ba:
         raise SystemExit("--bus-ab and --bus-ba must differ")
-    print(f"host {host}")
     print(f"domain {domain}  bus A→B {bus_ab}  bus B→A {bus_ba}")
 
-    status_a = log_status(args.a, "A")
-    status_b = log_status(args.b, "B")
+    status_a = log_radio_info(MGR_A, "A")
+    status_b = log_radio_info(MGR_B, "B")
     display_channel: int | None = args.channel
     if args.channel is None:
         ch_a = parse_status_channel(status_a)
@@ -1124,19 +890,6 @@ def main() -> int:
             )
         mods = [current]
 
-    for label, text in (("A", status_a), ("B", status_b)):
-        mode = parse_status_mode(text)
-        if mode and mode != "STANDALONE":
-            print(f"warning: {label} mode is {mode} (want STANDALONE Addr3)")
-    dom_a = parse_status_domain(status_a)
-    dom_b = parse_status_domain(status_b)
-    if not dom_a or dom_a == "UNSET" or not dom_b or dom_b == "UNSET":
-        print("warning: domain unset on one or both radios")
-    elif dom_a != dom_b:
-        print(f"warning: A domain {dom_a}, B domain {dom_b}")
-    elif dom_a != domain.upper():
-        print(f"warning: radios domain {dom_a}, test --domain {domain}")
-
     channel_label = str(display_channel) if display_channel is not None else "existing"
     if args.channel is None:
         channel_label += " (unchanged)"
@@ -1147,83 +900,25 @@ def main() -> int:
         f"payload {args.size} B  duration {args.duration}s  drain "
         f"{'off' if args.drain <= 0 else f'wait≤{args.drain:g}s then settle {args.drain:g}s'}"
     )
-    bus_ab_i = mpdu.parse_bus_int(bus_ab)
-    bus_ba_i = mpdu.parse_bus_int(bus_ba)
-    domain_i = mpdu.parse_domain_int(domain)
-
-    if args.udp:
-        print(
-            f"udp managers: send A->B {args.tcp_send_a}  send B->A {args.tcp_send_b}; "
-            f"listen B->A {HOST_PORT_A}  listen A->B {HOST_PORT_B}"
-        )
-        listen_a = Listener("127.0.0.1", HOST_PORT_A)
-        listen_b = Listener("127.0.0.1", HOST_PORT_B)
-        dest_a = ("127.0.0.1", args.tcp_send_a)
-        dest_b = ("127.0.0.1", args.tcp_send_b)
-    else:
-        print(
-            f"direct MPDU inject {INJECT_PORT}; forward host "
-            f"{HOST_PORT_A}/{HOST_PORT_B} (STANDALONE domain {domain})"
-        )
-        if not skip_upstream:
-            print("\n=== configure upstream ===")
-            if not configure_upstream(
-                args.a,
-                host,
-                inject_port=INJECT_PORT,
-                host_port=HOST_PORT_A,
-                bus_tx=bus_ab,
-                bus_rx=bus_ba,
-                domain=domain,
-                quiet=quiet,
-            ):
-                raise SystemExit("failed to configure upstream on A")
-            if not configure_upstream(
-                args.b,
-                host,
-                inject_port=INJECT_PORT,
-                host_port=HOST_PORT_B,
-                bus_tx=bus_ba,
-                bus_rx=bus_ab,
-                domain=domain,
-                quiet=quiet,
-            ):
-                raise SystemExit("failed to configure upstream on B")
-        listen_a = Listener(host, HOST_PORT_A, bus_filter=bus_ba_i)
-        listen_b = Listener(host, HOST_PORT_B, bus_filter=bus_ab_i)
-        dest_a = (args.a, INJECT_PORT)
-        dest_b = (args.b, INJECT_PORT)
+    print(
+        f"udp managers: send A->B {args.tcp_send_a}  send B->A {args.tcp_send_b}; "
+        f"listen B->A {HOST_PORT_A}  listen A->B {HOST_PORT_B}"
+    )
+    listen_a = Listener("127.0.0.1", HOST_PORT_A)
+    listen_b = Listener("127.0.0.1", HOST_PORT_B)
+    dest_a = ("127.0.0.1", args.tcp_send_a)
+    dest_b = ("127.0.0.1", args.tcp_send_b)
 
     listen_a.start()
     listen_b.start()
     time.sleep(0.2)
 
-    def bus_for(dest: tuple[str, int]) -> int:
-        return bus_ab_i if dest == dest_a else bus_ba_i
-
     def send_exact_fn(dest, tag, count, size, gap):
-        if args.direct:
-            return send_exact(
-                dest, tag, count, size, gap, bus=bus_for(dest), domain=domain_i
-            )
         return send_exact(dest, tag, count, size, gap)
 
     stop = threading.Event()
 
     def send_window_fn(dest, tag, size, duration, kbps, start, progress=None):
-        if args.direct:
-            return send_window(
-                dest,
-                tag,
-                size,
-                duration,
-                kbps,
-                start,
-                progress,
-                stop,
-                bus=bus_for(dest),
-                domain=domain_i,
-            )
         return send_window(dest, tag, size, duration, kbps, start, progress, stop)
 
     def reset() -> None:
@@ -1441,26 +1136,11 @@ def main() -> int:
             return "B->A"
         return f"{dest[0]}:{dest[1]}"
 
-    def drop_path_meta(
-        dest: tuple[str, int],
-    ) -> tuple[str, str, tuple[tuple[str, int], tuple[str, int]], tuple[tuple[str, int], tuple[str, int]], int, int]:
+    def drop_path_meta(dest: tuple[str, int]) -> tuple[tuple, tuple, int, int]:
+        """(sender manager, receiver manager, sender upstream, receiver upstream)."""
         if dest == dest_a:
-            return (
-                args.a,
-                args.b,
-                (MGR_GCI_A_BIND, MGR_GCI_A_DEST),
-                (MGR_GCI_B_BIND, MGR_GCI_B_DEST),
-                0,
-                0,
-            )
-        return (
-            args.b,
-            args.a,
-            (MGR_GCI_B_BIND, MGR_GCI_B_DEST),
-            (MGR_GCI_A_BIND, MGR_GCI_A_DEST),
-            1,
-            1,
-        )
+            return MGR_A, MGR_B, 0, 0
+        return MGR_B, MGR_A, 1, 1
 
     def report_drop_stages(
         snap_before: object,
@@ -1469,9 +1149,8 @@ def main() -> int:
     ) -> None:
         from drop_path_probe import capture_drop_path_snap, drop_path_delta, print_drop_path_stages
 
-        tx_r, rx_r, mtx_p, mrx_p, stx, srx = drop_path_meta(dest)
         try:
-            snap_after = capture_drop_path_snap(tx_r, rx_r, mtx_p, mrx_p, stx, srx)
+            snap_after = capture_drop_path_snap(*drop_path_meta(dest))
             dp = drop_path_delta(snap_before, snap_after, pr.sent, pr.recv)
             print_drop_path_stages(direction_label(dest), dp)
         except OSError as err:
@@ -1481,17 +1160,8 @@ def main() -> int:
         snap_dir = os.environ.get("WINJECT_RADIO_SNAP_DIR")
         if not snap_dir:
             return
-        from radio_stats import mgr_get_metrics, save_snapshot, snapshot_pair
-
-        try:
-            mgr_a = mgr_get_metrics(MGR_GCI_A_BIND, MGR_GCI_A_DEST)
-            mgr_b = mgr_get_metrics(MGR_GCI_B_BIND, MGR_GCI_B_DEST)
-        except OSError as err:
-            print(f"warning: get_metrics for radio snap failed: {err}")
-            mgr_a = {}
-            mgr_b = {}
         path = Path(snap_dir) / f"radio_{tag}.json"
-        save_snapshot(path, snapshot_pair(args.a, args.b, mgr_a, mgr_b))
+        save_snapshot(path, snapshot_managers())
 
     def take_phase(
         senders: list[tuple[tuple[str, int], bytes, Listener | TcpListener]],
@@ -1499,17 +1169,16 @@ def main() -> int:
     ) -> tuple[list[PhaseResult], bool]:
         drop_before = None
         drop_dest: tuple[str, int] | None = None
-        if args.drop_stages and not args.direct and len(senders) == 1:
+        if args.drop_stages and len(senders) == 1:
             from drop_path_probe import capture_drop_path_snap
 
             drop_dest = senders[0][0]
-            tx_r, rx_r, mtx_p, mrx_p, stx, srx = drop_path_meta(drop_dest)
             # Let wifi_tx / 802.11 completions drain after the prior leg.
             time.sleep(0.5)
             snap_tag = "ab" if drop_dest == dest_a else "ba"
             save_radio_snapshots(f"{snap_tag}_before")
             try:
-                drop_before = capture_drop_path_snap(tx_r, rx_r, mtx_p, mrx_p, stx, srx)
+                drop_before = capture_drop_path_snap(*drop_path_meta(drop_dest))
             except OSError as err:
                 print(f"warning: drop-stages snap start failed: {err}")
         try:
@@ -1525,18 +1194,6 @@ def main() -> int:
             report_drop_stages(drop_before, drop_dest, results[0])
             snap_tag = "ab" if drop_dest == dest_a else "ba"
             save_radio_snapshots(f"{snap_tag}_after")
-            snap_dir = os.environ.get("WINJECT_RADIO_SNAP_DIR")
-            if snap_dir:
-                from radio_stats import print_diff_run, load_snapshot
-
-                before_p = Path(snap_dir) / f"radio_{snap_tag}_before.json"
-                after_p = Path(snap_dir) / f"radio_{snap_tag}_after.json"
-                if before_p.is_file() and after_p.is_file():
-                    print_diff_run(
-                        load_snapshot(before_p),
-                        load_snapshot(after_p),
-                        snap_tag,
-                    )
         return results, False
 
     def print_snap(
@@ -1571,8 +1228,8 @@ def main() -> int:
             if not skip_phy:
                 set_mod = mod if apply_modulation else None
                 try:
-                    ok_a = configure_radio(args.a, args.channel, set_mod, args.cca, quiet)
-                    ok_b = configure_radio(args.b, args.channel, set_mod, args.cca, quiet)
+                    ok_a = configure_radio(MGR_A, "A", args.channel, set_mod, args.cca, quiet)
+                    ok_b = configure_radio(MGR_B, "B", args.channel, set_mod, args.cca, quiet)
                 except OSError as err:
                     result.config_ok = False
                     result.note = "CONFIG"

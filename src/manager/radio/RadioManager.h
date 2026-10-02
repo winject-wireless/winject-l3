@@ -61,7 +61,10 @@ private:
     ManagerRadioView actual_{};
     int info_ticks_ = 0;
     int heartbeat_ticks_ = 0;
+    int register_ticks_ = 0;
     bool ping_outstanding_ = false;
+    // Forward-peer re-registration (~1 s); every tick floods the radio.
+    static constexpr int k_register_interval_ticks = 4000;
     static constexpr int k_ping_interval_ticks = 1000;
     static constexpr int k_pong_timeout_ticks = 2000;
 };

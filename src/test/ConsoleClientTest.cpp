@@ -281,3 +281,159 @@ TEST(ConsoleClientTest, ApplyRadioEnosysStillPrograms)
     EXPECT_TRUE(done);
     close(srv);
 }
+
+TEST(ConsoleClientTest, ApplyRadioSendsCcaWhenConfigured)
+{
+    uint16_t port = 0;
+    const int srv = open_udp_server(&port);
+    ASSERT_GE(srv, 0);
+
+    Config cfg;
+    cfg.device = "127.0.0.1";
+    cfg.console_port = port;
+    cfg.channel = 1;
+    cfg.power_dbm = 20;
+    cfg.modulation = "OFDM_24M";
+    cfg.domain = 0x1234;
+    cfg.cca = false;
+    cfg.cca_explicit = true;
+
+    ConsoleClient client;
+    std::string err;
+    ASSERT_TRUE(client.start_connect(cfg, &err));
+    ASSERT_TRUE(client.finish_connect(&err));
+
+    client.apply_radio(cfg, 0, [](MplaneResult) {});
+
+    uint8_t id = 0;
+    std::string line;
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "radio_caps_info");
+    client.on_line("OK:" + std::to_string(id) + " radio_caps_info fcs=SIGNAL");
+
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "radio_tx channel=1 tx_power=20 modulation=OFDM_24M cca=0");
+    client.close();
+    close(srv);
+}
+
+TEST(ConsoleClientTest, QueryRadioCountersJoinsTxAndRx)
+{
+    uint16_t port = 0;
+    const int srv = open_udp_server(&port);
+    ASSERT_GE(srv, 0);
+
+    Config cfg;
+    cfg.device = "127.0.0.1";
+    cfg.console_port = port;
+
+    ConsoleClient client;
+    std::string err;
+    ASSERT_TRUE(client.start_connect(cfg, &err));
+    ASSERT_TRUE(client.finish_connect(&err));
+
+    bool done = false;
+    MplaneResult result;
+    client.query_radio_counters(
+        [&](MplaneResult r)
+        {
+            result = std::move(r);
+            done = true;
+        });
+
+    uint8_t id = 0;
+    std::string line;
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "tx_info");
+    client.on_line("OK:" + std::to_string(id) +
+                   " tx_info ether_pkt=10 air_pkt=9 ts=1");
+    EXPECT_FALSE(done);
+
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "rx_info");
+    client.on_line("OK:" + std::to_string(id) +
+                   " rx_info ether_pkt=8 air_pkt=9 ts=2");
+
+    ASSERT_TRUE(done);
+    EXPECT_TRUE(result.ok);
+    ASSERT_EQ(result.body_lines.size(), 2u);
+    EXPECT_EQ(result.body_lines[0], "tx_info ether_pkt=10 air_pkt=9 ts=1");
+    EXPECT_EQ(result.body_lines[1], "rx_info ether_pkt=8 air_pkt=9 ts=2");
+    close(srv);
+}
+
+TEST(ConsoleClientTest, QueryRadioCountersStopsOnTxError)
+{
+    uint16_t port = 0;
+    const int srv = open_udp_server(&port);
+    ASSERT_GE(srv, 0);
+
+    Config cfg;
+    cfg.device = "127.0.0.1";
+    cfg.console_port = port;
+
+    ConsoleClient client;
+    std::string err;
+    ASSERT_TRUE(client.start_connect(cfg, &err));
+    ASSERT_TRUE(client.finish_connect(&err));
+
+    bool done = false;
+    MplaneResult result;
+    client.query_radio_counters(
+        [&](MplaneResult r)
+        {
+            result = std::move(r);
+            done = true;
+        });
+
+    uint8_t id = 0;
+    std::string line;
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    client.on_line("NOK:" + std::to_string(id) + " ENOSYS");
+
+    ASSERT_TRUE(done);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("ENOSYS"), std::string::npos);
+    close(srv);
+}
+
+TEST(ConsoleClientTest, MultiLineReplyCompletesOnLastLine)
+{
+    uint16_t port = 0;
+    const int srv = open_udp_server(&port);
+    ASSERT_GE(srv, 0);
+
+    Config cfg;
+    cfg.device = "127.0.0.1";
+    cfg.console_port = port;
+
+    ConsoleClient client;
+    std::string err;
+    ASSERT_TRUE(client.start_connect(cfg, &err));
+    ASSERT_TRUE(client.finish_connect(&err));
+
+    bool done = false;
+    MplaneResult result;
+    client.query_radio_info(
+        [&](MplaneResult r)
+        {
+            result = std::move(r);
+            done = true;
+        });
+
+    uint8_t id = 0;
+    std::string line;
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "radio_tx_info");
+    const std::string sid = std::to_string(id);
+    client.on_lines({"OK:" + sid +
+                         " radio_tx channel=1 tx_power=20 "
+                         "modulation=OFDM_24M cca=false",
+                     "OK:" + sid + " radio_rx rssi=-30"});
+
+    ASSERT_TRUE(done);
+    EXPECT_TRUE(result.ok);
+    ASSERT_EQ(result.body_lines.size(), 2u);
+    EXPECT_EQ(result.body_lines[1], "radio_rx rssi=-30");
+    close(srv);
+}

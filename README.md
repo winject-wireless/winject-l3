@@ -16,7 +16,6 @@ docs/mplane.md         Manager config and m-plane (client console)
 docs/radio.md           Radio m-plane: commands the manager forwards vs radio-local ones
 docs/winject.md         802.11 MPDU layout, LC header, buses
 docs/radio-capa-support.md  radio_caps_info and FCS trailer modes (SIGNAL / ACTUAL)
-docs/more-metrics.md    Radio drop counters and how the bench scripts use them
 docs/no-traffic.md      Bench report: zero-traffic investigation and loss analysis
 docs/contributing.md    Code style, tests, and ./scripts/check_guidelines.sh
 ```
@@ -62,40 +61,27 @@ ctest --test-dir build_test_ci --output-on-failure
 
 ## Bandwidth test (two radios)
 
-`scripts/manager_iperf_bw_test.sh` starts one manager per radio (configs `configuration/winject-tests/bw_a.cfg` / `bw_b.cfg`), runs iperf2 UDP through them one direction at a time, and prints a radio drop-stage table per direction from the radio counters (see [docs/more-metrics.md](docs/more-metrics.md)).
+`scripts/manager_iperf_bw_test.sh` starts one manager per radio (configs `configuration/winject-tests/bw_a.cfg` / `bw_b.cfg`), runs iperf2 UDP through them one direction at a time, and prints a radio drop-stage table per direction from the radio counters (see `radio_stats` in [docs/mplane.md](docs/mplane.md)).
 
 Requirements:
 
 - iperf2 (`apt install iperf`; iperf3 is not supported).
-- A winject-radio-esp32 checkout, by default next to this repo.
 - Radio firmware with `radio_caps_info` and the `tx_info` / `rx_info` counters.
+
+The script never talks to the radios directly. Each manager programs its radio at startup (PHY, CCA, domain filter), and the drop-stage counters are read through the managers' `radio_stats` / `get_metrics` commands.
 
 Run it from an interactive terminal, in the winject-l3 checkout:
 
 ```bash
-RADIO_REPO=../winject-radio-esp32
-
-# 1. Build the current manager
-cmake --build build_manager_host -j"$(nproc)"
-
-# 2. Use that build: on aarch64 the script otherwise runs build_manager_arm/,
-#    and only rebuilds it when the binary is missing. The script imports
-#    mpdu.py / bw_test.py from the radio repo.
-export WINJECT_MANAGER=$PWD/build_manager_host/winject-manager
-export PYTHONPATH=$(realpath "$RADIO_REPO/tools")
-
-# 3. Prepare the radios with the radio repo's script (domain filter, PHY, CCA)
-python3 "$RADIO_REPO/scripts/prepare_radios_for_manager.py" \
-  --a 192.168.253.11 --b 192.168.253.12 \
-  --channel 1 --modulation OFDM_24M --power 20 --no-cca
-
-# 4. Run the test
 ./scripts/manager_iperf_bw_test.sh \
   --a 192.168.253.11 --b 192.168.253.12 --host 192.168.253.106 \
-  --dir both --time 15 --bitrate 20M --no-cca
+  --channel 1 --modulation OFDM_24M --power 20 --no-cca \
+  --dir both --time 15 --bitrate 20M
 ```
 
 `--a` / `--b` default to the bench radios shown (192.168.253.11 / .12), and `--host` is auto-detected when omitted.
+
+Each run first does an incremental build of the manager from this checkout (`build_manager_arm/` on aarch64, `build_manager_x86/` otherwise; override with `WINJECT_MANAGER_BUILD`), so it always tests the current source. To test a specific binary without rebuilding, set `WINJECT_MANAGER=/path/to/winject-manager`.
 
 Useful options:
 
@@ -105,14 +91,9 @@ Useful options:
 | `--dir ab` / `--dir ba` | One direction only (`both` runs A→B then B→A) |
 | `-t` / `--time SEC` | Duration per direction (default 10) |
 | `-- -l <bytes>` | iperf datagram size, passed after `--` (default 1400; the script rejects more than 1445) |
+| `--channel` / `--modulation` / `--power` / `--cca` / `--no-cca` | Radio PHY written into the managers' configs. Omitted: channel, modulation and power come from `bw_a.cfg` / `bw_b.cfg`, and CCA keeps the radio's setting |
 
 Output:
 
 - iperf results and, per direction, a radio drop-stage table with two residual checks. Both should print `OK`; a non-zero residual means a loss point is not counted.
-- A log directory, printed at start as `logs=/tmp/winject-iperf-<pid>`, containing the iperf client and server logs, both manager logs, and the radio counter snapshots `radio_<dir>_before.json` / `radio_<dir>_after.json`.
-
-Known issues:
-
-- **B→A result:** read it from `iperf_srv_ba.log` in the log directory. The "Server Report" the client prints for B→A can be garbage.
-- **Prepare noise:** the script still calls the legacy `scripts/prepare_radios_for_manager.py`, which prints `NOK ENOSYS` lines and `forward ... B=9220`. They are harmless once step 3 has run.
-- **`pkill` at startup:** the script runs `pkill -f "winject-manager.*winject"`, which also kills any parent shell whose command line matches. Don't wrap the exports and the script call in one `bash -c "..."` line. After an interrupted run, clean up with `killall winject-manager iperf`.
+- A log directory, printed at start as `logs=/tmp/winject-iperf-<pid>`, containing the iperf client and server logs, both manager logs, and the radio counter snapshots `radio_<dir>_before.json` / `radio_<dir>_after.json`. The client's "Server Report" should match the `Lost/Total` summary in `iperf_srv_<dir>.log`. If they differ, trust the server log.

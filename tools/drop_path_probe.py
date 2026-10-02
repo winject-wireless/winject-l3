@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Stage-by-stage drop attribution for winject A↔B (USB air + radio + manager).
 
-Snaps radio `tx_info` / `rx_info` and manager `gci` before/after each unidirectional phase,
-captures winject MPDUs on a USB monitor iface, and prints where counts diverge.
+Starts one manager per radio (they program the radios), snaps radio counters
+(`radio_stats`) and manager counters (`lut` / `lur` / `get_metrics`) through the
+managers before/after each unidirectional phase, captures winject MPDUs on a USB
+monitor iface, and prints where counts diverge. Never talks to a radio directly.
 
     sudo ...  # monitor iface must already be in monitor mode on the radio channel
-    python3 tools/drop_path_probe.py --a 192.168.253.9 --b 192.168.253.14 \\
+    python3 tools/drop_path_probe.py --a 192.168.253.11 --b 192.168.253.12 \\
         --mon wlx3c789537952a --kbps 10000 --duration 5
 """
 
@@ -31,17 +33,6 @@ sys.path.insert(0, str(ROOT / "tools"))
 ADDR3 = bytes([0xCA, 0xFE, 0xBA, 0xBE, 0x12, 0x34])
 
 
-def cons(ip: str, cmd: str, port: int = 22, timeout: float = 3.0) -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(timeout)
-    try:
-        s.sendto(cmd.encode(), (ip, port))
-        d, _ = s.recvfrom(65535)
-        return d.decode(errors="replace")
-    finally:
-        s.close()
-
-
 def grab(text: str, key: str) -> str | None:
     m = re.search(rf"(?:^|\s){re.escape(key)}=([^\s]+)", text, re.M)
     return m.group(1) if m else None
@@ -55,54 +46,36 @@ def grab_int(text: str, key: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-from radio_stats import (
+from radio_stats import (  # noqa: E402
+    MGR_A,
+    MGR_B,
+    Endpoint,
     delta as radio_delta,
     firmware_has_metrics,
     format_stages,
     mgr_delta,
-    read as radio_read,
+    mgr_get_metrics,
+    mgr_request,
+    read_via_manager,
     residual_checks,
     stages as radio_stages,
 )
 
-
-def mgr_gci(bind: tuple[str, int], dest: tuple[str, int], timeout: float = 2.0) -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(timeout)
-    try:
-        s.bind(bind)
-        s.sendto(b"gci", dest)
-        d, _ = s.recvfrom(65535)
-        return d.decode(errors="replace")
-    finally:
-        s.close()
+Manager = tuple[Endpoint, Endpoint]
 
 
-def parse_gci_stream(text: str, index: int) -> dict[str, int]:
-    out = {
-        "tx_pkt": 0,
-        "rx_pkt": 0,
-        "air_tx_pkt": 0,
-        "drop_txq": 0,
-        "rx_pkt_loss": 0,
-    }
-    for line in text.splitlines():
-        if not line.startswith(f"stream-{index} "):
-            continue
-        for k in out:
-            v = grab(line, k)
-            if v is not None:
-                out[k] = int(v)
-        break
-    # radio aggregate line
-    for line in text.splitlines():
-        if line.startswith("stream ") and "tx_pkt=" in line:
-            out["radio_tx_pkt"] = grab_int(line, "tx_pkt")
-            out["radio_rx_pkt"] = grab_int(line, "rx_pkt")
-            break
-    else:
-        out["radio_tx_pkt"] = 0
-        out["radio_rx_pkt"] = 0
+def mgr_upstream_stream(mgr: Manager, upstream_id: int) -> dict[str, int]:
+    """App-side counters of one manager upstream (`lut` / `lur`)."""
+    tx = mgr_request(*mgr, f"lut ids={upstream_id}")
+    rx = mgr_request(*mgr, f"lur ids={upstream_id}")
+    out = {"tx_pkt": 0, "rx_pkt": 0, "rx_pkt_loss": 0}
+    for line in tx.splitlines():
+        if line.startswith("upstream_tx_stat "):
+            out["tx_pkt"] = grab_int(line, "txpkt")
+    for line in rx.splitlines():
+        if line.startswith("upstream_rx_stat "):
+            out["rx_pkt"] = grab_int(line, "rxpkt")
+            out["rx_pkt_loss"] = grab_int(line, "rxgap")
     return out
 
 
@@ -167,36 +140,20 @@ class DropPathDelta:
     mgr_radio_rx_pkt: int = 0
 
 
-def gci_radio_agg(gci: str) -> tuple[int, int]:
-    for line in gci.splitlines():
-        if line.startswith("stream ") and "tx_pkt=" in line:
-            return grab_int(line, "tx_pkt"), grab_int(line, "rx_pkt")
-    return 0, 0
-
-
 def capture_drop_path_snap(
-    tx_radio: str,
-    rx_radio: str,
-    mgr_tx_ports: tuple[tuple[str, int], tuple[str, int]],
-    mgr_rx_ports: tuple[tuple[str, int], tuple[str, int]],
-    mgr_tx_stream: int,
-    mgr_rx_stream: int,
+    mgr_tx: Manager,
+    mgr_rx: Manager,
+    tx_upstream: int,
+    rx_upstream: int,
 ) -> DropPathSnap:
-    ra = radio_read(tx_radio)
-    rb = radio_read(rx_radio)
-    gci_tx = mgr_gci(*mgr_tx_ports)
-    gci_rx = mgr_gci(*mgr_rx_ports)
-    st_tx = parse_gci_stream(gci_tx, mgr_tx_stream)
-    st_rx = parse_gci_stream(gci_rx, mgr_rx_stream)
-    mtx_tx, _ = gci_radio_agg(gci_tx)
-    _, mrx_rx = gci_radio_agg(gci_rx)
+    """Sender/receiver radio and manager counters, all through the managers."""
     return DropPathSnap(
-        radio_tx=ra,
-        radio_rx=rb,
-        mgr_tx_stream=st_tx,
-        mgr_rx_stream=st_rx,
-        mgr_radio_tx_pkt=mtx_tx,
-        mgr_radio_rx_pkt=mrx_rx,
+        radio_tx=read_via_manager(*mgr_tx),
+        radio_rx=read_via_manager(*mgr_rx),
+        mgr_tx_stream=mgr_upstream_stream(mgr_tx, tx_upstream),
+        mgr_rx_stream=mgr_upstream_stream(mgr_rx, rx_upstream),
+        mgr_radio_tx_pkt=mgr_get_metrics(*mgr_tx).get("radio_tx_pkt", 0),
+        mgr_radio_rx_pkt=mgr_get_metrics(*mgr_rx).get("radio_rx_pkt", 0),
     )
 
 
@@ -207,7 +164,7 @@ def drop_path_delta(
     host_recv: int,
     air: int = 0,
 ) -> DropPathDelta:
-    mgr_keys = ("tx_pkt", "air_tx_pkt", "drop_txq", "rx_pkt", "rx_pkt_loss")
+    mgr_keys = ("tx_pkt", "rx_pkt", "rx_pkt_loss")
     mgr_tx_before = {
         "radio_tx_pkt": before.mgr_radio_tx_pkt,
         "radio_rx_pkt": 0,
@@ -249,7 +206,7 @@ def print_drop_path_stages(label: str, pr: DropPathDelta) -> None:
     if tx_d.get("rebooted") or rx_d.get("rebooted"):
         print(f"\nwarning: {label} radio reboot during phase; stage table skipped")
         return
-    if not firmware_has_metrics({"tx": tx_d.get("tx", {}), "rx": {}}):
+    if not firmware_has_metrics({"tx": tx_d.get("tx", {}), "rx": rx_d.get("rx", {})}):
         print(
             "\nradio drop counters unavailable (older firmware); "
             "host/mgr summary only"
@@ -260,7 +217,7 @@ def print_drop_path_stages(label: str, pr: DropPathDelta) -> None:
         rows = radio_stages(tx_d, rx_d, mgr_s, mgr_r)
         extras = [
             "",
-            "-- host / manager (gci stream) --",
+            "-- host / manager upstream (lut / lur) --",
             f"  host→mgr_app          {pr.host_sent:7d} → {pr.mgr_tx['tx_pkt']:7d}   "
             f"drop {pr.host_sent - pr.mgr_tx['tx_pkt']:7d}",
             f"  mgr_udp→host          {pr.mgr_rx['rx_pkt']:7d} → {pr.host_recv:7d}   "
@@ -344,8 +301,8 @@ def pace_send(dest: tuple[str, int], payload: bytes, kbps: float, duration: floa
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--a", default="192.168.253.9")
-    p.add_argument("--b", default="192.168.253.14")
+    p.add_argument("--a", default="192.168.253.11")
+    p.add_argument("--b", default="192.168.253.12")
     p.add_argument("--host", default="192.168.253.106")
     p.add_argument("--mon", default="wlx3c789537952a")
     p.add_argument("--kbps", type=float, default=10000)
@@ -373,22 +330,14 @@ def main() -> int:
     ):
         subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # PHY + upstreams
-    for ip in (args.a, args.b):
-        for c in (
-            "set_mode STANDALONE",
-            "set_domain 1234",
-            f"set_channel {args.channel}",
-            "set_modulation OFDM_24M",
-            "set_tx_power 20",
-            "set_cca_enabled 0",
-        ):
-            cons(ip, c)
     log_dir = Path(tempfile.mkdtemp(prefix="drop_path_"))
     print(f"logs {log_dir}")
 
-    def write_conf(path: Path, device: str, fwd: int, cons_in: int, cons_out: int) -> None:
-        if device.endswith(".9"):
+    # The managers program the radios (PHY, CCA, domain filter) at connect.
+    def write_conf(
+        path: Path, role: str, device: str, fwd: int, cons_in: int, cons_out: int
+    ) -> None:
+        if role == "a":
             body = f"""
 winject.device        = {device}
 winject.local_ip      = {args.host}
@@ -399,7 +348,8 @@ winject.power         = 20
 winject.domain        = 1234
 winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
-winject.skip_console  = 1
+winject.skip_console  = 0
+winject.cca           = 0
 winject.forward_base  = {fwd}
 manager.console_in    = 127.0.0.1:{cons_in}
 manager.console_out   = 127.0.0.1:{cons_out}
@@ -426,7 +376,8 @@ winject.power         = 20
 winject.domain        = 1234
 winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
-winject.skip_console  = 1
+winject.skip_console  = 0
+winject.cca           = 0
 winject.forward_base  = {fwd}
 manager.console_in    = 127.0.0.1:{cons_in}
 manager.console_out   = 127.0.0.1:{cons_out}
@@ -446,9 +397,9 @@ upstream-1.bind_address     = 127.0.0.1:29001
 
     conf_a = log_dir / "a.conf"
     conf_b = log_dir / "b.conf"
-    # A gci: send to :2400, reply to :2401; B: :2410/:2411
-    write_conf(conf_a, args.a, 9210, 2400, 2401)
-    write_conf(conf_b, args.b, 9210, 2410, 2411)
+    # Console ports match radio_stats.MGR_A / MGR_B.
+    write_conf(conf_a, "a", args.a, 9210, 2400, 2401)
+    write_conf(conf_b, "b", args.b, 9210, 2410, 2411)
 
     procs: list[subprocess.Popen] = []
     for conf, logn in ((conf_a, "a.log"), (conf_b, "b.log")):
@@ -470,23 +421,6 @@ upstream-1.bind_address     = 127.0.0.1:29001
                 pr.send_signal(signal.SIGTERM)
             return 1
 
-    for radio_ip, log_name in ((args.a, "a.log"), (args.b, "b.log")):
-        subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "tools/configure_manager_ci.py"),
-                "--radio",
-                radio_ip,
-                "--host",
-                args.host,
-                "--log",
-                str(log_dir / log_name),
-                "--quiet",
-            ],
-            check=False,
-            cwd=str(ROOT),
-        )
-
     payload = bytes([0xCD]) * args.size
     results: list[PhaseResult] = []
 
@@ -495,12 +429,10 @@ upstream-1.bind_address     = 127.0.0.1:29001
         send_addr: tuple[str, int],
         listen_port: int,
         bus: int,
-        tx_radio: str,
-        rx_radio: str,
-        mgr_tx_ports: tuple[tuple[str, int], tuple[str, int]],
-        mgr_rx_ports: tuple[tuple[str, int], tuple[str, int]],
-        mgr_tx_stream: int,
-        mgr_rx_stream: int,
+        mgr_tx: Manager,
+        mgr_rx: Manager,
+        tx_upstream: int,
+        rx_upstream: int,
     ) -> None:
         pcap = log_dir / f"{label.replace('->', '_').replace('>', '')}.pcap"
         # start tcpdump (filter as one expression; recreate file as root)
@@ -522,14 +454,7 @@ upstream-1.bind_address     = 127.0.0.1:29001
         )
         time.sleep(0.5)
 
-        snap0 = capture_drop_path_snap(
-            tx_radio,
-            rx_radio,
-            mgr_tx_ports,
-            mgr_rx_ports,
-            mgr_tx_stream,
-            mgr_rx_stream,
-        )
+        snap0 = capture_drop_path_snap(mgr_tx, mgr_rx, tx_upstream, rx_upstream)
 
         lis = Listener(listen_port)
         time.sleep(0.1)
@@ -547,14 +472,7 @@ upstream-1.bind_address     = 127.0.0.1:29001
         except subprocess.TimeoutExpired:
             td.kill()
 
-        snap1 = capture_drop_path_snap(
-            tx_radio,
-            rx_radio,
-            mgr_tx_ports,
-            mgr_rx_ports,
-            mgr_tx_stream,
-            mgr_rx_stream,
-        )
+        snap1 = capture_drop_path_snap(mgr_tx, mgr_rx, tx_upstream, rx_upstream)
 
         # tcpdump may leave root-owned pcap; make readable
         subprocess.run(["sudo", "chmod", "a+r", str(pcap)], check=False)
@@ -583,7 +501,6 @@ upstream-1.bind_address     = 127.0.0.1:29001
         rrx = pr.radio_rx_delta.get("rx", {})
         print(f"host_sent          {pr.host_sent}")
         print(f"mgr_tx app_rx      {pr.mgr_tx['tx_pkt']}   (stream ingest)")
-        print(f"mgr_tx drop_txq    {pr.mgr_tx['drop_txq']}   (silent txq overflow)")
         print(f"mgr wifi_udp TX    {pr.mgr_radio_tx_pkt}   (MPDUs to radio)")
         print(f"radio ether_pkt Δ  {rtx.get('ether_pkt', 0)}")
         print(f"radio air_pkt Δ    {rtx.get('air_pkt', 0)}")
@@ -598,18 +515,18 @@ upstream-1.bind_address     = 127.0.0.1:29001
         print(f"peer drop_send     {rrx.get('dropped_send_failed', 0)}")
         print(f"peer ether_pkt Δ   {rrx.get('ether_pkt', 0)}")
         print(f"mgr wifi_udp RX    {pr.mgr_radio_rx_pkt}")
-        print(f"mgr_rx stream_rx   {pr.mgr_rx['rx_pkt']}")
-        print(f"mgr_rx seq_loss    {pr.mgr_rx['rx_pkt_loss']}")
+        print(f"mgr_rx upstream_rx {pr.mgr_rx['rx_pkt']}")
+        print(f"mgr_rx air_rx_gap  {pr.mgr_rx['rx_pkt_loss']}")
         print(f"host_recv          {pr.host_recv}")
         try:
-            rx_st = cons(rx_radio, "wifi_rx")
-            m = re.search(r"rssi=(-?\d+) snr=(-?\d+)", rx_st)
+            rx_st = mgr_request(*mgr_rx, "radio_info")
+            m = re.search(r"rssi=(-?\d+)", rx_st)
             if m:
-                print(f"peer rssi/snr      {m.group(1)} dBm / {m.group(2)} dB")
+                print(f"peer rssi          {m.group(1)} dBm")
             else:
-                print("peer rssi/snr      - (no winject RX yet)")
+                print("peer rssi          - (no winject RX yet)")
         except OSError:
-            print("peer rssi/snr      - (wifi_rx query failed)")
+            print("peer rssi          - (manager radio_info failed)")
         if td.stderr:
             err = td.stderr.read().decode(errors="replace").strip()
             if err and "listening" not in err.lower():
@@ -617,32 +534,10 @@ upstream-1.bind_address     = 127.0.0.1:29001
 
         print_drop_path_stages(label, dp)
 
-    # A→B: send 29000, listen 9002, bus b2, mgr A stream0, mgr B stream0
-    run_phase(
-        "A->B",
-        ("127.0.0.1", 29000),
-        9002,
-        0xB2,
-        args.a,
-        args.b,
-        (("127.0.0.1", 2401), ("127.0.0.1", 2400)),
-        (("127.0.0.1", 2411), ("127.0.0.1", 2410)),
-        0,
-        0,
-    )
-    # B→A: send 29001, listen 9001, bus d4, mgr B stream1, mgr A stream1
-    run_phase(
-        "B->A",
-        ("127.0.0.1", 29001),
-        9001,
-        0xD4,
-        args.b,
-        args.a,
-        (("127.0.0.1", 2411), ("127.0.0.1", 2410)),
-        (("127.0.0.1", 2401), ("127.0.0.1", 2400)),
-        1,
-        1,
-    )
+    # A→B: send 29000, listen 9002, bus b2, mgr A upstream 0, mgr B upstream 0
+    run_phase("A->B", ("127.0.0.1", 29000), 9002, 0xB2, MGR_A, MGR_B, 0, 0)
+    # B→A: send 29001, listen 9001, bus d4, mgr B upstream 1, mgr A upstream 1
+    run_phase("B->A", ("127.0.0.1", 29001), 9001, 0xD4, MGR_B, MGR_A, 1, 1)
 
     for pr in procs:
         pr.send_signal(signal.SIGTERM)

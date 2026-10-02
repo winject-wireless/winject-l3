@@ -52,6 +52,9 @@ public:
                  std::chrono::milliseconds timeout, DoneFn done);
 
     void on_line(const std::string& line);
+    // Lines from one datagram: a request completes on the last line carrying
+    // its id, so multi-line replies (radio_tx_info) arrive whole.
+    void on_lines(const std::vector<std::string>& lines);
     void poll_deadlines(std::chrono::steady_clock::time_point now);
     void cancel_pending();
 
@@ -61,6 +64,8 @@ public:
                      RadioCapsFn on_caps = {});
     void query_radio_caps(DoneFn done);
     void query_radio_info(DoneFn done);
+    // Radio tx_info then rx_info; body_lines holds both reply lines.
+    void query_radio_counters(DoneFn done);
     void send_radio_tx(const std::string& kv_args, DoneFn done);
     void send_radio_reset(uint8_t id, DoneFn done);
     void send_ping(DoneFn done);
@@ -82,6 +87,7 @@ private:
     };
 
     bool send_wire(const std::string& wire, std::string* error);
+    void handle_line(const std::string& line, bool last_for_id);
     void complete(uint8_t id, MplaneResult result);
     void chain_after(bool ok, const std::string& err, DoneFn next);
 

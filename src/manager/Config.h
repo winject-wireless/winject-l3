@@ -84,6 +84,9 @@ struct Config
     uint8_t channel = 1;
     std::string modulation = "DSS_1M_L";
     int8_t power_dbm = 20;
+    // Radio CCA, sent with the PHY when cca_explicit (winject.cca present).
+    bool cca = false;
+    bool cca_explicit = false;
     // Shared air domain (Addr3); 0 = unset / invalid.
     uint16_t domain = 0;
     // Radio config slot for save/load (0 = scratch pad until config slot=).

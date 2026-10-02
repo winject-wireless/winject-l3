@@ -93,6 +93,8 @@ struct ManagerRadioUpdate
     int tx_power = 0;
     bool have_modulation = false;
     std::string modulation;
+    bool have_cca = false;
+    bool cca = false;
 };
 
 struct ManagerMetricView
@@ -133,6 +135,7 @@ struct ManagerConsoleHandlers
         get_metrics;
     std::function<void(ManagerConsoleReply reply)> radio_info;
     std::function<void(ManagerConsoleReply reply)> radio_caps_info;
+    std::function<void(ManagerConsoleReply reply)> radio_stats;
     std::function<void(const ManagerRadioUpdate& patch,
                        ManagerConsoleReply reply)>
         radio_tx;

@@ -410,3 +410,56 @@ upstream-0.tx               = 127.0.0.1:21082
     EXPECT_NE(err.find("modulation"), std::string::npos);
     std::remove(path.c_str());
 }
+
+TEST(ConfigTest, CcaOptional)
+{
+    const std::string base = R"(
+winject.device        = 192.168.32.1
+winject.console       = 22
+winject.channel       = 1
+winject.modulation    = OFDM_24M
+winject.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)";
+    {
+        const std::string path = write_conf(base);
+        Config cfg;
+        std::string err;
+        ASSERT_TRUE(cfg.load(path, &err)) << err;
+        EXPECT_FALSE(cfg.cca_explicit);
+        std::remove(path.c_str());
+    }
+    {
+        const std::string path = write_conf(base + "winject.cca = 0\n");
+        Config cfg;
+        std::string err;
+        ASSERT_TRUE(cfg.load(path, &err)) << err;
+        EXPECT_TRUE(cfg.cca_explicit);
+        EXPECT_FALSE(cfg.cca);
+        std::remove(path.c_str());
+    }
+    {
+        const std::string path = write_conf(base + "winject.cca = true\n");
+        Config cfg;
+        std::string err;
+        ASSERT_TRUE(cfg.load(path, &err)) << err;
+        EXPECT_TRUE(cfg.cca_explicit);
+        EXPECT_TRUE(cfg.cca);
+        std::remove(path.c_str());
+    }
+    {
+        const std::string path = write_conf(base + "winject.cca = maybe\n");
+        Config cfg;
+        std::string err;
+        EXPECT_FALSE(cfg.load(path, &err));
+        EXPECT_NE(err.find("winject.cca"), std::string::npos);
+        std::remove(path.c_str());
+    }
+}

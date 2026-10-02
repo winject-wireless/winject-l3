@@ -149,11 +149,13 @@ void RadioManager::heartbeat_tick(bool console_ok)
     if (!console_ok || !ping_ || !drop_console_)
     {
         heartbeat_ticks_ = 0;
+        register_ticks_ = 0;
         ping_outstanding_ = false;
         return;
     }
-    if (wifi_ != nullptr)
+    if (wifi_ != nullptr && ++register_ticks_ >= k_register_interval_ticks)
     {
+        register_ticks_ = 0;
         wifi_->register_forward();
     }
     heartbeat_ticks_++;

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import socket
+import threading
 import unittest
 
 from radio_stats import (
@@ -10,9 +12,30 @@ from radio_stats import (
     firmware_has_metrics,
     mgr_delta,
     parse_kv_line,
+    read_via_manager,
     residual_checks,
     stages,
 )
+
+
+def fake_manager(reply: str) -> tuple[tuple[str, int], tuple[str, int], threading.Thread]:
+    """One-shot manager console: answers the first command on console_out."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    srv.bind(("127.0.0.1", 0))
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    probe.bind(("127.0.0.1", 0))
+    out = probe.getsockname()
+    probe.close()
+
+    def serve() -> None:
+        srv.settimeout(2.0)
+        cmd, _ = srv.recvfrom(512)
+        srv.sendto(reply.encode() if cmd == b"radio_stats" else b"NOK", out)
+        srv.close()
+
+    t = threading.Thread(target=serve)
+    t.start()
+    return out, srv.getsockname(), t
 
 
 class RadioStatsTest(unittest.TestCase):
@@ -82,6 +105,21 @@ class RadioStatsTest(unittest.TestCase):
             mgr_delta({"radio_tx_pkt": 10}, {"radio_tx_pkt": 15})["radio_tx_pkt"],
             5,
         )
+
+    def test_read_via_manager(self) -> None:
+        bind, dest, t = fake_manager(
+            "tx_info ether_pkt=10 air_pkt=9 ts=1\nrx_info ether_pkt=8 air_pkt=9 ts=2\n"
+        )
+        snap = read_via_manager(bind, dest)
+        t.join()
+        self.assertEqual(snap["tx"]["ether_pkt"], 10)
+        self.assertEqual(snap["rx"]["ether_pkt"], 8)
+
+    def test_read_via_manager_nok(self) -> None:
+        bind, dest, t = fake_manager("NOK NOT_FOUND\n")
+        with self.assertRaises(OSError):
+            read_via_manager(bind, dest)
+        t.join()
 
 
 if __name__ == "__main__":

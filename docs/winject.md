@@ -90,14 +90,14 @@ The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue 
 At startup, unless `winject.skip_console = 1`, the manager connects to the radio m-plane and:
 
 1. queries `radio_caps_info` to learn the FCS trailer mode (`NOK ENOSYS` from older firmware means `ACTUAL`);
-2. programs `radio_tx` (channel, power, modulation) and `rx_filter_addr3` (domain);
+2. programs `radio_tx` (channel, power, modulation, and CCA when `winject.cca` is set) and `rx_filter_addr3` (domain);
 3. stores it with `save <slot>`.
 
-While running, `RadioManager` periodically re-reads the PHY and filter and corrects them, pings the radio, and re-registers on radio:9210 so the radio keeps forwarding to this manager. The first registration happens when `WifiUdp` opens.
+While running, `RadioManager` periodically re-reads the PHY and filter and corrects them, pings the radio, and re-registers on radio:9210 about once a second so the radio keeps forwarding to this manager. The first registration happens when `WifiUdp` opens.
 
 With `skip_console = 1`, the manager never talks to the radio m-plane: the radio must be prepared beforehand, and `winject.radio_fcs` must be set explicitly (`signal` or `actual`).
 
-The manager m-plane also forwards some radio commands for operators (`radio_info`, `radio_tx`, `reset`, `radio_caps_info`); see [mplane.md](mplane.md).
+The manager m-plane also forwards radio commands for operators and bench tools (`radio_info`, `radio_tx`, `radio_stats`, `reset`, `radio_caps_info`); see [mplane.md](mplane.md). The bench scripts and tools reach the radios only through these.
 
 ## Radio (ESP32)
 

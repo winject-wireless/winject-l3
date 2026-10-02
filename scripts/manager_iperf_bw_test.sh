@@ -29,7 +29,12 @@ RADIO_A="192.168.253.11"
 RADIO_B="192.168.253.12"
 HOST_IP="192.168.253.106"
 HOST_SET=0
-PREP_EXTRA=()
+# Radio PHY written into the manager configs; empty = keep the config's value
+# (CCA: keep the radio's).
+CHANNEL=""
+MODULATION=""
+POWER=""
+CCA=""
 
 # Ports must match configuration/winject-tests/bw_{a,b}.cfg
 PORT_SEND_AB=29000   # manager A UDP_SERVER (client connects here for A→B)
@@ -56,8 +61,14 @@ Radio / host:
   --a IP            radio A Ethernet IP (default: $RADIO_A)
   --b IP            radio B Ethernet IP (default: $RADIO_B)
   --host IP         host IP radios send upstream_tx to (auto-detect if omitted)
-  --no-cca          disable CCA on both radios before the test
-  --cca             enable CCA (default)
+  --no-cca          disable CCA on both radios
+  --cca             enable CCA on both radios (default: keep the radio's)
+  --channel N       radio channel (default: from bw_{a,b}.cfg)
+  --modulation M    radio modulation, e.g. OFDM_24M (default: from bw_{a,b}.cfg)
+  --power DBM       radio TX power (default: from bw_{a,b}.cfg)
+
+The managers program the radios (PHY, CCA, domain filter) at startup; the
+script never talks to a radio directly.
 
 Test selection:
   --dir DIR         ab | ba | both | bidir  (default: both)
@@ -132,11 +143,35 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --no-cca)
-      PREP_EXTRA+=(--no-cca)
+      CCA=0
       shift
       ;;
     --cca)
-      PREP_EXTRA+=(--cca)
+      CCA=1
+      shift
+      ;;
+    --channel)
+      CHANNEL="${2:?--channel needs a number}"
+      shift 2
+      ;;
+    --channel=*)
+      CHANNEL="${1#--channel=}"
+      shift
+      ;;
+    --modulation)
+      MODULATION="${2:?--modulation needs a name}"
+      shift 2
+      ;;
+    --modulation=*)
+      MODULATION="${1#--modulation=}"
+      shift
+      ;;
+    --power)
+      POWER="${2:?--power needs dBm}"
+      shift 2
+      ;;
+    --power=*)
+      POWER="${1#--power=}"
       shift
       ;;
     --dir)
@@ -247,16 +282,25 @@ fi
 
 ensure_winject_manager "$ROOT"
 
-echo "configuring radios (radio d-plane: inject 9000, forward 9210)..."
-python3 "$ROOT/scripts/prepare_radios_for_manager.py" \
-  --a "$RADIO_A" --b "$RADIO_B" --host "$HOST_IP" --verbose \
-  "${PREP_EXTRA[@]+"${PREP_EXTRA[@]}"}" || exit 1
-
 patch_conf() {
   local file="$1" device="$2" gci_in="$3" gci_out="$4"
-  sed -e "s/^winject\.device.*/winject.device        = ${device}/" \
-      -e "s/^winject\.local_ip.*/winject.local_ip      = ${HOST_IP}/" \
-      "$file"
+  local -a sed_args=(
+    -e "s/^winject\.device.*/winject.device        = ${device}/"
+    -e "s/^winject\.local_ip.*/winject.local_ip      = ${HOST_IP}/"
+  )
+  if [[ -n "$CHANNEL" ]]; then
+    sed_args+=(-e "s/^winject\.channel.*/winject.channel       = ${CHANNEL}/")
+  fi
+  if [[ -n "$MODULATION" ]]; then
+    sed_args+=(-e "s/^winject\.modulation.*/winject.modulation    = ${MODULATION}/")
+  fi
+  if [[ -n "$POWER" ]]; then
+    sed_args+=(-e "s/^winject\.power.*/winject.power         = ${POWER}/")
+  fi
+  sed "${sed_args[@]}" "$file"
+  if [[ -n "$CCA" ]]; then
+    printf 'winject.cca           = %s\n' "$CCA"
+  fi
   printf 'manager.console_in    = 127.0.0.1:%s\n' "$gci_in"
   printf 'manager.console_out   = 127.0.0.1:%s\n' "$gci_out"
 }
@@ -268,8 +312,11 @@ patch_conf "$CONF_B" "$RADIO_B" 2410 2411 >"$CONF_B_RUN"
 
 radio_snapshot() {
   local tag="$1"
-  python3 "$ROOT/tools/radio_stats.py" --a "$RADIO_A" --b "$RADIO_B" \
-    --save "$LOG_DIR/radio_${tag}.json" 2>/dev/null || true
+  # Through the managers' m-plane (console ports set in patch_conf).
+  python3 "$ROOT/tools/radio_stats.py" \
+    --mgr-a-bind 127.0.0.1:2401 --mgr-a-dest 127.0.0.1:2400 \
+    --mgr-b-bind 127.0.0.1:2411 --mgr-b-dest 127.0.0.1:2410 \
+    --save "$LOG_DIR/radio_${tag}.json" || true
 }
 
 radio_diff() {
@@ -300,7 +347,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-pkill -f "winject-manager.*winject" 2>/dev/null || true
+# Match the process name only: -f would also match shells whose command line
+# mentions winject-manager (and kill the caller).
+pkill -x winject-manager 2>/dev/null || true
 for p in "$PORT_RECV_AB" "$PORT_RECV_BA" "$PORT_SEND_AB" "$PORT_SEND_BA"; do
   fuser -k "${p}/udp" 2>/dev/null || true
 done

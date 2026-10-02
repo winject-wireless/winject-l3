@@ -197,6 +197,23 @@ bool Config::load(const std::string& path, std::string* error)
     {
         skip_console = *skip == "1" || *skip == "true";
     }
+    if (auto c = parser.arg("winject.cca"))
+    {
+        if (*c == "1" || *c == "true")
+        {
+            cca = true;
+        }
+        else if (*c == "0" || *c == "false")
+        {
+            cca = false;
+        }
+        else
+        {
+            *error = "invalid winject.cca";
+            return false;
+        }
+        cca_explicit = true;
+    }
     if (auto fcs = parser.arg("winject.radio_fcs"))
     {
         std::string v;

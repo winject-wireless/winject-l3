@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Read winject radio tx_info / rx_info counters and build stage accounting tables."""
+"""Read winject radio tx_info / rx_info counters and build stage accounting tables.
+
+The CLI reads the radios through each winject-manager's m-plane (`radio_stats`,
+`get_metrics`); it never talks to a radio directly.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-CONSOLE_PORT = 22
+# Bench manager m-plane endpoints: (console_out to bind, console_in to send to).
+Endpoint = tuple[str, int]
+MGR_A: tuple[Endpoint, Endpoint] = (("127.0.0.1", 2401), ("127.0.0.1", 2400))
+MGR_B: tuple[Endpoint, Endpoint] = (("127.0.0.1", 2411), ("127.0.0.1", 2410))
 U32_MOD = 2**32
 
 TX_COUNTERS = (
@@ -38,17 +45,6 @@ REQUIRED_TX_FOR_METRICS = ("ether_pkt", "air_pkt")
 REQUIRED_RX_FOR_METRICS = ("ether_pkt", "air_pkt", "dropped_filter_mismatched")
 
 
-def console(ip: str, cmd: str, port: int = CONSOLE_PORT, timeout: float = 3.0) -> str:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(timeout)
-    try:
-        sock.sendto(cmd.encode(), (ip, port))
-        data, _ = sock.recvfrom(65535)
-        return data.decode(errors="replace")
-    finally:
-        sock.close()
-
-
 def parse_kv_line(text: str) -> dict[str, int]:
     """Parse a single-line m-plane reply (first token is the command name)."""
     line = text.strip().splitlines()[0] if text.strip() else ""
@@ -56,13 +52,6 @@ def parse_kv_line(text: str) -> dict[str, int]:
     for m in re.finditer(r"(?:^|\s)([a-z_]+)=(-?\d+)", line):
         out[m.group(1)] = int(m.group(2))
     return out
-
-
-def read(ip: str) -> dict[str, Any]:
-    """Return {'ip', 'tx': {...}, 'rx': {...}} with int fields; missing keys omitted."""
-    tx = parse_kv_line(console(ip, "tx_info"))
-    rx = parse_kv_line(console(ip, "rx_info"))
-    return {"ip": ip, "tx": tx, "rx": rx}
 
 
 def firmware_has_metrics(snap: dict[str, Any]) -> bool:
@@ -203,30 +192,56 @@ def format_stages(
     return "\n".join(lines)
 
 
+def mgr_request(
+    bind: tuple[str, int],
+    dest: tuple[str, int],
+    cmd: str,
+    timeout: float = 2.0,
+) -> str:
+    """Send one manager m-plane command; the reply arrives on `bind` (console_out)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        sock.bind(bind)
+        sock.sendto(cmd.encode(), dest)
+        return sock.recvfrom(65535)[0].decode(errors="replace")
+    finally:
+        sock.close()
+
+
+def read_via_manager(
+    bind: tuple[str, int],
+    dest: tuple[str, int],
+    timeout: float = 3.0,
+) -> dict[str, Any]:
+    """Radio counters through the manager's `radio_stats`: {'manager', 'tx', 'rx'}."""
+    text = mgr_request(bind, dest, "radio_stats", timeout)
+    if text.startswith("NOK"):
+        raise OSError(f"manager radio_stats failed: {text.strip()}")
+    out: dict[str, Any] = {"manager": f"{dest[0]}:{dest[1]}", "tx": {}, "rx": {}}
+    for line in text.splitlines():
+        if line.startswith("tx_info"):
+            out["tx"] = parse_kv_line(line)
+        elif line.startswith("rx_info"):
+            out["rx"] = parse_kv_line(line)
+    return out
+
+
 def mgr_get_metrics(
     bind: tuple[str, int],
     dest: tuple[str, int],
     timeout: float = 2.0,
 ) -> dict[str, int]:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(timeout)
-    try:
-        sock.bind(bind)
-        sock.sendto(b"get_metrics", dest)
-        text = sock.recvfrom(65535)[0].decode(errors="replace")
-    finally:
-        sock.close()
+    text = mgr_request(bind, dest, "get_metrics", timeout)
     out: dict[str, int] = {}
     for line in text.splitlines():
         if "=" not in line:
             continue
         key, val = line.split("=", 1)
-        key = key.strip()
-        if key in ("radio_tx_pkt", "radio_rx_pkt", "N", "T"):
-            try:
-                out[key] = int(val.strip())
-            except ValueError:
-                pass
+        try:
+            out[key.strip()] = int(val.strip())
+        except ValueError:
+            pass
     return out
 
 
@@ -235,18 +250,33 @@ def mgr_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
     return {k: after.get(k, 0) - before.get(k, 0) for k in keys}
 
 
-def snapshot_pair(
-    ip_a: str,
-    ip_b: str,
-    mgr_a: dict[str, int] | None = None,
-    mgr_b: dict[str, int] | None = None,
+def snapshot_managers(
+    mgr_a: tuple[Endpoint, Endpoint] = MGR_A,
+    mgr_b: tuple[Endpoint, Endpoint] = MGR_B,
+    *,
+    quiet: bool = False,
 ) -> dict[str, Any]:
-    return {
-        "a": read(ip_a),
-        "b": read(ip_b),
-        "mgr_a": mgr_a or {},
-        "mgr_b": mgr_b or {},
-    }
+    """Radio counters and manager metrics for both sides, via the managers only."""
+
+    def side(name: str, ends: tuple[Endpoint, Endpoint]) -> tuple[dict[str, Any], dict[str, int]]:
+        bind, dest = ends
+        radio: dict[str, Any] = {"tx": {}, "rx": {}}
+        metrics: dict[str, int] = {}
+        try:
+            radio = read_via_manager(bind, dest)
+        except OSError as err:
+            if not quiet:
+                print(f"warning: manager {name} radio_stats failed: {err}", file=sys.stderr)
+        try:
+            metrics = mgr_get_metrics(bind, dest)
+        except OSError as err:
+            if not quiet:
+                print(f"warning: manager {name} get_metrics failed: {err}", file=sys.stderr)
+        return radio, metrics
+
+    radio_a, metrics_a = side("A", mgr_a)
+    radio_b, metrics_b = side("B", mgr_b)
+    return {"a": radio_a, "b": radio_b, "mgr_a": metrics_a, "mgr_b": metrics_b}
 
 
 def save_snapshot(path: Path, data: dict[str, Any]) -> None:
@@ -316,53 +346,26 @@ def print_diff_run(
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--a", help="radio A IP")
-    p.add_argument("--b", help="radio B IP")
     p.add_argument("--save", metavar="FILE", help="write JSON snapshot (both radios)")
     p.add_argument("--diff", nargs=2, metavar=("BEFORE", "AFTER"), help="print stage table")
     p.add_argument("--dir", choices=("ab", "ba"), help="direction for --diff")
     p.add_argument(
         "--mgr-a-bind",
         default="127.0.0.1:2401",
-        help="bind for manager A get_metrics reply (default 127.0.0.1:2401)",
+        help="manager A console_out, bound for replies (default 127.0.0.1:2401)",
     )
     p.add_argument(
         "--mgr-a-dest",
         default="127.0.0.1:2400",
-        help="dest for manager A get_metrics (default 127.0.0.1:2400)",
+        help="manager A console_in (default 127.0.0.1:2400)",
     )
     p.add_argument("--mgr-b-bind", default="127.0.0.1:2411")
     p.add_argument("--mgr-b-dest", default="127.0.0.1:2410")
-    p.add_argument("--no-mgr", action="store_true", help="skip get_metrics in --save")
     args = p.parse_args()
 
     def parse_ep(s: str) -> tuple[str, int]:
         host, port_s = s.rsplit(":", 1)
         return host, int(port_s)
-
-    if args.save:
-        if not args.a or not args.b:
-            p.error("--save requires --a and --b")
-        mgr_a: dict[str, int] = {}
-        mgr_b: dict[str, int] = {}
-        if not args.no_mgr:
-            try:
-                mgr_a = mgr_get_metrics(
-                    parse_ep(args.mgr_a_bind),
-                    parse_ep(args.mgr_a_dest),
-                )
-            except OSError as err:
-                print(f"warning: manager A get_metrics failed: {err}", file=sys.stderr)
-            try:
-                mgr_b = mgr_get_metrics(
-                    parse_ep(args.mgr_b_bind),
-                    parse_ep(args.mgr_b_dest),
-                )
-            except OSError as err:
-                print(f"warning: manager B get_metrics failed: {err}", file=sys.stderr)
-        data = snapshot_pair(args.a, args.b, mgr_a, mgr_b)
-        save_snapshot(Path(args.save), data)
-        return 0
 
     if args.diff:
         if not args.dir:
@@ -374,12 +377,15 @@ def main() -> int:
         )
         return 0
 
-    if args.a:
-        print(json.dumps(read(args.a), indent=2))
-        return 0
-
-    p.print_help()
-    return 1
+    data = snapshot_managers(
+        (parse_ep(args.mgr_a_bind), parse_ep(args.mgr_a_dest)),
+        (parse_ep(args.mgr_b_bind), parse_ep(args.mgr_b_dest)),
+    )
+    if args.save:
+        save_snapshot(Path(args.save), data)
+    else:
+        print(json.dumps(data, indent=2))
+    return 0
 
 
 if __name__ == "__main__":

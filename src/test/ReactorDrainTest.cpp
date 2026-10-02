@@ -107,6 +107,7 @@ ManagerConsoleHandlers stub_console_handlers()
     };
     h.radio_info = [](ManagerConsoleReply) {};
     h.radio_caps_info = [](ManagerConsoleReply) {};
+    h.radio_stats = [](ManagerConsoleReply) {};
     h.radio_tx = [](const ManagerRadioUpdate&, ManagerConsoleReply) {};
     h.radio_reset = [](uint8_t, ManagerConsoleReply) {};
     h.config_slot = [](uint8_t, ManagerConsoleReply) {};

@@ -15,12 +15,16 @@ namespace winject
 namespace
 {
 
-std::string format_radio_tx_cmd(uint16_t channel, int tx_power,
-                                const std::string& modulation)
+std::string format_radio_tx_cmd(const Config& cfg)
 {
-    return "radio_tx channel=" + std::to_string(channel) +
-           " tx_power=" + std::to_string(tx_power) +
-           " modulation=" + modulation;
+    std::string cmd = "radio_tx channel=" + std::to_string(cfg.channel) +
+                      " tx_power=" + std::to_string(cfg.power_dbm) +
+                      " modulation=" + cfg.modulation;
+    if (cfg.cca_explicit)
+    {
+        cmd += cfg.cca ? " cca=1" : " cca=0";
+    }
+    return cmd;
 }
 
 }  // namespace
@@ -196,6 +200,38 @@ bool ConsoleClient::request(const std::string& mplane_line,
 
 void ConsoleClient::on_line(const std::string& line)
 {
+    handle_line(line, true);
+}
+
+void ConsoleClient::on_lines(const std::vector<std::string>& lines)
+{
+    std::vector<int> ids(lines.size(), -1);
+    for (size_t i = 0; i < lines.size(); ++i)
+    {
+        uint8_t id = 0;
+        bool ok = false;
+        if (parse_correlated_reply(lines[i], &id, &ok, nullptr))
+        {
+            ids[i] = id;
+        }
+    }
+    for (size_t i = 0; i < lines.size(); ++i)
+    {
+        bool last = true;
+        for (size_t j = i + 1; j < lines.size() && ids[i] >= 0; ++j)
+        {
+            if (ids[j] == ids[i])
+            {
+                last = false;
+                break;
+            }
+        }
+        handle_line(lines[i], last);
+    }
+}
+
+void ConsoleClient::handle_line(const std::string& line, bool last_for_id)
+{
     uint8_t id = 0;
     bool ok = false;
     std::string payload;
@@ -222,6 +258,10 @@ void ConsoleClient::on_line(const std::string& line)
     if (ok && !payload.empty())
     {
         it->second.body_lines.push_back(payload);
+    }
+    if (ok && !last_for_id)
+    {
+        return;
     }
     if (ok)
     {
@@ -353,6 +393,42 @@ void ConsoleClient::query_radio_info(DoneFn done)
             });
 }
 
+void ConsoleClient::query_radio_counters(DoneFn done)
+{
+    request("tx_info",
+            [this, done = std::move(done)](MplaneResult tx)
+            {
+                if (!tx.ok)
+                {
+                    done(std::move(tx));
+                    return;
+                }
+                if (tx.body_lines.empty() && !tx.payload.empty())
+                {
+                    tx.body_lines.push_back(tx.payload);
+                }
+                request("rx_info",
+                        [tx = std::move(tx),
+                         done = std::move(done)](MplaneResult rx) mutable
+                        {
+                            if (!rx.ok)
+                            {
+                                done(std::move(rx));
+                                return;
+                            }
+                            if (rx.body_lines.empty() && !rx.payload.empty())
+                            {
+                                rx.body_lines.push_back(rx.payload);
+                            }
+                            tx.body_lines.insert(tx.body_lines.end(),
+                                                 rx.body_lines.begin(),
+                                                 rx.body_lines.end());
+                            tx.payload.clear();
+                            done(std::move(tx));
+                        });
+            });
+}
+
 void ConsoleClient::send_radio_tx(const std::string& kv_args, DoneFn done)
 {
     if (kv_args.empty())
@@ -395,7 +471,7 @@ void ConsoleClient::apply_radio(const Config& cfg, uint8_t save_slot,
                 }
             }
             request(
-                format_radio_tx_cmd(cfg.channel, cfg.power_dbm, cfg.modulation),
+                format_radio_tx_cmd(cfg),
                 [this, cfg, save_slot, done = std::move(done)](MplaneResult r1)
                 {
                     if (!r1.ok)

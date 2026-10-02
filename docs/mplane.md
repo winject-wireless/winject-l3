@@ -70,12 +70,13 @@ These are forwarded to the radio's m-plane (radio UDP 22) and need the radio con
 | Request | Description | Response |
 |---|---|---|
 | `radio_info\|ri` | Current PHY and last RSSI (radio `radio_tx_info`) | The radio's reply, for example `radio_tx channel=1 tx_power=20 modulation=OFDM_24M cca=false` and `radio_rx rssi=-10` |
-| `radio_tx\|rt [channel=<1-14>] [tx_power=<dBm>] [modulation=<name>]` | Change one or more PHY fields (radio `radio_tx`) | `OK radio_tx channel=... tx_power=... modulation=... cca=...` |
+| `radio_stats\|rs` | Radio d-plane counters (radio `tx_info` and `rx_info`) | Two lines, for example `tx_info tx_queue_sz=0 in_flight=0 dropped_invalid_frame=0 dropped_tx_queue=0 dropped_wifi=0 ether_pkt=100 air_pkt=100 ts=<µs>` and `rx_info rx_queue_sz=0 dropped_filter_mismatched=0 dropped_rx_queue=0 dropped_no_peer=0 dropped_send_failed=0 ether_pkt=100 air_pkt=100 ts=<µs>` |
+| `radio_tx\|rt [channel=<1-14>] [tx_power=<dBm>] [modulation=<name>] [cca=<0\|1>]` | Change one or more PHY fields (radio `radio_tx`); the manager keeps them for its PHY reconcile | `OK radio_tx channel=... tx_power=... modulation=... cca=...` |
 | `radio_caps_info\|rci` | FCS trailer mode the manager applies to forwarded frames. Asks the radio when its console is up (and updates the manager); otherwise answers from the configured or last-learned mode | `OK radio_caps_info fcs=SIGNAL\|ACTUAL`, or `NOK NOT_FOUND` if the mode is not known yet |
 | `reset\|r id=<u8>` | Restart the radio. A repeated `id` is ignored by the radio, so a retransmitted request does not reboot twice | `OK id=<u8>`, or `NOK EALREADY` for a repeated id |
 | `config slot=<u8>` | Select the radio settings slot the manager saves to (0 = scratch pad until set). No alias | `OK slot=<u8>` |
 
-The radio's own counters (`tx_info`, `rx_info`: `ether_pkt`, `air_pkt`, `dropped_*`) are not forwarded. Query them on the radio directly, or with `tools/radio_stats.py`, and combine them with the manager's `radio_tx_pkt` / `radio_rx_pkt` for the Ethernet legs.
+`tools/radio_stats.py` reads `radio_stats` and `get_metrics` from both managers and combines the radio counters with the manager's `radio_tx_pkt` / `radio_rx_pkt` for the Ethernet legs.
 
 ## `get_metrics` keys
 
@@ -116,6 +117,7 @@ Run the manager with `winject-manager <config file>`. The file holds `key = valu
 | `winject.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
 | `winject.modulation` | `DSS_1M_L` | PHY rate name, for example `OFDM_24M` |
 | `winject.power` | `20` | TX power, dBm |
+| `winject.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
 | `winject.domain` | required | 16-bit hex domain, non-zero; carried in Address 3 (see [winject.md](winject.md)) |
 | `winject.skip_console` | `0` | `1`: never talk to the radio m-plane; the radio must be prepared beforehand |
 | `winject.radio_fcs` | `auto` | `auto`, `signal` or `actual`. `auto` asks the radio (`radio_caps_info`) at connect. With `skip_console = 1` it must be `signal` or `actual` |

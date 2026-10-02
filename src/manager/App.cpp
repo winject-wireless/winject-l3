@@ -831,6 +831,25 @@ void App::console_radio_caps_info(ManagerConsoleReply reply)
     reply.send_text(format_radio_caps_ok_line(radio->fcs_mode()));
 }
 
+void App::console_radio_stats(ManagerConsoleReply reply)
+{
+    if (!console_ok)
+    {
+        reply.send_nok("NOT_FOUND");
+        return;
+    }
+    console.query_radio_counters(
+        [reply](MplaneResult r)
+        {
+            if (!r.ok)
+            {
+                reply.send_nok(mplane_err_string(r.error).c_str());
+                return;
+            }
+            reply.send_text(mplane_join_body(r));
+        });
+}
+
 void App::console_radio_tx(const ManagerRadioUpdate& patch,
                            ManagerConsoleReply reply)
 {
@@ -869,6 +888,14 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
         }
         kv += "modulation=" + canonical;
     }
+    if (patch.have_cca)
+    {
+        if (!kv.empty())
+        {
+            kv += ' ';
+        }
+        kv += patch.cca ? "cca=1" : "cca=0";
+    }
     console.send_radio_tx(
         kv,
         [this, patch, reply](MplaneResult r1)
@@ -890,6 +917,11 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
             {
                 cfg.modulation = Config::canonical_modulation(patch.modulation);
                 radio_manager_.sync_pacing_for_modulation(cfg.modulation, true);
+            }
+            if (patch.have_cca)
+            {
+                cfg.cca = patch.cca;
+                cfg.cca_explicit = true;
             }
             ManagerRadioView view;
             if (parse_radio_info_body(mplane_join_body(r1), &view))
@@ -1022,6 +1054,10 @@ bool App::start_manager_console()
     handlers.radio_caps_info = [this](ManagerConsoleReply reply)
     {
         console_radio_caps_info(reply);
+    };
+    handlers.radio_stats = [this](ManagerConsoleReply reply)
+    {
+        console_radio_stats(reply);
     };
     handlers.radio_reset = [this](uint8_t id, ManagerConsoleReply reply)
     {
@@ -1181,11 +1217,13 @@ void App::on_console()
     }
 
     console.poll_deadlines(std::chrono::steady_clock::now());
+    std::vector<std::string> lines;
     std::string line;
     while (console.pop_line(&line))
     {
-        console.on_line(line);
+        lines.push_back(std::move(line));
     }
+    console.on_lines(lines);
 }
 
 void App::reconnect_tick()
