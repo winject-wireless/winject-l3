@@ -332,6 +332,61 @@ TEST(ConfigTest, CanonicalModulation)
     EXPECT_FALSE(Config::modulation_ok_for_channel("nope", 1));
 }
 
+TEST(ConfigTest, RadioFcsValuesAndSkipConsoleRule)
+{
+    const std::string base = R"(
+winject.device        = 192.168.32.1
+winject.console       = 22
+winject.channel       = 1
+winject.modulation    = OFDM_24M
+winject.power         = 20
+winject.domain        = 1234
+winject.local_ip      = 127.0.0.1
+winject.skip_console  = 1
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)";
+    {
+        const std::string path = write_conf(base);
+        Config cfg;
+        std::string err;
+        EXPECT_FALSE(cfg.load(path, &err));
+        EXPECT_NE(err.find("radio_fcs"), std::string::npos);
+        std::remove(path.c_str());
+    }
+    {
+        std::string body = base + "winject.radio_fcs = signal\n";
+        const std::string path = write_conf(body);
+        Config cfg;
+        std::string err;
+        ASSERT_TRUE(cfg.load(path, &err)) << err;
+        EXPECT_EQ(cfg.radio_fcs, RadioFcsConfig::signal);
+        std::remove(path.c_str());
+    }
+    {
+        std::string body = base + "winject.radio_fcs = ACTUAL\n";
+        const std::string path = write_conf(body);
+        Config cfg;
+        std::string err;
+        ASSERT_TRUE(cfg.load(path, &err)) << err;
+        EXPECT_EQ(cfg.radio_fcs, RadioFcsConfig::actual);
+        std::remove(path.c_str());
+    }
+    {
+        std::string body = base + "winject.radio_fcs = bogus\n";
+        const std::string path = write_conf(body);
+        Config cfg;
+        std::string err;
+        EXPECT_FALSE(cfg.load(path, &err));
+        std::remove(path.c_str());
+    }
+}
+
 TEST(ConfigTest, Channel14RejectsOfdm)
 {
     const std::string path = write_conf(R"(

@@ -1,7 +1,7 @@
 #include "radio/RadioMplaneParse.h"
 
-#include "console/ConsoleParse.h"
 #include "Config.h"
+#include "console/ConsoleParse.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -27,12 +27,14 @@ bool parse_radio_tx_line(const std::string& line, ManagerRadioView* out)
     {
         const char* value = nullptr;
         unsigned long v = 0;
-        if (console_parse_kv(tok, "channel=", &value) && console_parse_u(value, &v))
+        if (console_parse_kv(tok, "channel=", &value) &&
+            console_parse_u(value, &v))
         {
             out->channel = static_cast<uint16_t>(v);
             continue;
         }
-        if (console_parse_kv(tok, "tx_power=", &value) && console_parse_u(value, &v))
+        if (console_parse_kv(tok, "tx_power=", &value) &&
+            console_parse_u(value, &v))
         {
             out->tx_power = static_cast<int>(v);
             continue;
@@ -44,7 +46,8 @@ bool parse_radio_tx_line(const std::string& line, ManagerRadioView* out)
         }
         if (console_parse_kv(tok, "cca=", &value))
         {
-            out->cca = (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0);
+            out->cca =
+                (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0);
             out->cca_valid = true;
         }
     }
@@ -95,9 +98,145 @@ bool parse_radio_info_body(const std::string& body, ManagerRadioView* out)
     return any;
 }
 
-bool radio_phy_matches_desired(const ManagerRadioView& actual,
-                               uint8_t channel, int8_t power_dbm,
-                               const std::string& modulation)
+namespace
+{
+
+std::string trim_copy(const std::string& s)
+{
+    const auto start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos)
+    {
+        return "";
+    }
+    const auto end = s.find_last_not_of(" \t\r\n");
+    return s.substr(start, end - start + 1);
+}
+
+bool parse_fcs_token(const char* tok, RadioFcsMode* out_mode)
+{
+    const char* value = nullptr;
+    if (!console_parse_kv(tok, "fcs=", &value) || value == nullptr)
+    {
+        return false;
+    }
+    if (strcasecmp(value, "SIGNAL") == 0)
+    {
+        *out_mode = RadioFcsMode::signal;
+        return true;
+    }
+    if (strcasecmp(value, "ACTUAL") == 0)
+    {
+        *out_mode = RadioFcsMode::actual;
+        return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+bool parse_radio_caps_line(const std::string& line, RadioFcsMode* out_mode)
+{
+    if (out_mode == nullptr)
+    {
+        return false;
+    }
+    std::string body = trim_copy(line);
+    if (body.rfind("OK ", 0) == 0)
+    {
+        body = trim_copy(body.substr(3));
+    }
+    static const char k_prefix[] = "radio_caps_info";
+    if (body.rfind(k_prefix, 0) != 0)
+    {
+        return false;
+    }
+    std::string rest = body.substr(sizeof(k_prefix) - 1);
+    while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t'))
+    {
+        rest.erase(rest.begin());
+    }
+    std::vector<char> buf(rest.begin(), rest.end());
+    buf.push_back('\0');
+    char* save = nullptr;
+    bool any = false;
+    for (char* tok = strtok_r(buf.data(), " \t", &save); tok != nullptr;
+         tok = strtok_r(nullptr, " \t", &save))
+    {
+        RadioFcsMode parsed = RadioFcsMode::unknown;
+        if (parse_fcs_token(tok, &parsed))
+        {
+            *out_mode = parsed;
+            any = true;
+        }
+    }
+    return any && *out_mode != RadioFcsMode::unknown;
+}
+
+bool resolve_radio_caps_mplane(const MplaneResult& r, RadioFcsMode* out_mode,
+                               bool* legacy_enosys, std::string* error)
+{
+    if (out_mode == nullptr)
+    {
+        return false;
+    }
+    if (legacy_enosys != nullptr)
+    {
+        *legacy_enosys = false;
+    }
+    if (r.ok)
+    {
+        std::string line = r.payload;
+        if (line.empty() && !r.body_lines.empty())
+        {
+            line = r.body_lines.front();
+        }
+        if (!parse_radio_caps_line(line, out_mode))
+        {
+            if (error != nullptr)
+            {
+                *error = "invalid radio_caps_info reply";
+            }
+            return false;
+        }
+        return true;
+    }
+    const std::string err = trim_copy(r.error);
+    if (err == "ENOSYS" || err.find("ENOSYS") != std::string::npos)
+    {
+        *out_mode = RadioFcsMode::actual;
+        if (legacy_enosys != nullptr)
+        {
+            *legacy_enosys = true;
+        }
+        return true;
+    }
+    if (error != nullptr)
+    {
+        *error = err.empty() ? "radio_caps_info failed" : err;
+    }
+    return false;
+}
+
+const char* radio_fcs_mode_name(RadioFcsMode mode)
+{
+    switch (mode)
+    {
+        case RadioFcsMode::signal:
+            return "SIGNAL";
+        case RadioFcsMode::actual:
+            return "ACTUAL";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+std::string format_radio_caps_ok_line(RadioFcsMode mode)
+{
+    return std::string("radio_caps_info fcs=") + radio_fcs_mode_name(mode);
+}
+
+bool radio_phy_matches_desired(const ManagerRadioView& actual, uint8_t channel,
+                               int8_t power_dbm, const std::string& modulation)
 {
     const std::string want = Config::canonical_modulation(modulation);
     const std::string have = Config::canonical_modulation(actual.modulation);

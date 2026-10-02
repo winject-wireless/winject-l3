@@ -15,7 +15,7 @@ bool console_parse_u(const char* text, unsigned long* out);
 // Parses 0..255; rejects values > UINT8_MAX.
 bool console_parse_u8(const char* text, uint8_t* out);
 bool console_parse_fec_type(const char* text, FecType* out);
-// manager.md response form: "none" or "block(k,n)" (no fec= prefix).
+// mplane.md response form: "none" or "block(k,n)" (no fec= prefix).
 bool console_format_fec_display(FecType type, int k, int n, char* out,
                                 size_t out_len);
 bool console_parse_duration_ms(const char* text, int* out_ms);

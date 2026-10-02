@@ -211,7 +211,7 @@ fi
 
 ensure_winject_manager "$ROOT"
 
-echo "configuring radios (domain/bus pairs, forward ports 9210/9220)..."
+echo "configuring radios (domain/bus pairs; radio d-plane: inject 9000, forward 9210)..."
 python3 "$ROOT/scripts/prepare_radios_for_manager.py" --a "$RADIO_A" --b "$RADIO_B" --host "$HOST_IP" --verbose "${PREP_EXTRA[@]+"${PREP_EXTRA[@]}"}" || exit 1
 
 if [[ "$USE_BW_CFG" -eq 1 ]]; then
@@ -309,7 +309,9 @@ python3 "$ROOT/tools/configure_manager_ci.py" --radio "$RADIO_A" --host "$HOST_I
 python3 "$ROOT/tools/configure_manager_ci.py" --radio "$RADIO_B" --host "$HOST_IP" \
   --log "$LOG_DIR/manager_b.log" --quiet || true
 
+export WINJECT_RADIO_SNAP_DIR="$LOG_DIR"
 echo "running bw_test $PATH_FLAG --a $RADIO_A --b $RADIO_B --host $HOST_IP --drop-stages ${BW_ARGS[*]}"
+echo "radio counter snapshots → $LOG_DIR/radio_*.json"
 # Do not exec: the EXIT trap must run to kill managers.
 set +e
 python3 "$ROOT/tools/bw_test.py" \

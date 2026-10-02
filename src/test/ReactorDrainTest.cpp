@@ -1,8 +1,8 @@
 #include "console/ConsoleService.h"
 #include "console/ManagerConsoleTypes.h"
 #include "endpoint/UdpEndpoint.h"
-#include "radio/WifiUdp.h"
 #include "radio/WifiFcs.h"
+#include "radio/WifiUdp.h"
 #include "utils/IOReactor.h"
 
 #include <arpa/inet.h>
@@ -105,18 +105,11 @@ ManagerConsoleHandlers stub_console_handlers()
     {
         return false;
     };
-    h.radio_info = [](ManagerConsoleReply)
-    {
-    };
-    h.radio_tx = [](const ManagerRadioUpdate&, ManagerConsoleReply)
-    {
-    };
-    h.radio_reset = [](uint8_t, ManagerConsoleReply)
-    {
-    };
-    h.config_slot = [](uint8_t, ManagerConsoleReply)
-    {
-    };
+    h.radio_info = [](ManagerConsoleReply) {};
+    h.radio_caps_info = [](ManagerConsoleReply) {};
+    h.radio_tx = [](const ManagerRadioUpdate&, ManagerConsoleReply) {};
+    h.radio_reset = [](uint8_t, ManagerConsoleReply) {};
+    h.config_slot = [](uint8_t, ManagerConsoleReply) {};
     return h;
 }
 
@@ -287,6 +280,7 @@ TEST(ReactorDrainTest, WifiUdpDrainDoesNotBlock)
     };
 
     ASSERT_TRUE(wifi.open(reactor, inject, fwd_port, on_rx));
+    wifi.set_fcs_mode(winject::RadioFcsMode::actual);
 
     uint8_t reg_buf[8] = {};
     sockaddr_in manager_addr = {};

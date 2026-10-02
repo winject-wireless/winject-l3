@@ -1,5 +1,4 @@
 #include "fec/RsBlockErasure.h"
-
 #include "utils/NetUtil.h"
 
 #include <chrono>

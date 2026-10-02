@@ -1,7 +1,6 @@
 #include "radio/WifiFcs.h"
 
 #include <gtest/gtest.h>
-
 #include <vector>
 
 using winject::wifi_fcs_matches;

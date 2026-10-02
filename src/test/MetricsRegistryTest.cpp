@@ -21,7 +21,8 @@ TEST(MetricsRegistryTest, RebindsWhenRequestedTypeChanges)
     const MetricU64 u64 = registry.get_metrics<MetricU64>("slot");
     u64->store(99);
     const MetricI64 i64 = registry.get_metrics<MetricI64>("slot");
-    EXPECT_TRUE(std::holds_alternative<MetricI64>(registry.getMetrics().at("slot")));
+    EXPECT_TRUE(
+        std::holds_alternative<MetricI64>(registry.getMetrics().at("slot")));
     EXPECT_EQ(i64->load(), 0);
     i64->store(-3);
     const MetricI64 again = registry.get_metrics<MetricI64>("slot");
@@ -68,7 +69,8 @@ TEST(MetricsRegistryTest, RemovePrefix)
     registry.get_metrics<MetricU64>("upstream_2_air_rx_gap_loss")->store(1);
     registry.get_metrics<MetricU64>("radio_rx_pkt")->store(3);
     registry.remove_prefix("upstream_1_");
-    EXPECT_FALSE(registry.get_metrics("upstream_1_air_rx_gap_loss").has_value());
+    EXPECT_FALSE(
+        registry.get_metrics("upstream_1_air_rx_gap_loss").has_value());
     EXPECT_TRUE(registry.get_metrics("upstream_2_air_rx_gap_loss").has_value());
     EXPECT_TRUE(registry.get_metrics("radio_rx_pkt").has_value());
 }

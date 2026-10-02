@@ -16,8 +16,8 @@ enum class UpstreamMode
     udp_server,
 };
 
-// UDP peer endpoints: both set = static; rx only = server bind; tx only = client
-// connect.
+// UDP peer endpoints: both set = static; rx only = server bind; tx only =
+// client connect.
 struct UdpPeerEndpoint
 {
     std::string rx;
@@ -47,6 +47,14 @@ enum class FecType
 {
     none,
     RsBlockErasure,
+};
+
+// winject.radio_fcs config (runtime mode is RadioFcsMode on WifiUdp).
+enum class RadioFcsConfig
+{
+    auto_detect,
+    signal,
+    actual,
 };
 
 struct UpstreamConfig
@@ -93,6 +101,7 @@ struct Config
     uint16_t forward_port = 9210;
     uint16_t forward_base = 9210;  // legacy alias for forward_port
     bool skip_console = false;
+    RadioFcsConfig radio_fcs = RadioFcsConfig::auto_detect;
     // DATA MPDUs per inject burst (~half radio tx queue); gap before next
     // burst.
     size_t tx_burst_size = k_default_tx_burst_size;
@@ -110,14 +119,12 @@ struct Config
 
     // PHY air rate (kbps) for a modulation name, or 0 if unknown.
     static uint32_t phy_rate_kbps(const std::string& modulation);
-    static bool validate_upstream_update(const UpstreamConfig& current,
-                                         FecType fec_type, int fec_k, int fec_n,
-                                         int fec_timeout_ms, size_t quanta,
-                                         bool have_fec, bool have_k, bool have_n,
-                                         bool have_fec_timeout, bool have_quanta,
-                                         const std::vector<UpstreamConfig>& all,
-                                         UpstreamConfig* out,
-                                         std::string* error);
+    static bool validate_upstream_update(
+        const UpstreamConfig& current, FecType fec_type, int fec_k, int fec_n,
+        int fec_timeout_ms, size_t quanta, bool have_fec, bool have_k,
+        bool have_n, bool have_fec_timeout, bool have_quanta,
+        const std::vector<UpstreamConfig>& all, UpstreamConfig* out,
+        std::string* error);
     // Canonical firmware name (e.g. OFDM_24M), or empty if unknown.
     static std::string canonical_modulation(const std::string& modulation);
     // Channel 14 is DSSS/CCK only. Unknown names are not ok.

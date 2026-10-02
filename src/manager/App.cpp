@@ -103,8 +103,16 @@ bool App::setup_radio()
     {
         return false;
     }
-    LOG_INF("radio inject=%u forward=%u", radio->inject_port(),
-            radio->forward_port());
+    if (cfg.radio_fcs == RadioFcsConfig::signal)
+    {
+        radio->set_fcs_mode(RadioFcsMode::signal);
+    }
+    else if (cfg.radio_fcs == RadioFcsConfig::actual)
+    {
+        radio->set_fcs_mode(RadioFcsMode::actual);
+    }
+    LOG_INF("radio inject=%u forward=%u fcs=%s", radio->inject_port(),
+            radio->forward_port(), radio_fcs_mode_name(radio->fcs_mode()));
     return true;
 }
 
@@ -439,8 +447,8 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
     {
         return fail("INVALID_ARGUMENT");
     }
-    if (patch.have_quanta &&
-        !set_upstream_scheduler_budget(index, candidate.scheduler_budget, error))
+    if (patch.have_quanta && !set_upstream_scheduler_budget(
+                                 index, candidate.scheduler_budget, error))
     {
         return fail(error != nullptr && !error->empty() ? error->c_str()
                                                         : "INVALID_ARGUMENT");
@@ -461,8 +469,9 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
         if (!set_upstream_fec(index, candidate.fec_type, candidate.fec_k,
                               candidate.fec_n, error))
         {
-            return fail(error != nullptr && !error->empty() ? error->c_str()
-                                                          : "INVALID_ARGUMENT");
+            return fail(error != nullptr && !error->empty()
+                            ? error->c_str()
+                            : "INVALID_ARGUMENT");
         }
     }
     cfg.upstreams[index] = candidate;
@@ -523,8 +532,7 @@ bool App::console_list_upstream_rx_stat(
         return false;
     }
     out->clear();
-    const std::vector<uint8_t> want =
-        console_upstream_ids(ids, cfg);
+    const std::vector<uint8_t> want = console_upstream_ids(ids, cfg);
     for (uint8_t id : want)
     {
         const size_t index = find_upstream_vec_index(cfg, id);
@@ -545,6 +553,7 @@ bool App::console_list_upstream_rx_stat(
         {
             row.rxbyt = udp->app_rx_bytes();
             row.rxpkt = udp->app_rx_packets();
+            row.rx_oversize = udp->app_rx_oversize_pkt();
             row.fec_rec = udp->fec_recovered();
             row.fec_lost = udp->fec_decode_fail();
             row.fec_rxbyt = udp->fec_air_rx_bytes();
@@ -573,8 +582,7 @@ bool App::console_list_upstream_tx_stat(
         return false;
     }
     out->clear();
-    const std::vector<uint8_t> want =
-        console_upstream_ids(ids, cfg);
+    const std::vector<uint8_t> want = console_upstream_ids(ids, cfg);
     for (uint8_t id : want)
     {
         const size_t index = find_upstream_vec_index(cfg, id);
@@ -606,31 +614,36 @@ bool App::console_list_upstream_tx_stat(
 
 void App::refresh_host_metrics()
 {
-    metrics_registry_.get_metrics<MetricU64>("rx_drop_domain")->store(
-        rx_demux_.rx_drop_domain());
-    metrics_registry_.get_metrics<MetricU64>("rx_drop_bus")->store(
-        rx_demux_.rx_drop_bus());
-    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_mpdu")->store(
-        tx_mux_.tx_send_fail_mpdu());
-    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_byt")->store(
-        tx_mux_.tx_send_fail_byt());
-    metrics_registry_.get_metrics<MetricU64>("tx_pacing_txtime_us")->store(
-        tx_mux_.pacing_txtime_full_us());
-    metrics_registry_.get_metrics<MetricU64>("tx_pacing_gap_us")->store(
-        tx_mux_.pacing_gap_us());
+    metrics_registry_.get_metrics<MetricU64>("rx_drop_domain")
+        ->store(rx_demux_.rx_drop_domain());
+    metrics_registry_.get_metrics<MetricU64>("rx_drop_bus")
+        ->store(rx_demux_.rx_drop_bus());
+    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_mpdu")
+        ->store(tx_mux_.tx_send_fail_mpdu());
+    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_byt")
+        ->store(tx_mux_.tx_send_fail_byt());
+    metrics_registry_.get_metrics<MetricU64>("tx_pacing_txtime_us")
+        ->store(tx_mux_.pacing_txtime_full_us());
+    metrics_registry_.get_metrics<MetricU64>("tx_pacing_gap_us")
+        ->store(tx_mux_.pacing_gap_us());
     if (radio != nullptr)
     {
         const WifiUdp::counters_s rc = radio->peek_counters();
-        metrics_registry_.get_metrics<MetricU64>("radio_rx_pkt")->store(
-            rc.rx_pkt);
-        metrics_registry_.get_metrics<MetricU64>("radio_rx_byt")->store(
-            rc.rx_byte);
-        metrics_registry_.get_metrics<MetricU64>("radio_tx_pkt")->store(
-            rc.tx_pkt);
-        metrics_registry_.get_metrics<MetricU64>("radio_tx_byt")->store(
-            rc.tx_byte);
-        metrics_registry_.get_metrics<MetricU64>("radio_fcs_err_pkt")->store(
-            rc.fcs_error_pkt);
+        metrics_registry_.get_metrics<MetricU64>("radio_rx_pkt")
+            ->store(rc.rx_pkt);
+        metrics_registry_.get_metrics<MetricU64>("radio_rx_byt")
+            ->store(rc.rx_byte);
+        metrics_registry_.get_metrics<MetricU64>("radio_tx_pkt")
+            ->store(rc.tx_pkt);
+        metrics_registry_.get_metrics<MetricU64>("radio_tx_byt")
+            ->store(rc.tx_byte);
+        metrics_registry_.get_metrics<MetricU64>("radio_fcs_err_pkt")
+            ->store(rc.fcs_error_pkt);
+        metrics_registry_.get_metrics<MetricU64>("radio_fcs_unknown_pkt")
+            ->store(rc.fcs_unknown_pkt);
+        const RadioFcsMode fcs = radio->fcs_mode();
+        metrics_registry_.get_metrics<MetricU64>("radio_fcs_mode")
+            ->store(static_cast<uint64_t>(fcs));
     }
     for (size_t i = 0; i < upstreams.size(); ++i)
     {
@@ -644,10 +657,18 @@ void App::refresh_host_metrics()
         {
             continue;
         }
-        const std::string key =
+        const std::string gap_key =
             "upstream_" + std::to_string(view.id) + "_air_rx_gap_loss";
-        metrics_registry_.get_metrics<MetricU64>(key)->store(
+        metrics_registry_.get_metrics<MetricU64>(gap_key)->store(
             up->stats().air_rx_gap_loss);
+        const auto* udp = dynamic_cast<const UdpEndpoint*>(up);
+        if (udp != nullptr)
+        {
+            const std::string oversize_key =
+                "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
+            metrics_registry_.get_metrics<MetricU64>(oversize_key)
+                ->store(udp->app_rx_oversize_pkt());
+        }
     }
 }
 
@@ -710,6 +731,46 @@ std::string mplane_err_string(const std::string& err)
 
 }  // namespace
 
+void App::apply_radio_caps_mplane(const MplaneResult& r)
+{
+    if (radio == nullptr)
+    {
+        return;
+    }
+    RadioFcsMode mode = RadioFcsMode::unknown;
+    bool legacy = false;
+    std::string err;
+    if (!resolve_radio_caps_mplane(r, &mode, &legacy, &err))
+    {
+        LOG_WRN("radio_caps_info: %s", err.c_str());
+        return;
+    }
+    if (legacy)
+    {
+        LOG_WRN("radio has no radio_caps_info; assuming fcs=ACTUAL");
+    }
+    if (cfg.radio_fcs == RadioFcsConfig::signal && mode != RadioFcsMode::signal)
+    {
+        LOG_WRN(
+            "winject.radio_fcs=signal but radio reports fcs=%s; using radio",
+            radio_fcs_mode_name(mode));
+    }
+    else if (cfg.radio_fcs == RadioFcsConfig::actual &&
+             mode != RadioFcsMode::actual)
+    {
+        LOG_WRN(
+            "winject.radio_fcs=actual but radio reports fcs=%s; using radio",
+            radio_fcs_mode_name(mode));
+    }
+    const RadioFcsMode prev = radio->fcs_mode();
+    if (prev != mode && prev != RadioFcsMode::unknown)
+    {
+        LOG_INF("radio fcs mode %s -> %s", radio_fcs_mode_name(prev),
+                radio_fcs_mode_name(mode));
+    }
+    radio->set_fcs_mode(mode);
+}
+
 void App::console_radio_info(ManagerConsoleReply reply)
 {
     if (!console_ok)
@@ -733,6 +794,41 @@ void App::console_radio_info(ManagerConsoleReply reply)
             }
             reply.send_text(body);
         });
+}
+
+void App::console_radio_caps_info(ManagerConsoleReply reply)
+{
+    if (console_ok)
+    {
+        console.query_radio_caps(
+            [this, reply](MplaneResult r)
+            {
+                if (!r.ok)
+                {
+                    const std::string& e = r.error;
+                    if (e != "ENOSYS" && e.find("ENOSYS") == std::string::npos)
+                    {
+                        reply.send_nok(mplane_err_string(r.error).c_str());
+                        return;
+                    }
+                }
+                apply_radio_caps_mplane(r);
+                if (radio == nullptr ||
+                    radio->fcs_mode() == RadioFcsMode::unknown)
+                {
+                    reply.send_nok("NOT_FOUND");
+                    return;
+                }
+                reply.send_text(format_radio_caps_ok_line(radio->fcs_mode()));
+            });
+        return;
+    }
+    if (radio == nullptr || radio->fcs_mode() == RadioFcsMode::unknown)
+    {
+        reply.send_nok("NOT_FOUND");
+        return;
+    }
+    reply.send_text(format_radio_caps_ok_line(radio->fcs_mode()));
 }
 
 void App::console_radio_tx(const ManagerRadioUpdate& patch,
@@ -792,8 +888,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
             }
             if (patch.have_modulation)
             {
-                cfg.modulation =
-                    Config::canonical_modulation(patch.modulation);
+                cfg.modulation = Config::canonical_modulation(patch.modulation);
                 radio_manager_.sync_pacing_for_modulation(cfg.modulation, true);
             }
             ManagerRadioView view;
@@ -924,12 +1019,16 @@ bool App::start_manager_console()
     {
         console_radio_info(reply);
     };
+    handlers.radio_caps_info = [this](ManagerConsoleReply reply)
+    {
+        console_radio_caps_info(reply);
+    };
     handlers.radio_reset = [this](uint8_t id, ManagerConsoleReply reply)
     {
         console_radio_reset(id, reply);
     };
-    handlers.radio_tx = [this](const ManagerRadioUpdate& patch,
-                               ManagerConsoleReply reply)
+    handlers.radio_tx =
+        [this](const ManagerRadioUpdate& patch, ManagerConsoleReply reply)
     {
         console_radio_tx(patch, reply);
     };
@@ -974,6 +1073,10 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
             {
                 done(true);
             }
+        },
+        [this](const MplaneResult& caps)
+        {
+            apply_radio_caps_mplane(caps);
         });
 }
 
@@ -1307,6 +1410,10 @@ int App::run()
                     radio_manager_.on_phy_programmed();
                     LOG_INF("console ready %s:%u", cfg.device.c_str(),
                             cfg.console_port);
+                },
+                [this](const MplaneResult& caps)
+                {
+                    apply_radio_caps_mplane(caps);
                 });
         }
         if (!console_ok)

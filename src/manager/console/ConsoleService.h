@@ -15,7 +15,7 @@ namespace winject
 
 // Local UDP console for runtime manager controls (not the radio console).
 // Binds console_in for commands; always sends replies to console_out.
-// Protocol: docs/manager.md
+// Protocol: docs/mplane.md
 class ConsoleService
 {
 public:

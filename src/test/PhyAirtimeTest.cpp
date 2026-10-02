@@ -2,9 +2,9 @@
 
 #include <gtest/gtest.h>
 
-using winject::PhyMode;
 using winject::phy_mode_from_name;
 using winject::phy_txtime_us;
+using winject::PhyMode;
 
 namespace
 {
@@ -38,11 +38,10 @@ TEST(PhyAirtimeTest, FiveGhzOmitsSignalExtension)
 TEST(PhyAirtimeTest, EveryTableNameResolves)
 {
     const char* names[] = {
-        "DSS_1M_L",       "DSS_2M_S",       "DSS_2M_L",       "CCK_5M_L",
-        "CCK_5M_S",       "CCK_11M_L",      "CCK_11M_S",      "OFDM_6M",
-        "OFDM_9M",        "OFDM_12M",       "OFDM_18M",       "OFDM_24M",
-        "OFDM_36M",       "OFDM_48M",       "OFDM_54M",       "OFDM_MCS0_LGI",
-        "OFDM_MCS7_SGI",
+        "DSS_1M_L",      "DSS_2M_S",      "DSS_2M_L", "CCK_5M_L", "CCK_5M_S",
+        "CCK_11M_L",     "CCK_11M_S",     "OFDM_6M",  "OFDM_9M",  "OFDM_12M",
+        "OFDM_18M",      "OFDM_24M",      "OFDM_36M", "OFDM_48M", "OFDM_54M",
+        "OFDM_MCS0_LGI", "OFDM_MCS7_SGI",
     };
     for (const char* n : names)
     {

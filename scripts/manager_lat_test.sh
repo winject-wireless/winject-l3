@@ -198,7 +198,7 @@ start_managers() {
   return 1
 }
 
-echo "configuring radios (fixed forward ports 9210/9220)..."
+echo "configuring radios (radio d-plane: inject 9000, forward 9210)..."
 python3 "$ROOT/scripts/prepare_radios_for_manager.py" \
   --a "$RADIO_A" --b "$RADIO_B" --host "$HOST_IP" --verbose "${PREP_EXTRA[@]+"${PREP_EXTRA[@]}"}" \
   || exit 1

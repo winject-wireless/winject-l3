@@ -12,7 +12,7 @@
 namespace winject
 {
 
-// Snapshot of one upstream for list / OK responses (manager.md).
+// Snapshot of one upstream for list / OK responses (mplane.md).
 struct ManagerUpstreamUpdate
 {
     uint8_t id = 0;
@@ -51,6 +51,7 @@ struct ManagerUpstreamRxStatView
     int fec_n = 0;
     uint64_t rxbyt = 0;
     uint64_t rxpkt = 0;
+    uint64_t rx_oversize = 0;
     uint64_t rxgap = 0;
     uint64_t fec_rec = 0;
     uint64_t fec_lost = 0;
@@ -131,6 +132,7 @@ struct ManagerConsoleHandlers
                        std::vector<ManagerMetricView>* out, std::string* error)>
         get_metrics;
     std::function<void(ManagerConsoleReply reply)> radio_info;
+    std::function<void(ManagerConsoleReply reply)> radio_caps_info;
     std::function<void(const ManagerRadioUpdate& patch,
                        ManagerConsoleReply reply)>
         radio_tx;

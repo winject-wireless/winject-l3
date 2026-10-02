@@ -4,6 +4,13 @@
 
 using namespace winject;
 
+TEST(NetUtilTest, PayloadLimitsMatchRadioDefs)
+{
+    EXPECT_EQ(k_wifi_payload_max, static_cast<size_t>(WIFI_PAYLOAD_MAX));
+    EXPECT_EQ(k_stream_payload_max, 1445u);
+    EXPECT_LE(WIFI_RADIO_INJECT_MAX + 28, 1500);
+}
+
 TEST(NetUtilTest, ParseBus)
 {
     uint8_t bus = 0;

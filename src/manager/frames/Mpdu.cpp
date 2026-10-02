@@ -213,7 +213,7 @@ bool Mpdu::rescan()
         return false;
     }
     const size_t payload = buffer_size() - hdr_len;
-    if (payload > WIFI_PAYLOAD_MAX)
+    if (payload > WIFI_RX_PAYLOAD_MAX)
     {
         return false;
     }
@@ -297,7 +297,7 @@ bool Mpdu::validate_slot_payload_layout() const
     }
     for (int i = 0; i < WIFI_PDU_SLOTS; i++)
     {
-        if (slot_cache_[i] > WIFI_PAYLOAD_MAX)
+        if (slot_cache_[i] > WIFI_RX_PAYLOAD_MAX)
         {
             return false;
         }

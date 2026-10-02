@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage-by-stage drop attribution for winject A↔B (USB air + radio + manager).
 
-Snaps radio `status` and manager `gci` before/after each unidirectional phase,
+Snaps radio `tx_info` / `rx_info` and manager `gci` before/after each unidirectional phase,
 captures winject MPDUs on a USB monitor iface, and prints where counts diverge.
 
     sudo ...  # monitor iface must already be in monitor mode on the radio channel
@@ -55,92 +55,15 @@ def grab_int(text: str, key: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def grab_wifi_accept(text: str) -> int:
-    if re.search(r"(?:^|\s)wifi_accept=\d", text):
-        return grab_int(text, "wifi_accept")
-    return grab_int(text, "udp_accept")
-
-
-@dataclass
-class RadioSnap:
-    raw: str
-    inject_ok: int = 0
-    inject_fail: int = 0
-    udp_tx: int = 0
-    wifi_accept: int = 0
-    udp_fwd: int = 0
-    drop_crc: int = 0
-    drop_tx_pool: int = 0
-    drop_tx_q: int = 0
-    drop_rx_pool: int = 0
-    drop_rx_q: int = 0
-    drop_send_fail: int = 0
-    retry_nomem: int = 0
-    eth_rx_cb: int = 0
-    eth_inject_l2: int = 0
-    eth_inject_len_drop: int = 0
-    eth_inject_null_sink: int = 0
-
-    @classmethod
-    def from_status(cls, text: str) -> "RadioSnap":
-        ch_tx = next((l for l in text.splitlines() if l.startswith("channel_tx")), "")
-        ch_rx = next((l for l in text.splitlines() if l.startswith("channel_rx")), "")
-        eth_line = next(
-            (l for l in text.splitlines() if l.startswith("channels_eth")), ""
-        )
-        tx_line = next((l for l in text.splitlines() if l.startswith("channels_tx")), "")
-        rx_line = next((l for l in text.splitlines() if l.startswith("channels_rx")), "")
-        src_tx = ch_tx or text
-        src_rx = ch_rx or text
-        return cls(
-            raw=text,
-            inject_ok=grab_int(src_tx, "inject_ok"),
-            inject_fail=grab_int(src_tx, "inject_fail"),
-            udp_tx=grab_int(src_tx, "udp_tx"),
-            wifi_accept=grab_wifi_accept(src_rx),
-            udp_fwd=grab_int(src_rx, "udp_fwd"),
-            drop_crc=grab_int(ch_rx, "drop_crc_error"),
-            drop_tx_pool=grab_int(tx_line, "drop_no_pkt_pool"),
-            drop_tx_q=grab_int(tx_line, "drop_queue_full"),
-            drop_rx_pool=grab_int(ch_rx, "drop_no_pkt_pool"),
-            drop_rx_q=grab_int(ch_rx, "drop_queue_full"),
-            drop_send_fail=grab_int(rx_line, "drop_send_fail"),
-            retry_nomem=grab_int(src_tx, "retry_nomem"),
-            eth_rx_cb=grab_int(eth_line or text, "eth_rx_cb"),
-            eth_inject_l2=grab_int(eth_line or text, "eth_inject_l2"),
-            eth_inject_len_drop=grab_int(eth_line or text, "eth_inject_len_drop"),
-            eth_inject_null_sink=grab_int(eth_line or text, "eth_inject_null_sink"),
-        )
-
-
-def delta_radio(a: RadioSnap, b: RadioSnap) -> dict[str, int]:
-    keys = [
-        "inject_ok",
-        "inject_fail",
-        "udp_tx",
-        "wifi_accept",
-        "udp_fwd",
-        "drop_crc",
-        "drop_tx_pool",
-        "drop_tx_q",
-        "drop_rx_pool",
-        "drop_rx_q",
-        "drop_send_fail",
-        "retry_nomem",
-        "eth_rx_cb",
-        "eth_inject_l2",
-        "eth_inject_len_drop",
-        "eth_inject_null_sink",
-    ]
-    out: dict[str, int] = {}
-    for k in keys:
-        d = getattr(b, k) - getattr(a, k)
-        if d < 0:
-            # Counters are monotonic unless the radio rebooted or status was truncated.
-            out[k] = 0
-        else:
-            out[k] = d
-    return out
+from radio_stats import (
+    delta as radio_delta,
+    firmware_has_metrics,
+    format_stages,
+    mgr_delta,
+    read as radio_read,
+    residual_checks,
+    stages as radio_stages,
+)
 
 
 def mgr_gci(bind: tuple[str, int], dest: tuple[str, int], timeout: float = 2.0) -> str:
@@ -223,8 +146,8 @@ def count_pcap_buses(path: Path) -> dict[int, int]:
 
 @dataclass
 class DropPathSnap:
-    radio_tx: RadioSnap
-    radio_rx: RadioSnap
+    radio_tx: dict
+    radio_rx: dict
     mgr_tx_stream: dict[str, int]
     mgr_rx_stream: dict[str, int]
     mgr_radio_tx_pkt: int
@@ -236,8 +159,8 @@ class DropPathDelta:
     host_sent: int = 0
     host_recv: int = 0
     air: int = 0
-    radio_tx: dict[str, int] = field(default_factory=dict)
-    radio_rx: dict[str, int] = field(default_factory=dict)
+    radio_tx_delta: dict = field(default_factory=dict)
+    radio_rx_delta: dict = field(default_factory=dict)
     mgr_tx: dict[str, int] = field(default_factory=dict)
     mgr_rx: dict[str, int] = field(default_factory=dict)
     mgr_radio_tx_pkt: int = 0
@@ -259,8 +182,8 @@ def capture_drop_path_snap(
     mgr_tx_stream: int,
     mgr_rx_stream: int,
 ) -> DropPathSnap:
-    ra = RadioSnap.from_status(cons(tx_radio, "status"))
-    rb = RadioSnap.from_status(cons(rx_radio, "status"))
+    ra = radio_read(tx_radio)
+    rb = radio_read(rx_radio)
     gci_tx = mgr_gci(*mgr_tx_ports)
     gci_rx = mgr_gci(*mgr_rx_ports)
     st_tx = parse_gci_stream(gci_tx, mgr_tx_stream)
@@ -285,12 +208,28 @@ def drop_path_delta(
     air: int = 0,
 ) -> DropPathDelta:
     mgr_keys = ("tx_pkt", "air_tx_pkt", "drop_txq", "rx_pkt", "rx_pkt_loss")
+    mgr_tx_before = {
+        "radio_tx_pkt": before.mgr_radio_tx_pkt,
+        "radio_rx_pkt": 0,
+    }
+    mgr_tx_after = {
+        "radio_tx_pkt": after.mgr_radio_tx_pkt,
+        "radio_rx_pkt": 0,
+    }
+    mgr_rx_before = {
+        "radio_tx_pkt": 0,
+        "radio_rx_pkt": before.mgr_radio_rx_pkt,
+    }
+    mgr_rx_after = {
+        "radio_tx_pkt": 0,
+        "radio_rx_pkt": after.mgr_radio_rx_pkt,
+    }
     return DropPathDelta(
         host_sent=host_sent,
         host_recv=host_recv,
         air=air,
-        radio_tx=delta_radio(before.radio_tx, after.radio_tx),
-        radio_rx=delta_radio(before.radio_rx, after.radio_rx),
+        radio_tx_delta=radio_delta(before.radio_tx, after.radio_tx),
+        radio_rx_delta=radio_delta(before.radio_rx, after.radio_rx),
         mgr_tx={
             k: after.mgr_tx_stream.get(k, 0) - before.mgr_tx_stream.get(k, 0)
             for k in mgr_keys
@@ -299,64 +238,46 @@ def drop_path_delta(
             k: after.mgr_rx_stream.get(k, 0) - before.mgr_rx_stream.get(k, 0)
             for k in mgr_keys
         },
-        mgr_radio_tx_pkt=after.mgr_radio_tx_pkt - before.mgr_radio_tx_pkt,
-        mgr_radio_rx_pkt=after.mgr_radio_rx_pkt - before.mgr_radio_rx_pkt,
+        mgr_radio_tx_pkt=mgr_delta(mgr_tx_before, mgr_tx_after)["radio_tx_pkt"],
+        mgr_radio_rx_pkt=mgr_delta(mgr_rx_before, mgr_rx_after)["radio_rx_pkt"],
     )
 
 
 def print_drop_path_stages(label: str, pr: DropPathDelta) -> None:
-    air = pr.air
-    on_air = pr.radio_tx["inject_ok"] if air <= 0 else air
-    stages = [
-        ("host→mgr_app", pr.host_sent, pr.mgr_tx["tx_pkt"]),
-        (
-            "mgr_app→air_pull",
-            pr.mgr_tx["tx_pkt"] - pr.mgr_tx["drop_txq"],
-            pr.mgr_tx["air_tx_pkt"],
-        ),
-        ("air_pull→mgr_wifi", pr.mgr_tx["air_tx_pkt"], pr.mgr_radio_tx_pkt),
-        ("mgr_wifi→radio_udp", pr.mgr_radio_tx_pkt, pr.radio_tx["udp_tx"]),
-        ("radio_udp→inject", pr.radio_tx["udp_tx"], pr.radio_tx["inject_ok"]),
-        ("inject→on_air", pr.radio_tx["inject_ok"], on_air),
-        ("on_air→peer_accept", on_air, pr.radio_rx["wifi_accept"]),
-        (
-            "accept→pool_ok",
-            pr.radio_rx["wifi_accept"],
-            pr.radio_rx["wifi_accept"] - pr.radio_rx["drop_rx_pool"],
-        ),
-        (
-            "pool_ok→fwd",
-            pr.radio_rx["wifi_accept"] - pr.radio_rx["drop_rx_pool"],
-            pr.radio_rx["udp_fwd"],
-        ),
-        ("fwd→mgr_udp", pr.radio_rx["udp_fwd"], pr.mgr_radio_rx_pkt),
-        ("mgr_udp→host", pr.mgr_rx["rx_pkt"], pr.host_recv),
-    ]
-    note = "" if air > 0 else " (on_air=inject_ok; no USB sniff)"
-    print(f"\n-- {label} drop stages{note} (left−right = drop at stage) --")
-    for name, left, right in stages:
-        drop = left - right
-        print(f"  {name:22s}  {left:5d} → {right:5d}   drop {drop:5d}")
-
-    eth_l2 = pr.radio_tx.get("eth_inject_l2", 0)
-    if eth_l2 > 0 or pr.mgr_radio_tx_pkt > 0:
-        pre_cb = max(0, pr.mgr_radio_tx_pkt - eth_l2)
-        pool_d = pr.radio_tx.get("drop_tx_pool", 0)
-        q_d = pr.radio_tx.get("drop_tx_q", 0)
-        len_d = pr.radio_tx.get("eth_inject_len_drop", 0)
-        udp = pr.radio_tx.get("udp_tx", 0)
-        accounted = udp + pool_d + q_d + len_d
-        post_l2 = max(0, eth_l2 - accounted)
+    tx_d = pr.radio_tx_delta
+    rx_d = pr.radio_rx_delta
+    if tx_d.get("rebooted") or rx_d.get("rebooted"):
+        print(f"\nwarning: {label} radio reboot during phase; stage table skipped")
+        return
+    if not firmware_has_metrics({"tx": tx_d.get("tx", {}), "rx": {}}):
         print(
-            f"\n  mgr_wifi→radio_udp split (TX radio, needs channels_eth in status):"
+            "\nradio drop counters unavailable (older firmware); "
+            "host/mgr summary only"
         )
+    else:
+        mgr_s = {"radio_tx_pkt": pr.mgr_radio_tx_pkt}
+        mgr_r = {"radio_rx_pkt": pr.mgr_radio_rx_pkt}
+        rows = radio_stages(tx_d, rx_d, mgr_s, mgr_r)
+        extras = [
+            "",
+            "-- host / manager (gci stream) --",
+            f"  host→mgr_app          {pr.host_sent:7d} → {pr.mgr_tx['tx_pkt']:7d}   "
+            f"drop {pr.host_sent - pr.mgr_tx['tx_pkt']:7d}",
+            f"  mgr_udp→host          {pr.mgr_rx['rx_pkt']:7d} → {pr.host_recv:7d}   "
+            f"drop {pr.mgr_rx['rx_pkt'] - pr.host_recv:7d}",
+        ]
+        if pr.air > 0:
+            tx_air = tx_d.get("tx", {}).get("air_pkt", 0)
+            extras.append(
+                f"\n  USB monitor on-air: {pr.air}  (S air_pkt Δ={tx_air})"
+            )
         print(
-            f"    eth_pre_cb (mgr UDP − L2 inject seen)     drop {pre_cb:5d}  "
-            "(EMAC/DMA before hijack)"
-        )
-        print(
-            f"    inject_l2→udp_tx pool_drop={pool_d} queue_drop={q_d} "
-            f"len_drop={len_d}  unaccounted_l2={post_l2}"
+            format_stages(
+                label,
+                rows,
+                residual_checks(tx_d, rx_d),
+                extras,
+            )
         )
 
 
@@ -366,8 +287,8 @@ class PhaseResult:
     host_sent: int = 0
     host_recv: int = 0
     air: int = 0
-    radio_tx: dict[str, int] = field(default_factory=dict)
-    radio_rx: dict[str, int] = field(default_factory=dict)
+    radio_tx_delta: dict = field(default_factory=dict)
+    radio_rx_delta: dict = field(default_factory=dict)
     mgr_tx: dict[str, int] = field(default_factory=dict)
     mgr_rx: dict[str, int] = field(default_factory=dict)
     mgr_radio_tx_pkt: int = 0
@@ -463,15 +384,6 @@ def main() -> int:
             "set_cca_enabled 0",
         ):
             cons(ip, c)
-    cons(args.a, "unset_upstream_tx")
-    cons(args.a, "unset_upstream_rx")
-    cons(args.b, "unset_upstream_tx")
-    cons(args.b, "unset_upstream_rx")
-    cons(args.a, "set_upstream_tx port=9000")
-    cons(args.a, f"set_upstream_rx host={args.host} port=9210")
-    cons(args.b, "set_upstream_tx port=9000")
-    cons(args.b, f"set_upstream_rx host={args.host} port=9220")
-
     log_dir = Path(tempfile.mkdtemp(prefix="drop_path_"))
     print(f"logs {log_dir}")
 
@@ -536,7 +448,7 @@ upstream-1.bind_address     = 127.0.0.1:29001
     conf_b = log_dir / "b.conf"
     # A gci: send to :2400, reply to :2401; B: :2410/:2411
     write_conf(conf_a, args.a, 9210, 2400, 2401)
-    write_conf(conf_b, args.b, 9220, 2410, 2411)
+    write_conf(conf_b, args.b, 9210, 2410, 2411)
 
     procs: list[subprocess.Popen] = []
     for conf, logn in ((conf_a, "a.log"), (conf_b, "b.log")):
@@ -656,8 +568,8 @@ upstream-1.bind_address     = 127.0.0.1:29001
             host_sent=dp.host_sent,
             host_recv=dp.host_recv,
             air=dp.air,
-            radio_tx=dp.radio_tx,
-            radio_rx=dp.radio_rx,
+            radio_tx_delta=dp.radio_tx_delta,
+            radio_rx_delta=dp.radio_rx_delta,
             mgr_tx=dp.mgr_tx,
             mgr_rx=dp.mgr_rx,
             mgr_radio_tx_pkt=dp.mgr_radio_tx_pkt,
@@ -667,36 +579,37 @@ upstream-1.bind_address     = 127.0.0.1:29001
 
         loss_pct = 100.0 * (1.0 - pr.host_recv / pr.host_sent) if pr.host_sent else 0.0
         print(f"\n=== {label} offer {args.kbps:.0f} kbps {args.duration:.1f}s  loss={loss_pct:.1f}% ===")
+        rtx = pr.radio_tx_delta.get("tx", {})
+        rrx = pr.radio_rx_delta.get("rx", {})
         print(f"host_sent          {pr.host_sent}")
         print(f"mgr_tx app_rx      {pr.mgr_tx['tx_pkt']}   (stream ingest)")
         print(f"mgr_tx drop_txq    {pr.mgr_tx['drop_txq']}   (silent txq overflow)")
-        print(f"mgr_tx air_pull    {pr.mgr_tx['air_tx_pkt']}   (scheduler→radio UDP)")
         print(f"mgr wifi_udp TX    {pr.mgr_radio_tx_pkt}   (MPDUs to radio)")
-        print(f"radio udp_tx       {pr.radio_tx['udp_tx']}   (lc_tx recv)")
-        print(f"radio drop_tx_pool {pr.radio_tx['drop_tx_pool']}")
-        print(f"radio drop_tx_q    {pr.radio_tx['drop_tx_q']}")
-        print(f"radio inject_ok    {pr.radio_tx['inject_ok']}")
-        print(f"radio inject_fail  {pr.radio_tx['inject_fail']}")
-        print(f"radio retry_nomem  {pr.radio_tx['retry_nomem']}")
+        print(f"radio ether_pkt Δ  {rtx.get('ether_pkt', 0)}")
+        print(f"radio air_pkt Δ    {rtx.get('air_pkt', 0)}")
+        print(f"radio drop_invalid {rtx.get('dropped_invalid_frame', 0)}")
+        print(f"radio drop_tx_q    {rtx.get('dropped_tx_queue', 0)}")
+        print(f"radio drop_wifi    {rtx.get('dropped_wifi', 0)}")
         print(f"USB air bus {bus:#x}  {pr.air}   (all winject {air_all})")
-        print(f"peer wifi_accept    {pr.radio_rx['wifi_accept']}")
-        print(f"peer drop_crc      {pr.radio_rx['drop_crc']}")
-        print(f"peer drop_rx_pool  {pr.radio_rx['drop_rx_pool']}")
-        print(f"peer drop_rx_q     {pr.radio_rx['drop_rx_q']}")
-        print(f"peer udp_fwd       {pr.radio_rx['udp_fwd']}")
-        print(f"peer drop_send     {pr.radio_rx['drop_send_fail']}")
+        print(f"peer air_pkt Δ     {rrx.get('air_pkt', 0)}")
+        print(f"peer drop_filter   {rrx.get('dropped_filter_mismatched', 0)}")
+        print(f"peer drop_rx_q     {rrx.get('dropped_rx_queue', 0)}")
+        print(f"peer drop_no_peer  {rrx.get('dropped_no_peer', 0)}")
+        print(f"peer drop_send     {rrx.get('dropped_send_failed', 0)}")
+        print(f"peer ether_pkt Δ   {rrx.get('ether_pkt', 0)}")
         print(f"mgr wifi_udp RX    {pr.mgr_radio_rx_pkt}")
         print(f"mgr_rx stream_rx   {pr.mgr_rx['rx_pkt']}")
         print(f"mgr_rx seq_loss    {pr.mgr_rx['rx_pkt_loss']}")
         print(f"host_recv          {pr.host_recv}")
-        rx_st = cons(rx_radio, "status")
-        m = re.search(
-            r"wifi_rx radio rssi=(-?\d+) snr=(-?\d+)", rx_st
-        )
-        if m:
-            print(f"peer rssi/snr      {m.group(1)} dBm / {m.group(2)} dB")
-        else:
-            print("peer rssi/snr      - (no winject RX yet)")
+        try:
+            rx_st = cons(rx_radio, "wifi_rx")
+            m = re.search(r"rssi=(-?\d+) snr=(-?\d+)", rx_st)
+            if m:
+                print(f"peer rssi/snr      {m.group(1)} dBm / {m.group(2)} dB")
+            else:
+                print("peer rssi/snr      - (no winject RX yet)")
+        except OSError:
+            print("peer rssi/snr      - (wifi_rx query failed)")
         if td.stderr:
             err = td.stderr.read().decode(errors="replace").strip()
             if err and "listening" not in err.lower():

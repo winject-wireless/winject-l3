@@ -48,15 +48,18 @@ public:
     }
 
     bool request(const std::string& mplane_line, DoneFn done);
-    bool request(const std::string& mplane_line, std::chrono::milliseconds timeout,
-                 DoneFn done);
+    bool request(const std::string& mplane_line,
+                 std::chrono::milliseconds timeout, DoneFn done);
 
     void on_line(const std::string& line);
     void poll_deadlines(std::chrono::steady_clock::time_point now);
     void cancel_pending();
 
     void program(const Config& cfg, DoneFn done);
-    void apply_radio(const Config& cfg, uint8_t save_slot, DoneFn done);
+    using RadioCapsFn = std::function<void(const MplaneResult&)>;
+    void apply_radio(const Config& cfg, uint8_t save_slot, DoneFn done,
+                     RadioCapsFn on_caps = {});
+    void query_radio_caps(DoneFn done);
     void query_radio_info(DoneFn done);
     void send_radio_tx(const std::string& kv_args, DoneFn done);
     void send_radio_reset(uint8_t id, DoneFn done);

@@ -41,7 +41,7 @@ void RxDemux::on_mpdu(bfcext::shared_sized_buffer mpdu_owned)
     {
         std::lock_guard<std::mutex> lock(table_.mutex());
         const size_t len = mpdu_owned.size();
-        if (mpdu_owned.empty() || len > WIFI_RADIO_INJECT_MAX)
+        if (mpdu_owned.empty() || len > WIFI_RADIO_RX_MAX)
         {
             return;
         }

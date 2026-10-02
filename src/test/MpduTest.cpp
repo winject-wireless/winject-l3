@@ -1,4 +1,5 @@
 #include "frames/Mpdu.h"
+#include "radio/RadioDefs.h"
 
 #include <gtest/gtest.h>
 #include <string.h>
@@ -10,6 +11,34 @@ namespace
 class MpduTest : public ::testing::Test
 {
 };
+
+void emit_bits(uint8_t* packed, size_t* bit, uint16_t value, int nbits)
+{
+    for (int i = 0; i < nbits; i++)
+    {
+        const size_t b = (*bit)++;
+        if ((value & 1u) != 0)
+        {
+            packed[b / 8] |= static_cast<uint8_t>(1u << (b % 8));
+        }
+        value = static_cast<uint16_t>(value >> 1);
+    }
+}
+
+void pack_slot_sizes(uint8_t addr1[6], uint8_t addr2[6],
+                     const uint16_t slot_sizes[WIFI_PDU_SLOTS])
+{
+    uint8_t packed[12] = {};
+    size_t bit = 0;
+    emit_bits(packed, &bit, 1, 1);
+    for (int i = 0; i < WIFI_PDU_SLOTS; i++)
+    {
+        const uint16_t size = static_cast<uint16_t>(slot_sizes[i] & 0x7FFu);
+        emit_bits(packed, &bit, size, 11);
+    }
+    memcpy(addr1, packed, 6);
+    memcpy(addr2, packed + 6, 6);
+}
 
 static void assign_tx_sequence(Mpdu& mpdu)
 {
@@ -80,8 +109,10 @@ TEST_F(MpduTest, SlotPayloadUsesFrameBody)
     EXPECT_EQ(s2.size(), 1u);
     EXPECT_EQ(reinterpret_cast<const uint8_t*>(s0.data())[0], 0x10);
     EXPECT_EQ(reinterpret_cast<const uint8_t*>(s2.data())[0], 0x30);
-    EXPECT_EQ(reinterpret_cast<const uint8_t*>(s0.data()), rx.ieee().frame_body);
-    EXPECT_EQ(reinterpret_cast<const uint8_t*>(s2.data()), rx.ieee().frame_body + 2);
+    EXPECT_EQ(reinterpret_cast<const uint8_t*>(s0.data()),
+              rx.ieee().frame_body);
+    EXPECT_EQ(reinterpret_cast<const uint8_t*>(s2.data()),
+              rx.ieee().frame_body + 2);
 }
 
 TEST_F(MpduTest, BindRejectsLengthMismatch)
@@ -119,6 +150,40 @@ TEST_F(MpduTest, Addr3DomainReject)
     EXPECT_TRUE(rx.is_valid_winject_frame());
     EXPECT_EQ(rx.get_domain(), 0x0001u);
     EXPECT_NE(rx.get_domain(), 0x1234u);
+}
+
+TEST_F(MpduTest, InjectMaxMpduLength)
+{
+    uint8_t buf[WIFI_RADIO_INJECT_MAX] = {};
+    Mpdu tx(buf, sizeof(buf));
+    tx.set_slot_payload(0, static_cast<uint16_t>(WIFI_PAYLOAD_MAX));
+    ASSERT_TRUE(tx.rescan());
+
+    uint8_t over[WIFI_RADIO_INJECT_MAX + 1] = {};
+    Mpdu too_large(over, sizeof(over));
+    too_large.set_slot_payload(0, static_cast<uint16_t>(WIFI_PAYLOAD_MAX + 1));
+    EXPECT_FALSE(too_large.rescan());
+}
+
+TEST_F(MpduTest, RescanAcceptsRadioRxMaxMpdu)
+{
+    uint8_t buf[WIFI_RADIO_RX_MAX] = {};
+    Mpdu build(buf, WIFI_RADIO_INJECT_MAX);
+    build.set_slot_payload(0, static_cast<uint16_t>(WIFI_PAYLOAD_MAX));
+    ASSERT_TRUE(build.rescan());
+    assign_tx_sequence(build);
+    build.set_domain(0x00BE);
+
+    uint16_t sizes[WIFI_PDU_SLOTS] = {};
+    sizes[0] = static_cast<uint16_t>(WIFI_RX_PAYLOAD_MAX);
+    pack_slot_sizes(buf + 4, buf + 10, sizes);
+    memset(buf + WIFI_RADIO_INJECT_MAX, 0,
+           WIFI_RADIO_RX_MAX - WIFI_RADIO_INJECT_MAX);
+
+    Mpdu rx(buf, WIFI_RADIO_RX_MAX);
+    ASSERT_TRUE(rx.rescan());
+    EXPECT_EQ(rx.slot_payload_size(0),
+              static_cast<uint16_t>(WIFI_RX_PAYLOAD_MAX));
 }
 
 TEST_F(MpduTest, BuildWithAddr3RoundTrip)

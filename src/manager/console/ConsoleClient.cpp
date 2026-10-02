@@ -18,8 +18,9 @@ namespace
 std::string format_radio_tx_cmd(uint16_t channel, int tx_power,
                                 const std::string& modulation)
 {
-    return "radio_tx channel=" + std::to_string(channel) + " tx_power=" +
-           std::to_string(tx_power) + " modulation=" + modulation;
+    return "radio_tx channel=" + std::to_string(channel) +
+           " tx_power=" + std::to_string(tx_power) +
+           " modulation=" + modulation;
 }
 
 }  // namespace
@@ -329,6 +330,11 @@ void ConsoleClient::send_load_slot(uint8_t slot, DoneFn done)
     request("load " + std::to_string(slot), std::move(done));
 }
 
+void ConsoleClient::query_radio_caps(DoneFn done)
+{
+    request("radio_caps_info", std::move(done));
+}
+
 void ConsoleClient::query_radio_info(DoneFn done)
 {
     request("radio_tx_info",
@@ -368,48 +374,69 @@ void ConsoleClient::send_radio_reset(uint8_t id, DoneFn done)
 }
 
 void ConsoleClient::apply_radio(const Config& cfg, uint8_t save_slot,
-                                DoneFn done)
+                                DoneFn done, RadioCapsFn on_caps)
 {
-    request(format_radio_tx_cmd(cfg.channel, cfg.power_dbm, cfg.modulation),
-            [this, cfg, save_slot, done = std::move(done)](MplaneResult r1)
+    request(
+        "radio_caps_info",
+        [this, cfg, save_slot, done = std::move(done),
+         on_caps = std::move(on_caps)](MplaneResult caps_r)
+        {
+            if (on_caps)
             {
-                if (!r1.ok)
+                on_caps(caps_r);
+            }
+            if (!caps_r.ok)
+            {
+                const std::string& e = caps_r.error;
+                if (e != "ENOSYS" && e.find("ENOSYS") == std::string::npos)
                 {
-                    done(std::move(r1));
+                    done(std::move(caps_r));
                     return;
                 }
-                send_rx_filter(
-                    cfg.domain,
-                    [this, cfg, save_slot,
-                     done = std::move(done)](MplaneResult r2)
+            }
+            request(
+                format_radio_tx_cmd(cfg.channel, cfg.power_dbm, cfg.modulation),
+                [this, cfg, save_slot, done = std::move(done)](MplaneResult r1)
+                {
+                    if (!r1.ok)
                     {
-                        if (!r2.ok)
+                        done(std::move(r1));
+                        return;
+                    }
+                    send_rx_filter(
+                        cfg.domain,
+                        [this, cfg, save_slot,
+                         done = std::move(done)](MplaneResult r2)
                         {
-                            done(std::move(r2));
-                            return;
-                        }
-                        send_save_slot(
-                            save_slot,
-                            [cfg, save_slot, done = std::move(done)](MplaneResult r3)
+                            if (!r2.ok)
                             {
-                                if (!r3.ok)
+                                done(std::move(r2));
+                                return;
+                            }
+                            send_save_slot(
+                                save_slot,
+                                [cfg, save_slot,
+                                 done = std::move(done)](MplaneResult r3)
                                 {
-                                    done(std::move(r3));
-                                    return;
-                                }
-                                LOG_INF(
-                                    "radio programmed ch=%u mod=%s pwr=%d "
-                                    "domain=%s save=%u",
-                                    cfg.channel, cfg.modulation.c_str(),
-                                    cfg.power_dbm,
-                                    domain_to_string(cfg.domain).c_str(),
-                                    static_cast<unsigned>(save_slot));
-                                MplaneResult ok;
-                                ok.ok = true;
-                                done(std::move(ok));
-                            });
-                    });
-            });
+                                    if (!r3.ok)
+                                    {
+                                        done(std::move(r3));
+                                        return;
+                                    }
+                                    LOG_INF(
+                                        "radio programmed ch=%u mod=%s "
+                                        "pwr=%d domain=%s save=%u",
+                                        cfg.channel, cfg.modulation.c_str(),
+                                        cfg.power_dbm,
+                                        domain_to_string(cfg.domain).c_str(),
+                                        static_cast<unsigned>(save_slot));
+                                    MplaneResult ok;
+                                    ok.ok = true;
+                                    done(std::move(ok));
+                                });
+                        });
+                });
+        });
 }
 
 void ConsoleClient::program(const Config& cfg, DoneFn done)

@@ -72,7 +72,9 @@ private:
     bool console_get_metrics(const std::vector<std::string>& keys,
                              std::vector<ManagerMetricView>* out,
                              std::string* error);
+    void apply_radio_caps_mplane(const MplaneResult& r);
     void console_radio_info(ManagerConsoleReply reply);
+    void console_radio_caps_info(ManagerConsoleReply reply);
     void console_radio_tx(const ManagerRadioUpdate& patch,
                           ManagerConsoleReply reply);
     void console_radio_reset(uint8_t id, ManagerConsoleReply reply);

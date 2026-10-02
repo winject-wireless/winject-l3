@@ -3,8 +3,8 @@
 
 #include "Config.h"
 #include "radio/PhyAirtime.h"
-#include "radio/RadioUpstreamTable.h"
 #include "radio/RadioDefs.h"
+#include "radio/RadioUpstreamTable.h"
 
 #include <atomic>
 #include <chrono>
@@ -29,9 +29,10 @@ public:
     explicit TxMux(RadioUpstreamTable& table);
     ~TxMux();
 
-    void configure(uint16_t domain, size_t max_data_per_tick = 4,
-                   size_t tx_burst_size = k_default_tx_burst_size,
-                   uint32_t tx_burst_interval_us = k_default_tx_burst_interval_us);
+    void configure(
+        uint16_t domain, size_t max_data_per_tick = 4,
+        size_t tx_burst_size = k_default_tx_burst_size,
+        uint32_t tx_burst_interval_us = k_default_tx_burst_interval_us);
     void set_phy_mode(const PhyMode& mode, uint32_t gap_us,
                       uint32_t rate_cap_kbps);
     bool set_max_data_per_tick(size_t max_data_per_tick);
@@ -84,7 +85,7 @@ private:
     std::chrono::steady_clock::time_point next_tx_at_{};
     size_t next = 0;
     uint8_t framed_buf[5][2048]{};
-    uint8_t mpdu_buf[1500]{};
+    uint8_t mpdu_buf[WIFI_RADIO_INJECT_MAX]{};
     uint64_t air_bytes_interval = 0;
     uint16_t bus_air_tx_[256] = {};
     std::atomic<uint64_t> tx_send_fail_mpdu_{0};

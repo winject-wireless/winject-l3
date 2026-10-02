@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve docs/ as rendered HTML with live reload on file changes."""
+"""Serve markdown from the working directory as rendered HTML with live reload."""
 
 from __future__ import annotations
 
@@ -11,8 +11,6 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, render_template_string, request, send_from_directory, stream_with_context
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DOCS_DIR = REPO_ROOT / "docs"
 DEFAULT_PORT = 8080
 POLL_INTERVAL = 0.25
 NO_CACHE_HEADERS = {
@@ -1171,12 +1169,12 @@ def main() -> None:
     parser.add_argument(
         "--docs-dir",
         type=Path,
-        default=DOCS_DIR,
-        help=f"Documentation root (default: {DOCS_DIR})",
+        default=None,
+        help="Documentation root (default: current working directory)",
     )
     args = parser.parse_args()
 
-    docs_dir = args.docs_dir.resolve()
+    docs_dir = (args.docs_dir if args.docs_dir is not None else Path.cwd()).resolve()
     if not docs_dir.is_dir():
         raise SystemExit(f"Docs directory not found: {docs_dir}")
 

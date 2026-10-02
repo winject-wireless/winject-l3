@@ -1,7 +1,7 @@
+#include "frames/Mpdu.h"
+
 #include <gtest/gtest.h>
 #include <string.h>
-
-#include "frames/Mpdu.h"
 
 using namespace winject;
 

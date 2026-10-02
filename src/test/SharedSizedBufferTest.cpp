@@ -1,8 +1,6 @@
 #include <bfcext/shared_sized_buffer.hpp>
-
-#include <gtest/gtest.h>
-
 #include <cstring>
+#include <gtest/gtest.h>
 
 TEST(SharedSizedBufferTest, CopyFromAndSubviewShareStorage)
 {

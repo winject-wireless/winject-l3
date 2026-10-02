@@ -26,6 +26,7 @@ add_executable(winject-tests
     ConfigTest.cpp
     RsBlockErasureTest.cpp
     NetUtilTest.cpp
+    UdpEndpointTest.cpp
     LCHeaderTest.cpp
     PhyAirtimeTest.cpp
     RxDemuxTest.cpp
@@ -33,6 +34,7 @@ add_executable(winject-tests
     ConsoleServiceTest.cpp
     RadioMplaneParseTest.cpp
     WifiFcsTest.cpp
+    WifiUdpTest.cpp
     MetricsRegistryTest.cpp
     SharedSizedBufferTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp

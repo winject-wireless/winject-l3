@@ -42,6 +42,8 @@ TIME=10
 BITRATE="20M"        # iperf UDP requires -b; default matches typical bench headroom
 INTERVAL=1
 IPERF_EXTRA=()
+# Largest user UDP payload the manager accepts (k_stream_payload_max).
+readonly MAX_STREAM_PAYLOAD=1445
 
 usage() {
   cat <<EOF
@@ -176,6 +178,44 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+validate_iperf_length() {
+  local i=0
+  while [[ $i -lt ${#IPERF_EXTRA[@]} ]]; do
+    local arg="${IPERF_EXTRA[$i]}"
+    local val=""
+    if [[ "$arg" == -l ]]; then
+      val="${IPERF_EXTRA[$((i + 1))]:?-l needs a length}"
+      i=$((i + 2))
+    elif [[ "$arg" == -l=* ]]; then
+      val="${arg#-l=}"
+      i=$((i + 1))
+    else
+      i=$((i + 1))
+      continue
+    fi
+    if [[ ! "$val" =~ ^[0-9]+$ ]]; then
+      echo "error: iperf -l length must be numeric (got: $val)" >&2
+      exit 1
+    fi
+    if (( val > MAX_STREAM_PAYLOAD )); then
+      echo "error: iperf -l $val exceeds manager k_stream_payload_max ($MAX_STREAM_PAYLOAD); use -l $MAX_STREAM_PAYLOAD or less" >&2
+      exit 1
+    fi
+  done
+}
+
+has_iperf_length=0
+for arg in "${IPERF_EXTRA[@]}"; do
+  if [[ "$arg" == -l || "$arg" == -l=* ]]; then
+    has_iperf_length=1
+    break
+  fi
+done
+if [[ $has_iperf_length -eq 0 ]]; then
+  IPERF_EXTRA=(-l 1400 "${IPERF_EXTRA[@]}")
+fi
+validate_iperf_length
+
 case "$DIR" in
   ab|ba|both|bidir) ;;
   *)
@@ -207,22 +247,39 @@ fi
 
 ensure_winject_manager "$ROOT"
 
-echo "configuring radios (fixed forward ports 9210/9220)..."
+echo "configuring radios (radio d-plane: inject 9000, forward 9210)..."
 python3 "$ROOT/scripts/prepare_radios_for_manager.py" \
   --a "$RADIO_A" --b "$RADIO_B" --host "$HOST_IP" --verbose \
   "${PREP_EXTRA[@]+"${PREP_EXTRA[@]}"}" || exit 1
 
 patch_conf() {
-  local file="$1" device="$2"
+  local file="$1" device="$2" gci_in="$3" gci_out="$4"
   sed -e "s/^winject\.device.*/winject.device        = ${device}/" \
       -e "s/^winject\.local_ip.*/winject.local_ip      = ${HOST_IP}/" \
       "$file"
+  printf 'manager.console_in    = 127.0.0.1:%s\n' "$gci_in"
+  printf 'manager.console_out   = 127.0.0.1:%s\n' "$gci_out"
 }
 
 CONF_A_RUN="$LOG_DIR/winject_a.conf"
 CONF_B_RUN="$LOG_DIR/winject_b.conf"
-patch_conf "$CONF_A" "$RADIO_A" >"$CONF_A_RUN"
-patch_conf "$CONF_B" "$RADIO_B" >"$CONF_B_RUN"
+patch_conf "$CONF_A" "$RADIO_A" 2400 2401 >"$CONF_A_RUN"
+patch_conf "$CONF_B" "$RADIO_B" 2410 2411 >"$CONF_B_RUN"
+
+radio_snapshot() {
+  local tag="$1"
+  python3 "$ROOT/tools/radio_stats.py" --a "$RADIO_A" --b "$RADIO_B" \
+    --save "$LOG_DIR/radio_${tag}.json" 2>/dev/null || true
+}
+
+radio_diff() {
+  local tag="$1"
+  local before="$LOG_DIR/radio_${tag}_before.json"
+  local after="$LOG_DIR/radio_${tag}_after.json"
+  if [[ -f "$before" && -f "$after" ]]; then
+    python3 "$ROOT/tools/radio_stats.py" --diff "$before" "$after" --dir "$tag" || true
+  fi
+}
 
 PID_A=""
 PID_B=""
@@ -310,11 +367,14 @@ run_client() {
   echo
   echo "========== iperf UDP $label =========="
   echo "client -c 127.0.0.1 -p $client_port → manager → iperf -s -u -p $server_port"
+  radio_snapshot "${tag}_before"
   set +e
   "$IPERF_BIN" -c 127.0.0.1 -p "$client_port" "${client_args[@]}" \
     | tee "$LOG_DIR/iperf_cli_${tag}.log"
   local rc=${PIPESTATUS[0]}
   set -e
+  radio_snapshot "${tag}_after"
+  radio_diff "$tag"
   if [[ "$rc" -ne 0 ]]; then
     echo "iperf client failed (rc=$rc)"
     echo "--- server ---"

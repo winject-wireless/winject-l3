@@ -1,11 +1,12 @@
 #ifndef WINJECT_MANAGER_WIFI_UDP_H_
 #define WINJECT_MANAGER_WIFI_UDP_H_
 
+#include "radio/RadioDefs.h"
 #include "utils/IOReactor.h"
 #include "utils/NetUtil.h"
 
-#include <bfcext/shared_sized_buffer.hpp>
 #include <atomic>
+#include <bfcext/shared_sized_buffer.hpp>
 #include <functional>
 #include <netinet/in.h>
 #include <stdint.h>
@@ -20,7 +21,8 @@ public:
     using rx = std::function<void(bfcext::shared_sized_buffer mpdu)>;
     using idle = std::function<void()>;
 
-    static constexpr size_t k_mpdu_max = 1500;
+    static constexpr size_t k_tx_mpdu_max = WIFI_RADIO_INJECT_MAX;
+    static constexpr size_t k_rx_mpdu_max = WIFI_RADIO_RX_MAX;
 
     WifiUdp() = default;
     ~WifiUdp();
@@ -41,6 +43,15 @@ public:
         return ntohs(inject.sin_port);
     }
 
+    void set_fcs_mode(RadioFcsMode mode)
+    {
+        fcs_mode_.store(mode, std::memory_order_release);
+    }
+    RadioFcsMode fcs_mode() const
+    {
+        return fcs_mode_.load(std::memory_order_acquire);
+    }
+
     struct counters_s
     {
         uint64_t tx_byte = 0;
@@ -48,6 +59,7 @@ public:
         uint64_t tx_pkt = 0;
         uint64_t rx_pkt = 0;
         uint64_t fcs_error_pkt = 0;
+        uint64_t fcs_unknown_pkt = 0;
     };
     counters_s peek_counters() const
     {
@@ -57,11 +69,13 @@ public:
         c.tx_pkt = tx_pkt_.load(std::memory_order_relaxed);
         c.rx_pkt = rx_pkt_.load(std::memory_order_relaxed);
         c.fcs_error_pkt = fcs_error_pkt_.load(std::memory_order_relaxed);
+        c.fcs_unknown_pkt = fcs_unknown_pkt_.load(std::memory_order_relaxed);
         return c;
     }
 
 private:
     void on_forward();
+    bool forward_trailer_ok(const uint8_t* frame, size_t len) const;
 
     IOReactor* reactor = nullptr;
     bfc::socket sock;
@@ -69,11 +83,13 @@ private:
     sockaddr_in inject{};
     rx on_rx;
     idle on_idle;
+    std::atomic<RadioFcsMode> fcs_mode_{RadioFcsMode::unknown};
     std::atomic<uint64_t> tx_byte_{0};
     std::atomic<uint64_t> rx_byte_{0};
     std::atomic<uint64_t> tx_pkt_{0};
     std::atomic<uint64_t> rx_pkt_{0};
     std::atomic<uint64_t> fcs_error_pkt_{0};
+    std::atomic<uint64_t> fcs_unknown_pkt_{0};
     static constexpr size_t k_recv_capacity = 2048;
     bfcext::shared_sized_buffer rx_buf_;
 };

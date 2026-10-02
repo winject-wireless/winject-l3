@@ -7,9 +7,9 @@
 #include "utils/IOReactor.h"
 #include "utils/NetUtil.h"
 
+#include <atomic>
 #include <bfc/sized_buffer.hpp>
 #include <bfc/timer.hpp>
-#include <atomic>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -53,6 +53,10 @@ public:
     uint64_t app_rx_packets() const
     {
         return app_rx_packets_.load(std::memory_order_relaxed);
+    }
+    uint64_t app_rx_oversize_pkt() const
+    {
+        return app_rx_oversize_pkt_.load(std::memory_order_relaxed);
     }
     uint64_t app_tx_bytes() const
     {
@@ -108,6 +112,7 @@ private:
     int fec_timeout_ms_ = RsBlockErasure::k_default_timeout_ms;
     std::atomic<uint64_t> app_rx_bytes_{0};
     std::atomic<uint64_t> app_rx_packets_{0};
+    std::atomic<uint64_t> app_rx_oversize_pkt_{0};
     std::atomic<uint64_t> app_tx_bytes_{0};
     std::atomic<uint64_t> app_tx_packets_{0};
     std::atomic<uint64_t> fec_air_rx_bytes_{0};

@@ -3,16 +3,15 @@
 #include "console/MplaneCorrelation.h"
 
 #include <arpa/inet.h>
+#include <atomic>
+#include <chrono>
 #include <gtest/gtest.h>
 #include <netinet/in.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-#include <atomic>
-#include <chrono>
 #include <string>
+#include <sys/socket.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 namespace
@@ -92,22 +91,20 @@ TEST(ConsoleClientTest, OutOfOrderRepliesCompleteCorrectCallbacks)
     std::string first_payload;
     std::string second_payload;
 
-    ASSERT_TRUE(client.request(
-        "ping",
-        [&](MplaneResult r)
-        {
-            EXPECT_TRUE(r.ok);
-            first_payload = r.payload;
-            ++done_count;
-        }));
-    ASSERT_TRUE(client.request(
-        "version",
-        [&](MplaneResult r)
-        {
-            EXPECT_TRUE(r.ok);
-            second_payload = r.payload;
-            ++done_count;
-        }));
+    ASSERT_TRUE(client.request("ping",
+                               [&](MplaneResult r)
+                               {
+                                   EXPECT_TRUE(r.ok);
+                                   first_payload = r.payload;
+                                   ++done_count;
+                               }));
+    ASSERT_TRUE(client.request("version",
+                               [&](MplaneResult r)
+                               {
+                                   EXPECT_TRUE(r.ok);
+                                   second_payload = r.payload;
+                                   ++done_count;
+                               }));
 
     uint8_t id1 = 0;
     uint8_t id2 = 0;
@@ -154,14 +151,13 @@ TEST(ConsoleClientTest, DeadlineCompletesWithTimeout)
     ASSERT_TRUE(client.finish_connect(&err));
 
     std::atomic<bool> timed_out{false};
-    ASSERT_TRUE(client.request(
-        "ping", std::chrono::milliseconds(5),
-        [&](MplaneResult r)
-        {
-            EXPECT_FALSE(r.ok);
-            EXPECT_EQ(r.error, "timeout");
-            timed_out = true;
-        }));
+    ASSERT_TRUE(client.request("ping", std::chrono::milliseconds(5),
+                               [&](MplaneResult r)
+                               {
+                                   EXPECT_FALSE(r.ok);
+                                   EXPECT_EQ(r.error, "timeout");
+                                   timed_out = true;
+                               }));
 
     char buf[256];
     recv(srv, buf, sizeof(buf), 0);
@@ -174,5 +170,114 @@ TEST(ConsoleClientTest, DeadlineCompletesWithTimeout)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     EXPECT_TRUE(timed_out);
+    close(srv);
+}
+
+TEST(ConsoleClientTest, ApplyRadioQueriesCapsFirst)
+{
+    uint16_t port = 0;
+    const int srv = open_udp_server(&port);
+    ASSERT_GE(srv, 0);
+
+    Config cfg;
+    cfg.device = "127.0.0.1";
+    cfg.console_port = port;
+    cfg.channel = 1;
+    cfg.power_dbm = 20;
+    cfg.modulation = "OFDM_24M";
+    cfg.domain = 0x1234;
+
+    ConsoleClient client;
+    std::string err;
+    ASSERT_TRUE(client.start_connect(cfg, &err));
+    ASSERT_TRUE(client.finish_connect(&err));
+
+    std::atomic<bool> done{false};
+    std::atomic<bool> caps_cb{false};
+    client.apply_radio(
+        cfg, 0,
+        [&](MplaneResult r)
+        {
+            EXPECT_TRUE(r.ok);
+            done = true;
+        },
+        [&](const MplaneResult& caps)
+        {
+            caps_cb = true;
+            EXPECT_TRUE(caps.ok);
+        });
+
+    uint8_t id = 0;
+    std::string line;
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "radio_caps_info");
+    client.on_line("OK:" + std::to_string(id) + " radio_caps_info fcs=SIGNAL");
+
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_TRUE(line.rfind("radio_tx ", 0) == 0);
+    client.on_line("OK:" + std::to_string(id) + " " + line);
+
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_TRUE(line.rfind("rx_filter_addr3 ", 0) == 0);
+    client.on_line("OK:" + std::to_string(id));
+
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "save 0");
+    client.on_line("OK:" + std::to_string(id));
+
+    for (int i = 0; i < 50 && !done; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_TRUE(caps_cb);
+    EXPECT_TRUE(done);
+    close(srv);
+}
+
+TEST(ConsoleClientTest, ApplyRadioEnosysStillPrograms)
+{
+    uint16_t port = 0;
+    const int srv = open_udp_server(&port);
+    ASSERT_GE(srv, 0);
+
+    Config cfg;
+    cfg.device = "127.0.0.1";
+    cfg.console_port = port;
+    cfg.channel = 1;
+    cfg.power_dbm = 20;
+    cfg.modulation = "OFDM_24M";
+    cfg.domain = 0x1234;
+
+    ConsoleClient client;
+    std::string err;
+    ASSERT_TRUE(client.start_connect(cfg, &err));
+    ASSERT_TRUE(client.finish_connect(&err));
+
+    std::atomic<bool> done{false};
+    client.apply_radio(cfg, 0,
+                       [&](MplaneResult r)
+                       {
+                           EXPECT_TRUE(r.ok);
+                           done = true;
+                       });
+
+    uint8_t id = 0;
+    std::string line;
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "radio_caps_info");
+    client.on_line("NOK:" + std::to_string(id) + " ENOSYS");
+
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    client.on_line("OK:" + std::to_string(id) + " " + line);
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    client.on_line("OK:" + std::to_string(id));
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    client.on_line("OK:" + std::to_string(id));
+
+    for (int i = 0; i < 50 && !done; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_TRUE(done);
     close(srv);
 }

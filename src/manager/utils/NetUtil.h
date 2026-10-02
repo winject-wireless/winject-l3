@@ -12,7 +12,7 @@
 namespace winject
 {
 
-constexpr size_t k_wifi_payload_max = 1476;
+constexpr size_t k_wifi_payload_max = 1448;
 static_assert(k_wifi_payload_max == WIFI_PAYLOAD_MAX,
               "k_wifi_payload_max must match WIFI_PAYLOAD_MAX");
 constexpr size_t k_lc_header_len = LCHeader::k_len;

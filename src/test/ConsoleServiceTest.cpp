@@ -100,10 +100,10 @@ TEST(ConsoleParseTest, CmdIs)
 TEST(ConsoleParseTest, FecDisplay)
 {
     char buf[32];
-    EXPECT_TRUE(console_format_fec_display(FecType::none, 0, 0, buf, sizeof(buf)));
-    EXPECT_STREQ(buf, "none");
     EXPECT_TRUE(
-        console_format_fec_display(FecType::RsBlockErasure, 10, 16, buf,
-                                   sizeof(buf)));
+        console_format_fec_display(FecType::none, 0, 0, buf, sizeof(buf)));
+    EXPECT_STREQ(buf, "none");
+    EXPECT_TRUE(console_format_fec_display(FecType::RsBlockErasure, 10, 16, buf,
+                                           sizeof(buf)));
     EXPECT_STREQ(buf, "block(10,16)");
 }

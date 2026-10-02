@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import os
 import socket
 import struct
 import sys
@@ -996,7 +997,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--drop-stages",
         action="store_true",
-        help="print per-stage drop counts after each unidirectional phase (manager gci + radio status)",
+        help="print per-stage drop counts after each unidirectional phase (manager gci + radio tx_info/rx_info)",
     )
     return p.parse_args()
 
@@ -1476,17 +1477,21 @@ def main() -> int:
         except OSError as err:
             print(f"warning: drop-stages snap end failed: {err}")
 
-    def reset_radio_phase_stats(tx_radio: str, rx_radio: str) -> None:
-        for ip in (tx_radio, rx_radio):
-            try:
-                console(
-                    ip,
-                    ["reset_channel_stats", "reset_promisc_stats"],
-                    quiet=quiet,
-                    timeout=3,
-                )
-            except OSError:
-                pass
+    def save_radio_snapshots(tag: str) -> None:
+        snap_dir = os.environ.get("WINJECT_RADIO_SNAP_DIR")
+        if not snap_dir:
+            return
+        from radio_stats import mgr_get_metrics, save_snapshot, snapshot_pair
+
+        try:
+            mgr_a = mgr_get_metrics(MGR_GCI_A_BIND, MGR_GCI_A_DEST)
+            mgr_b = mgr_get_metrics(MGR_GCI_B_BIND, MGR_GCI_B_DEST)
+        except OSError as err:
+            print(f"warning: get_metrics for radio snap failed: {err}")
+            mgr_a = {}
+            mgr_b = {}
+        path = Path(snap_dir) / f"radio_{tag}.json"
+        save_snapshot(path, snapshot_pair(args.a, args.b, mgr_a, mgr_b))
 
     def take_phase(
         senders: list[tuple[tuple[str, int], bytes, Listener | TcpListener]],
@@ -1501,8 +1506,8 @@ def main() -> int:
             tx_r, rx_r, mtx_p, mrx_p, stx, srx = drop_path_meta(drop_dest)
             # Let wifi_tx / 802.11 completions drain after the prior leg.
             time.sleep(0.5)
-            reset_radio_phase_stats(tx_r, rx_r)
-            time.sleep(0.15)
+            snap_tag = "ab" if drop_dest == dest_a else "ba"
+            save_radio_snapshots(f"{snap_tag}_before")
             try:
                 drop_before = capture_drop_path_snap(tx_r, rx_r, mtx_p, mrx_p, stx, srx)
             except OSError as err:
@@ -1513,9 +1518,25 @@ def main() -> int:
             results = err.results
             if drop_before is not None and drop_dest is not None and results:
                 report_drop_stages(drop_before, drop_dest, results[0])
+                snap_tag = "ab" if drop_dest == dest_a else "ba"
+                save_radio_snapshots(f"{snap_tag}_after")
             return results, True
         if drop_before is not None and drop_dest is not None and results:
             report_drop_stages(drop_before, drop_dest, results[0])
+            snap_tag = "ab" if drop_dest == dest_a else "ba"
+            save_radio_snapshots(f"{snap_tag}_after")
+            snap_dir = os.environ.get("WINJECT_RADIO_SNAP_DIR")
+            if snap_dir:
+                from radio_stats import print_diff_run, load_snapshot
+
+                before_p = Path(snap_dir) / f"radio_{snap_tag}_before.json"
+                after_p = Path(snap_dir) / f"radio_{snap_tag}_after.json"
+                if before_p.is_file() and after_p.is_file():
+                    print_diff_run(
+                        load_snapshot(before_p),
+                        load_snapshot(after_p),
+                        snap_tag,
+                    )
         return results, False
 
     def print_snap(

@@ -10,6 +10,31 @@
 namespace winject
 {
 
+namespace
+{
+
+uint32_t load_le32(const uint8_t* p)
+{
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) |
+           (static_cast<uint32_t>(p[3]) << 24);
+}
+
+}  // namespace
+
+bool WifiUdp::forward_trailer_ok(const uint8_t* frame, size_t len) const
+{
+    switch (fcs_mode())
+    {
+        case RadioFcsMode::actual:
+            return wifi_fcs_matches(frame, len);
+        case RadioFcsMode::signal:
+            return load_le32(frame + len - 4) == 0;
+        default:
+            return false;
+    }
+}
+
 WifiUdp::~WifiUdp()
 {
     close();
@@ -91,7 +116,7 @@ bool WifiUdp::send(const uint8_t* mpdu, size_t len)
     {
         return false;
     }
-    if (len < 24 || len > k_mpdu_max)
+    if (len < 24 || len > k_tx_mpdu_max)
     {
         return false;
     }
@@ -149,12 +174,17 @@ void WifiUdp::on_forward()
         rx_pkt_.fetch_add(1, std::memory_order_relaxed);
         rx_byte_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
         const size_t len = static_cast<size_t>(n);
-        if (len < 28 || len > k_mpdu_max + 4)
+        if (len < 28 || len > k_rx_mpdu_max + 4)
         {
             continue;
         }
         const uint8_t* frame = reinterpret_cast<const uint8_t*>(rx_buf_.data());
-        if (!wifi_fcs_matches(frame, len))
+        if (fcs_mode() == RadioFcsMode::unknown)
+        {
+            fcs_unknown_pkt_.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        if (!forward_trailer_ok(frame, len))
         {
             fcs_error_pkt_.fetch_add(1, std::memory_order_relaxed);
             continue;

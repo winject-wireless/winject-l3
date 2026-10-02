@@ -197,6 +197,32 @@ bool Config::load(const std::string& path, std::string* error)
     {
         skip_console = *skip == "1" || *skip == "true";
     }
+    if (auto fcs = parser.arg("winject.radio_fcs"))
+    {
+        std::string v;
+        for (char c : *fcs)
+        {
+            v.push_back(
+                static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        if (v == "auto")
+        {
+            radio_fcs = RadioFcsConfig::auto_detect;
+        }
+        else if (v == "signal")
+        {
+            radio_fcs = RadioFcsConfig::signal;
+        }
+        else if (v == "actual")
+        {
+            radio_fcs = RadioFcsConfig::actual;
+        }
+        else
+        {
+            *error = "invalid winject.radio_fcs";
+            return false;
+        }
+    }
     if (auto mpt = parser.as<unsigned>("winject.max_data_per_tick"))
     {
         if (*mpt < 1 || *mpt > 32)
@@ -362,8 +388,8 @@ bool Config::load(const std::string& path, std::string* error)
         {
             if (!tx.empty() && tx != connect_address)
             {
-                *error = key_of(i, "tx") + " and " + key_of(i, "connect_address") +
-                         " conflict";
+                *error = key_of(i, "tx") + " and " +
+                         key_of(i, "connect_address") + " conflict";
                 return false;
             }
             if (tx.empty())
@@ -424,6 +450,12 @@ bool Config::load(const std::string& path, std::string* error)
     {
         return false;
     }
+    if (skip_console && radio_fcs == RadioFcsConfig::auto_detect)
+    {
+        *error =
+            "winject.skip_console requires winject.radio_fcs=signal|actual";
+        return false;
+    }
     return true;
 }
 
@@ -470,12 +502,13 @@ bool Config::validate_upstreams(const std::vector<UpstreamConfig>& upstreams,
     return true;
 }
 
-bool Config::validate_upstream_update(
-    const UpstreamConfig& current, FecType fec_type, int fec_k, int fec_n,
-    int fec_timeout_ms, size_t quanta, bool have_fec, bool have_k, bool have_n,
-    bool have_fec_timeout, bool have_quanta,
-    const std::vector<UpstreamConfig>& all, UpstreamConfig* out,
-    std::string* error)
+bool Config::validate_upstream_update(const UpstreamConfig& current,
+                                      FecType fec_type, int fec_k, int fec_n,
+                                      int fec_timeout_ms, size_t quanta,
+                                      bool have_fec, bool have_k, bool have_n,
+                                      bool have_fec_timeout, bool have_quanta,
+                                      const std::vector<UpstreamConfig>& all,
+                                      UpstreamConfig* out, std::string* error)
 {
     if (out == nullptr)
     {

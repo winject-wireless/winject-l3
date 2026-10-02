@@ -249,7 +249,14 @@ void UdpEndpoint::on_app()
         }
         if (static_cast<size_t>(n) > k_stream_payload_max)
         {
-            LOG_WRN("drop oversized udp %zd", n);
+            const uint64_t drops =
+                app_rx_oversize_pkt_.fetch_add(1, std::memory_order_relaxed) +
+                1;
+            if (drops == 1 || (drops & 1023u) == 0)
+            {
+                LOG_WRN("drop oversized udp %zd (drops=%llu)", n,
+                        static_cast<unsigned long long>(drops));
+            }
             continue;
         }
         enqueue_air(make_pkt(reinterpret_cast<const uint8_t*>(rx_buf.data()),

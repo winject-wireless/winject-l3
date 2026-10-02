@@ -30,6 +30,7 @@ constexpr const char k_help_text[] =
     "list_upstream_tx_stat|lut [ids=<u8>,...]\n"
     "get_metrics|gm [keys=<string>,...]\n"
     "radio_info|ri\n"
+    "radio_caps_info|rci\n"
     "radio_tx|rt [channel= tx_power= modulation=]\n"
     "reset|r id=<u8>\n"
     "config slot=<u8>\n";
@@ -299,7 +300,8 @@ bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
     if (!handlers.add_upstream || !handlers.remove_upstream ||
         !handlers.list_upstream || !handlers.update_upstream ||
         !handlers.list_upstream_rx_stat || !handlers.list_upstream_tx_stat ||
-        !handlers.get_metrics || !handlers.radio_info || !handlers.radio_tx ||
+        !handlers.get_metrics || !handlers.radio_info ||
+        !handlers.radio_caps_info || !handlers.radio_tx ||
         !handlers.radio_reset || !handlers.config_slot)
     {
         return fail("invalid manager console args");
@@ -644,12 +646,14 @@ void ConsoleService::handle_line(const char* line)
                                        sizeof(fec_buf));
             char line[320];
             snprintf(line, sizeof(line),
-                     "upstream_rx_stat id=%u rxbyt=%llu rxpkt=%llu rxgap=%llu "
+                     "upstream_rx_stat id=%u rxbyt=%llu rxpkt=%llu "
+                     "rx_oversize=%llu rxgap=%llu "
                      "fec=%s fec_rec=%llu fec_lost=%llu fec_rxbyt=%llu "
                      "fec_rxpkt=%llu fec_rxgap=%llu",
                      static_cast<unsigned>(s.id),
                      static_cast<unsigned long long>(s.rxbyt),
                      static_cast<unsigned long long>(s.rxpkt),
+                     static_cast<unsigned long long>(s.rx_oversize),
                      static_cast<unsigned long long>(s.rxgap), fec_buf,
                      static_cast<unsigned long long>(s.fec_rec),
                      static_cast<unsigned long long>(s.fec_lost),
@@ -761,6 +765,26 @@ void ConsoleService::handle_line(const char* line)
             reply_nok(msg);
         };
         handlers_.radio_info(cr);
+        return;
+    }
+
+    if (console_cmd_is(cmd, "radio_caps_info", "rci"))
+    {
+        if (strtok_r(nullptr, " \t", &save) != nullptr)
+        {
+            reply_nok("INVALID_ARGUMENT");
+            return;
+        }
+        ManagerConsoleReply cr;
+        cr.send_text = [this](const std::string& text)
+        {
+            reply_ok_args(text.c_str());
+        };
+        cr.send_nok = [this](const char* msg)
+        {
+            reply_nok(msg);
+        };
+        handlers_.radio_caps_info(cr);
         return;
     }
 
