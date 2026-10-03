@@ -105,7 +105,7 @@ get_metrics keys=radio_tx_pkt,radio_rx_pkt,radio_fcs_err_pkt
 
 ## Configuration file
 
-Run the manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/`).
+Run the manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`).
 
 ### Radio and manager (`winject.*`)
 

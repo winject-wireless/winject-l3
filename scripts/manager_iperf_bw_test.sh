@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Start winject-manager on both radios and measure UDP goodput with iperf (v2)
-# through manager UDP forwarding (configuration/winject-tests/bw_{a,b}.cfg).
+# through manager UDP forwarding.
+#
+# Scenarios (--scenario, configs in configuration/winject-tests/<scenario>/):
+#   esp32    two ESP32 radios on Ethernet, managers use bw_{a,b}.cfg (default)
+#   realtek  two RTL8812AU dongles on this host: starts winject-radio-realtek
+#            with radio_{a,b}.cfg first (scripts/realtek_radios.sh), then the
+#            managers with bw_{a,b}.cfg
 #
 # Topology (A→B):
 #   iperf -c 127.0.0.1:29000 -u  → manager A UDP_SERVER → air
@@ -15,13 +21,16 @@
 #   ./scripts/manager_iperf_bw_test.sh --dir both --no-cca
 #   ./scripts/manager_iperf_bw_test.sh 192.168.253.11 192.168.253.12 192.168.253.106
 #   ./scripts/manager_iperf_bw_test.sh -- -l 1400
+#   ./scripts/manager_iperf_bw_test.sh --scenario realtek --bitrate 25M
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=ensure_manager.sh
 source "$ROOT/scripts/ensure_manager.sh"
-CONF_A="$ROOT/configuration/winject-tests/bw_a.cfg"
-CONF_B="$ROOT/configuration/winject-tests/bw_b.cfg"
+# shellcheck source=realtek_radios.sh
+source "$ROOT/scripts/realtek_radios.sh"
+SCENARIO="esp32"
+RADIO_SET=0
 LOG_DIR="${TMPDIR:-/tmp}/winject-iperf-$$"
 mkdir -p "$LOG_DIR"
 
@@ -36,7 +45,7 @@ MODULATION=""
 POWER=""
 CCA=""
 
-# Ports must match configuration/winject-tests/bw_{a,b}.cfg
+# Ports must match configuration/winject-tests/<scenario>/bw_{a,b}.cfg
 PORT_SEND_AB=29000   # manager A UDP_SERVER (client connects here for A→B)
 PORT_SEND_BA=29001   # manager B UDP_SERVER (client connects here for B→A)
 PORT_RECV_AB=9002    # manager B UDP_CLIENT target (iperf server for A→B)
@@ -57,18 +66,25 @@ Usage: $(basename "$0") [options] [-- iperf-client-args...]
 Start both winject-managers and run iperf (v2) in UDP mode over the manager
 forward path. Extra args after -- are passed to iperf -c (not -s).
 
-Radio / host:
+Scenario:
+  --scenario S      esp32 | realtek (default: $SCENARIO); configs come from
+                    configuration/winject-tests/<S>/. realtek also starts the
+                    two local winject-radio-realtek instances (needs sudo)
+
+Radio / host (esp32):
   --a IP            radio A Ethernet IP (default: $RADIO_A)
   --b IP            radio B Ethernet IP (default: $RADIO_B)
   --host IP         host IP radios send upstream_tx to (auto-detect if omitted)
-  --no-cca          disable CCA on both radios
+  --no-cca          disable CCA on both radios (not with realtek: no CCA control)
   --cca             enable CCA on both radios (default: keep the radio's)
+
+Radio PHY:
   --channel N       radio channel (default: from bw_{a,b}.cfg)
   --modulation M    radio modulation, e.g. OFDM_24M (default: from bw_{a,b}.cfg)
   --power DBM       radio TX power (default: from bw_{a,b}.cfg)
 
 The managers program the radios (PHY, CCA, domain filter) at startup; the
-script never talks to a radio directly.
+script never talks to a radio's console directly.
 
 Test selection:
   --dir DIR         ab | ba | both | bidir  (default: both)
@@ -83,6 +99,8 @@ Examples:
   $(basename "$0") --dir both --bitrate 6M --no-cca
   $(basename "$0") --dir bidir --time 20
   $(basename "$0") -- -l 1400
+  $(basename "$0") --scenario realtek --bitrate 25M
+  $(basename "$0") --scenario realtek --modulation OFDM_MCS7_SGI --bitrate 30M
 EOF
 }
 
@@ -116,20 +134,32 @@ while [[ $# -gt 0 ]]; do
       IPERF_EXTRA+=("$@")
       break
       ;;
+    --scenario)
+      SCENARIO="${2:?--scenario needs esp32|realtek}"
+      shift 2
+      ;;
+    --scenario=*)
+      SCENARIO="${1#--scenario=}"
+      shift
+      ;;
     --a)
       RADIO_A="${2:?--a needs an IP}"
+      RADIO_SET=1
       shift 2
       ;;
     --a=*)
       RADIO_A="${1#--a=}"
+      RADIO_SET=1
       shift
       ;;
     --b)
       RADIO_B="${2:?--b needs an IP}"
+      RADIO_SET=1
       shift 2
       ;;
     --b=*)
       RADIO_B="${1#--b=}"
+      RADIO_SET=1
       shift
       ;;
     --host)
@@ -251,6 +281,31 @@ if [[ $has_iperf_length -eq 0 ]]; then
 fi
 validate_iperf_length
 
+case "$SCENARIO" in
+  esp32) ;;
+  realtek)
+    # Both radios run on this host; ports differ per radio (bw_{a,b}.cfg).
+    if [[ "$RADIO_SET" -eq 1 ]]; then
+      echo "error: --a/--b do not apply to --scenario realtek (radios run on this host)" >&2
+      exit 1
+    fi
+    if [[ "$CCA" == 0 ]]; then
+      echo "error: --no-cca is not supported by the Realtek radio" >&2
+      exit 1
+    fi
+    RADIO_A=127.0.0.1
+    RADIO_B=127.0.0.1
+    HOST_IP=127.0.0.1
+    HOST_SET=1
+    ;;
+  *)
+    echo "error: --scenario must be esp32 or realtek (got: $SCENARIO)" >&2
+    exit 1
+    ;;
+esac
+CONF_A="$ROOT/configuration/winject-tests/$SCENARIO/bw_a.cfg"
+CONF_B="$ROOT/configuration/winject-tests/$SCENARIO/bw_b.cfg"
+
 case "$DIR" in
   ab|ba|both|bidir) ;;
   *)
@@ -344,6 +399,7 @@ cleanup() {
   stop_server
   if [[ -n "${PID_A:-}" ]]; then kill "$PID_A" 2>/dev/null || true; fi
   if [[ -n "${PID_B:-}" ]]; then kill "$PID_B" 2>/dev/null || true; fi
+  realtek_radios_stop
 }
 trap cleanup EXIT INT TERM
 
@@ -355,7 +411,11 @@ for p in "$PORT_RECV_AB" "$PORT_RECV_BA" "$PORT_SEND_AB" "$PORT_SEND_BA"; do
 done
 sleep 1
 
-echo "managers: A=$RADIO_A B=$RADIO_B host=$HOST_IP logs=$LOG_DIR"
+if [[ "$SCENARIO" == realtek ]]; then
+  realtek_radios_start "$ROOT" "$LOG_DIR"
+fi
+
+echo "managers [$SCENARIO]: A=$RADIO_A B=$RADIO_B host=$HOST_IP logs=$LOG_DIR"
 "$MANAGER" "$CONF_A_RUN" >"$LOG_DIR/manager_a.log" 2>&1 &
 PID_A=$!
 "$MANAGER" "$CONF_B_RUN" >"$LOG_DIR/manager_b.log" 2>&1 &

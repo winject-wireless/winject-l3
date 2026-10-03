@@ -18,10 +18,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=ensure_manager.sh
 source "$ROOT/scripts/ensure_manager.sh"
 
-CONF_UDP_A="$ROOT/configuration/winject-tests/lat_udp_a.cfg"
-CONF_UDP_B="$ROOT/configuration/winject-tests/lat_udp_b.cfg"
-CONF_TCP_A="$ROOT/configuration/winject-tests/bw_a.cfg"
-CONF_TCP_B="$ROOT/configuration/winject-tests/bw_b.cfg"
+CONF_UDP_A="$ROOT/configuration/winject-tests/esp32/lat_udp_a.cfg"
+CONF_UDP_B="$ROOT/configuration/winject-tests/esp32/lat_udp_b.cfg"
+CONF_TCP_A="$ROOT/configuration/winject-tests/esp32/bw_a.cfg"
+CONF_TCP_B="$ROOT/configuration/winject-tests/esp32/bw_b.cfg"
 LOG_DIR="${TMPDIR:-/tmp}/winject-lat-$$"
 mkdir -p "$LOG_DIR"
 

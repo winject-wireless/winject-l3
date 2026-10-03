@@ -117,7 +117,7 @@ The radio m-plane, d-plane and counters are specified in the winject-radio-esp32
 
 - **Domain** (`winject.domain`, 16-bit hex, non-zero): carried in Address 3 as `CA:FE:BA:BE:<hi>:<lo>`. The radio filters on it in its RX callback, so frames of other domains never reach the manager. Use one domain per group of cooperating managers on a channel.
 - **Bus** (`upstream-N.tx_bus` / `rx_bus`, 1–2 hex digits, non-zero, for example `b2`): carried in each slot's LC header. On TX, an upstream stamps its `tx_bus`. On RX, a slot is delivered to **every** upstream whose `rx_bus` matches. Bus 0 is not valid.
-- **Pairing:** a flow from host A to host B needs A's upstream `tx_bus` equal to B's upstream `rx_bus`. A bidirectional pair uses two buses, for example A `tx_bus=b2 rx_bus=a1` and B `tx_bus=a1 rx_bus=b2`. The bench configs in `configuration/winject-tests/` use pairs `b2`/`a1` and `c3`/`d4`.
+- **Pairing:** a flow from host A to host B needs A's upstream `tx_bus` equal to B's upstream `rx_bus`. A bidirectional pair uses two buses, for example A `tx_bus=b2 rx_bus=a1` and B `tx_bus=a1 rx_bus=b2`. The bench configs in `configuration/winject-tests/<scenario>/` use pairs `b2`/`a1` and `c3`/`d4`.
 - Slot position in the MPDU has no meaning; only the LC bus routes a slot.
 
 ## Framing
