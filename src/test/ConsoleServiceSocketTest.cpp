@@ -84,12 +84,14 @@ TEST(ConsoleServiceSocketTest, SameClientIdDifferentSenders)
     ASSERT_TRUE(harness.send_line(client_b, "cmd:5 ri"));
     ASSERT_TRUE(harness.wait_for([&]() { return pending_b.size() >= 1u; }));
 
-    pending_b[0].send_text("OK from B");
+    ASSERT_TRUE(
+        harness.on_reactor([&]() { pending_b[0].send_text("OK from B"); }));
     std::string reply_b;
     ASSERT_TRUE(harness.recv_line(client_b.fd(), &reply_b));
     EXPECT_STREQ(reply_b.c_str(), "OK:5 from B\n");
 
-    pending_a[0].send_text("OK from A");
+    ASSERT_TRUE(
+        harness.on_reactor([&]() { pending_a[0].send_text("OK from A"); }));
     std::string reply_a;
     ASSERT_TRUE(harness.recv_line(client_a.fd(), &reply_a));
     EXPECT_STREQ(reply_a.c_str(), "OK:5 from A\n");
@@ -114,12 +116,14 @@ TEST(ConsoleServiceSocketTest, OutOfOrderCompletionSameSender)
     ASSERT_TRUE(harness.send_line(client, "cmd:2 rs"));
     ASSERT_TRUE(harness.wait_for([&]() { return pending.size() >= 2u; }));
 
-    pending[1].send_text("N=0 T=0\n");
+    ASSERT_TRUE(
+        harness.on_reactor([&]() { pending[1].send_text("N=0 T=0\n"); }));
     std::string reply2;
     ASSERT_TRUE(harness.recv_line(client.fd(), &reply2));
     EXPECT_EQ(reply2.rfind("OK:2 N=0 T=0", 0), 0u);
 
-    pending[0].send_text("N=1 T=0\n");
+    ASSERT_TRUE(
+        harness.on_reactor([&]() { pending[0].send_text("N=1 T=0\n"); }));
     std::string reply1;
     ASSERT_TRUE(harness.recv_line(client.fd(), &reply1));
     EXPECT_EQ(reply1.rfind("OK:1 N=1 T=0", 0), 0u);
@@ -144,17 +148,17 @@ TEST(ConsoleServiceSocketTest, RetransmitWhileInFlight)
     ASSERT_TRUE(harness.send_line(client, "cmd:3 ri"));
     ASSERT_TRUE(harness.wait_for([&]() { return radio_info_calls >= 1; }));
     ASSERT_TRUE(harness.send_line(client, "cmd:3 ri"));
-    EXPECT_EQ(radio_info_calls, 1);
+    ASSERT_TRUE(harness.on_reactor([&]() { EXPECT_EQ(radio_info_calls, 1); }));
 
-    pending.send_text("OK once");
+    ASSERT_TRUE(harness.on_reactor([&]() { pending.send_text("OK once"); }));
     std::string reply;
     ASSERT_TRUE(harness.recv_line(client.fd(), &reply));
     EXPECT_STREQ(reply.c_str(), "OK:3 once\n");
 
     ASSERT_TRUE(harness.send_line(client, "cmd:3 ri"));
     ASSERT_TRUE(harness.wait_for([&]() { return radio_info_calls >= 2; }));
-    EXPECT_EQ(radio_info_calls, 2);
-    pending.send_text("OK twice");
+    ASSERT_TRUE(harness.on_reactor([&]() { EXPECT_EQ(radio_info_calls, 2); }));
+    ASSERT_TRUE(harness.on_reactor([&]() { pending.send_text("OK twice"); }));
     ASSERT_TRUE(harness.recv_line(client.fd(), &reply));
     EXPECT_STREQ(reply.c_str(), "OK:3 twice\n");
 }
@@ -225,7 +229,7 @@ TEST(ConsoleServiceSocketTest, ResetAndInvalidArgs)
     bfc::socket client(bfc::create_udp4());
     ASSERT_TRUE(harness.send_line(client, "reset"));
     ASSERT_TRUE(harness.wait_for([&]() { return reset_calls >= 1; }));
-    pending.send_text("");
+    ASSERT_TRUE(harness.on_reactor([&]() { pending.send_text(""); }));
     std::string ok;
     ASSERT_TRUE(harness.recv_line(client.fd(), &ok));
     EXPECT_STREQ(ok.c_str(), "OK\n");
@@ -236,8 +240,9 @@ TEST(ConsoleServiceSocketTest, ResetAndInvalidArgs)
     ASSERT_TRUE(harness.send_line(client, "cmd:4 reset"));
     ASSERT_TRUE(harness.send_line(client, "cmd:4 reset"));
     ASSERT_TRUE(harness.wait_for([&]() { return reset_calls >= 2; }));
-    EXPECT_EQ(reset_calls, 2);  // second datagram is a retransmit
-    pending.send_text("");
+    // Second datagram is a retransmit.
+    ASSERT_TRUE(harness.on_reactor([&]() { EXPECT_EQ(reset_calls, 2); }));
+    ASSERT_TRUE(harness.on_reactor([&]() { pending.send_text(""); }));
     ASSERT_TRUE(harness.recv_line(client.fd(), &ok));
     EXPECT_STREQ(ok.c_str(), "OK:4\n");
 }
