@@ -14,13 +14,13 @@ class Config;
 class TxMux;
 class WifiUdp;
 
-// Owns TxMux pacing vs modulation, heartbeat, and periodic radio_info drift/reapply.
+// Owns TxMux pacing vs modulation, heartbeat, and periodic radio_info
+// drift/reapply.
 class RadioManager
 {
 public:
-    using QueryRadioInfoFn =
-        std::function<void(std::function<void(bool ok,
-                                              const ManagerRadioView& actual)>)>;
+    using QueryRadioInfoFn = std::function<void(
+        std::function<void(bool ok, const ManagerRadioView& actual)>)>;
     using ReapplyRadioFn = std::function<void(std::function<void(bool ok)>)>;
     using PingFn = std::function<void(std::function<void(bool ok)>)>;
     using DropConsoleFn = std::function<void()>;
