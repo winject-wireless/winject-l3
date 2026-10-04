@@ -303,7 +303,9 @@ struct epoll_reactor
             for (auto fd : m_pending_cleanup)
             {
                 auto it = m_fd_entries.find(fd);
-                if (it != m_fd_entries.end())
+                // Skip entries re-armed by add_read/add_write after removal.
+                if (it != m_fd_entries.end() && !it->second.read_active &&
+                    !it->second.write_active)
                 {
                     auto& entry = it->second;
                     if (entry.write_ctx.fd != -1)
@@ -421,6 +423,18 @@ public:
 
     bool rem_read_rdy(fd_t fd, cb_t done_cb = nullptr)
     {
+        // On the reactor thread, unregister now: the caller may close the fd
+        // and free the callback's owner before the deferred work would run,
+        // while an event for this fd is still pending in the current batch.
+        if (m_reactor.is_reactor_thread())
+        {
+            m_reactor.rem_read(fd);
+            if (done_cb)
+            {
+                done_cb();
+            }
+            return true;
+        }
         m_reactor.wake_up([this, fd, done_cb = std::move(done_cb)]() mutable
                           {
                               m_reactor.rem_read(fd);
@@ -444,6 +458,18 @@ public:
 
     bool rem_write_rdy(fd_t fd, cb_t done_cb = nullptr)
     {
+        // On the reactor thread, unregister now: the caller may close the fd
+        // and free the callback's owner before the deferred work would run,
+        // while an event for this fd is still pending in the current batch.
+        if (m_reactor.is_reactor_thread())
+        {
+            m_reactor.rem_write(fd);
+            if (done_cb)
+            {
+                done_cb();
+            }
+            return true;
+        }
         m_reactor.wake_up([this, fd, done_cb = std::move(done_cb)]() mutable
                           {
                               m_reactor.rem_write(fd);
