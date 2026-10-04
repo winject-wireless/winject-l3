@@ -13,6 +13,7 @@
 #include "radio/WifiUdp.h"
 #include "utils/IOReactor.h"
 #include "utils/MetricsRegistry.h"
+#include "utils/Version.h"
 
 #include <chrono>
 #include <cstdint>
@@ -78,8 +79,15 @@ private:
     void console_radio_stats(ManagerConsoleReply reply);
     void console_radio_tx(const ManagerRadioUpdate& patch,
                           ManagerConsoleReply reply);
-    void console_radio_reset(uint8_t id, ManagerConsoleReply reply);
+    void console_radio_reset(ManagerConsoleReply reply);
     void console_config_slot(uint8_t slot, ManagerConsoleReply reply);
+    bool console_radio_device(const ManagerRadioDeviceUpdate& patch,
+                              ManagerRadioDeviceView* out, std::string* error);
+    void apply_radio_dplane();
+    void apply_configured_fcs();
+    void send_radio_unavailable_nok(ManagerConsoleReply reply) const;
+    void on_radio_version(bool known, const WinjectVersion& v);
+    void log_proto_mismatch_once(const WinjectVersion& radio_ver);
 
     static constexpr int k_reconnect_ticks = 4000;
 
@@ -93,10 +101,12 @@ private:
     RxDemux rx_demux_{radio_upstream_table_};
     std::shared_ptr<WifiUdp> radio;
     std::vector<std::shared_ptr<Upstream>> upstreams;
-    in_addr device_ip{};
-    in_addr local_ip{};
     int reconnect_ticks = 0;
     bool console_ok = false;
+    bool radio_version_known_ = false;
+    WinjectVersion radio_version_{};
+    bool radio_proto_ok_ = false;
+    bool proto_mismatch_logged_ = false;
     std::chrono::steady_clock::time_point last_stats{};
     MetricsRegistry metrics_registry_;
 };

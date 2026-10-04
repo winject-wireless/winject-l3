@@ -1,4 +1,5 @@
 #include "radio/RadioDefs.h"
+#include "radio/RxEvent.h"
 #include "radio/WifiFcs.h"
 #include "radio/WifiUdp.h"
 #include "utils/IOReactor.h"
@@ -70,6 +71,21 @@ bool run_reactor_brief(IOReactor& reactor)
     return ok;
 }
 
+sockaddr_in loopback_port(uint16_t port)
+{
+    sockaddr_in a = {};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = htons(port);
+    return a;
+}
+
+void apply_dplane(WifiUdp& wifi, IOReactor& reactor, const sockaddr_in& dplane)
+{
+    wifi.set_tx_dplane(dplane);
+    wifi.post_rx_event(EventCtrlRecvSocketChange{dplane});
+}
+
 }  // namespace
 
 TEST(WifiUdpTest, SignalModeAcceptsZeroTrailer)
@@ -86,17 +102,16 @@ TEST(WifiUdpTest, SignalModeAcceptsZeroTrailer)
 
     IOReactor reactor;
     WifiUdp wifi;
-    sockaddr_in inject = {};
-    inject.sin_family = AF_INET;
-    inject.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    inject.sin_port = htons(19001);
+    const sockaddr_in dplane = loopback_port(fwd_port);
 
     int rx_calls = 0;
-    ASSERT_TRUE(wifi.open(reactor, inject, fwd_port,
+    ASSERT_TRUE(wifi.open(reactor,
                           [&](bfcext::shared_sized_buffer)
                           {
                               ++rx_calls;
                           }));
+    apply_dplane(wifi, reactor, dplane);
+    ASSERT_TRUE(run_reactor_brief(reactor));
     wifi.set_fcs_mode(RadioFcsMode::signal);
 
     sockaddr_in manager_addr = {};
@@ -133,17 +148,16 @@ TEST(WifiUdpTest, SignalModeRejectsNonZeroTrailer)
 
     IOReactor reactor;
     WifiUdp wifi;
-    sockaddr_in inject = {};
-    inject.sin_family = AF_INET;
-    inject.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    inject.sin_port = htons(19002);
+    const sockaddr_in dplane = loopback_port(fwd_port);
 
     int rx_calls = 0;
-    ASSERT_TRUE(wifi.open(reactor, inject, fwd_port,
+    ASSERT_TRUE(wifi.open(reactor,
                           [&](bfcext::shared_sized_buffer)
                           {
                               ++rx_calls;
                           }));
+    apply_dplane(wifi, reactor, dplane);
+    ASSERT_TRUE(run_reactor_brief(reactor));
     wifi.set_fcs_mode(RadioFcsMode::signal);
 
     sockaddr_in manager_addr = {};
@@ -185,12 +199,11 @@ TEST(WifiUdpTest, UnknownModeDropsAndCounts)
 
     IOReactor reactor;
     WifiUdp wifi;
-    sockaddr_in inject = {};
-    inject.sin_family = AF_INET;
-    inject.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    inject.sin_port = htons(19003);
+    const sockaddr_in dplane = loopback_port(fwd_port);
 
-    ASSERT_TRUE(wifi.open(reactor, inject, fwd_port, {}));
+    ASSERT_TRUE(wifi.open(reactor, {}));
+    apply_dplane(wifi, reactor, dplane);
+    ASSERT_TRUE(run_reactor_brief(reactor));
 
     sockaddr_in manager_addr = {};
     socklen_t manager_len = sizeof(manager_addr);
@@ -229,11 +242,9 @@ TEST(WifiUdpTest, SendEnforcesInjectMpduMax)
 
     IOReactor reactor;
     WifiUdp wifi;
-    sockaddr_in inject = {};
-    inject.sin_family = AF_INET;
-    inject.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    inject.sin_port = htons(19004);
-    ASSERT_TRUE(wifi.open(reactor, inject, fwd_port, {}));
+    const sockaddr_in dplane = loopback_port(fwd_port);
+    ASSERT_TRUE(wifi.open(reactor, {}));
+    wifi.set_tx_dplane(dplane);
 
     std::vector<uint8_t> mpdu(WIFI_RADIO_INJECT_MAX, 0x08);
     EXPECT_TRUE(wifi.send(mpdu.data(), mpdu.size()));

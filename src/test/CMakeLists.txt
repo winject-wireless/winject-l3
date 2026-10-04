@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(winject-tests CXX)
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/WinjectVersion.cmake)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/WinjectBuildVersion.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/WinjectBuildVersion.h
+    @ONLY)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -32,9 +38,14 @@ add_executable(winject-tests
     RxDemuxTest.cpp
     ConsoleClientTest.cpp
     ConsoleServiceTest.cpp
+    ConsoleServiceSocketTest.cpp
+    MplaneCorrelationTest.cpp
+    MplaneErrStringTest.cpp
     RadioMplaneParseTest.cpp
     WifiFcsTest.cpp
     WifiUdpTest.cpp
+    TxEventQueueTest.cpp
+    VersionTest.cpp
     MetricsRegistryTest.cpp
     SharedSizedBufferTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
@@ -57,10 +68,12 @@ add_executable(winject-tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/NetUtil.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiFcs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/MetricsRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/Version.cpp
 )
 
 target_include_directories(winject-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager
     ${bfc_SOURCE_DIR}/src

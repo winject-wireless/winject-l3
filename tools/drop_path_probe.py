@@ -61,13 +61,13 @@ from radio_stats import (  # noqa: E402
     stages as radio_stages,
 )
 
-Manager = tuple[Endpoint, Endpoint]
+Manager = Endpoint
 
 
 def mgr_upstream_stream(mgr: Manager, upstream_id: int) -> dict[str, int]:
     """App-side counters of one manager upstream (`lut` / `lur`)."""
-    tx = mgr_request(*mgr, f"lut ids={upstream_id}")
-    rx = mgr_request(*mgr, f"lur ids={upstream_id}")
+    tx = mgr_request(mgr, f"lut ids={upstream_id}")
+    rx = mgr_request(mgr, f"lur ids={upstream_id}")
     out = {"tx_pkt": 0, "rx_pkt": 0, "rx_pkt_loss": 0}
     for line in tx.splitlines():
         if line.startswith("upstream_tx_stat "):
@@ -148,12 +148,12 @@ def capture_drop_path_snap(
 ) -> DropPathSnap:
     """Sender/receiver radio and manager counters, all through the managers."""
     return DropPathSnap(
-        radio_tx=read_via_manager(*mgr_tx),
-        radio_rx=read_via_manager(*mgr_rx),
+        radio_tx=read_via_manager(mgr_tx),
+        radio_rx=read_via_manager(mgr_rx),
         mgr_tx_stream=mgr_upstream_stream(mgr_tx, tx_upstream),
         mgr_rx_stream=mgr_upstream_stream(mgr_rx, rx_upstream),
-        mgr_radio_tx_pkt=mgr_get_metrics(*mgr_tx).get("radio_tx_pkt", 0),
-        mgr_radio_rx_pkt=mgr_get_metrics(*mgr_rx).get("radio_rx_pkt", 0),
+        mgr_radio_tx_pkt=mgr_get_metrics(mgr_tx).get("radio_tx_pkt", 0),
+        mgr_radio_rx_pkt=mgr_get_metrics(mgr_rx).get("radio_rx_pkt", 0),
     )
 
 
@@ -334,9 +334,7 @@ def main() -> int:
     print(f"logs {log_dir}")
 
     # The managers program the radios (PHY, CCA, domain filter) at connect.
-    def write_conf(
-        path: Path, role: str, device: str, fwd: int, cons_in: int, cons_out: int
-    ) -> None:
+    def write_conf(path: Path, role: str, device: str, dplane: int, cons_in: int) -> None:
         if role == "a":
             body = f"""
 winject.device        = {device}
@@ -350,9 +348,8 @@ winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
 winject.skip_console  = 0
 winject.cca           = 0
-winject.forward_base  = {fwd}
+winject.dplane_port   = {dplane}
 manager.console_in    = 127.0.0.1:{cons_in}
-manager.console_out   = 127.0.0.1:{cons_out}
 upstream.size = 2
 upstream-0.mode             = UDP_SERVER_FORWARDING
 upstream-0.tx_bus           = b2
@@ -378,9 +375,8 @@ winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
 winject.skip_console  = 0
 winject.cca           = 0
-winject.forward_base  = {fwd}
+winject.dplane_port   = {dplane}
 manager.console_in    = 127.0.0.1:{cons_in}
-manager.console_out   = 127.0.0.1:{cons_out}
 upstream.size = 2
 upstream-0.mode             = UDP_CLIENT_FORWARDING
 upstream-0.tx_bus           = a1
@@ -398,8 +394,8 @@ upstream-1.bind_address     = 127.0.0.1:29001
     conf_a = log_dir / "a.conf"
     conf_b = log_dir / "b.conf"
     # Console ports match radio_stats.MGR_A / MGR_B.
-    write_conf(conf_a, "a", args.a, 9210, 2400, 2401)
-    write_conf(conf_b, "b", args.b, 9210, 2410, 2411)
+    write_conf(conf_a, "a", args.a, 9000, 2400)
+    write_conf(conf_b, "b", args.b, 9000, 2410)
 
     procs: list[subprocess.Popen] = []
     for conf, logn in ((conf_a, "a.log"), (conf_b, "b.log")):
@@ -519,7 +515,7 @@ upstream-1.bind_address     = 127.0.0.1:29001
         print(f"mgr_rx air_rx_gap  {pr.mgr_rx['rx_pkt_loss']}")
         print(f"host_recv          {pr.host_recv}")
         try:
-            rx_st = mgr_request(*mgr_rx, "radio_info")
+            rx_st = mgr_request(mgr_rx, "radio_info")
             m = re.search(r"rssi=(-?\d+)", rx_st)
             if m:
                 print(f"peer rssi          {m.group(1)} dBm")

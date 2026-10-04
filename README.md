@@ -20,6 +20,7 @@ configuration/          Manager configs: host_x86/, host_arm/ (video demo), winj
 scripts/                Bench scripts (bw/lat tests, ensure_manager.sh, check_guidelines.sh)
 tools/                  Python bench tools (radio_stats.py, bw_test.py, lat_test.py) and CMake toolchains
 docs/mplane.md         Manager config and m-plane (client console)
+docs/versioning.md     vX.Y.Z protocol rules and frozen `version` discovery
 docs/radio.md           Radio m-plane: commands the manager forwards vs radio-local ones
 docs/winject.md         802.11 MPDU layout, LC header, buses
 docs/radio-capa-support.md  radio_caps_info and FCS trailer modes (SIGNAL / ACTUAL)
@@ -75,13 +76,12 @@ Manager config for a Realtek radio on the same host:
 ```ini
 winject.device       = 127.0.0.1
 winject.console      = 2201        # the radio's net.console_port (not 22: sshd owns it on Linux)
-winject.inject_port  = 9000        # the radio's net.inject_port
-winject.forward_port = 9210        # the radio's net.forward_port
+winject.dplane_port  = 9000        # the radio's net.dplane_port (inject + registration + forward)
 winject.radio_fcs    = actual      # or leave unset to auto-detect; never signal
-# no winject.local_ip; no winject.cca = 0
+# no winject.cca = 0
 ```
 
-A second radio on the same host needs its own three ports. The bench pair uses 2201/9000/9210 for radio A and 2202/9003/9213 for radio B. Avoid 9001 and 9002, because `tools/bw_test.py` listens there.
+You can also set the radio at runtime with `radio_device` on the manager m-plane (`mplane`, `dplane`, `fcs`). A second radio on the same host needs distinct console and d-plane ports. The bench pair uses 2201/9000 for radio A and 2202/9003 for radio B. Avoid 9001 and 9002, because `tools/bw_test.py` listens there.
 
 Differences from the ESP32:
 

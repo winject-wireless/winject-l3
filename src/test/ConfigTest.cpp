@@ -1,5 +1,6 @@
 #include "Config.h"
 
+#include <arpa/inet.h>
 #include <cstdio>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -46,8 +47,10 @@ upstream-0.tx               = 127.0.0.1:21082
     Config cfg;
     std::string err;
     ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_EQ(cfg.device, "192.168.32.1");
-    EXPECT_EQ(cfg.console_port, 22);
+    EXPECT_TRUE(cfg.radio_device.have_mplane);
+    EXPECT_TRUE(cfg.radio_device.have_dplane);
+    EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 22);
+    EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9000);
     EXPECT_EQ(cfg.channel, 1);
     EXPECT_EQ(cfg.modulation, "OFDM_24M");
     EXPECT_EQ(cfg.power_dbm, 20);
@@ -365,7 +368,8 @@ upstream-0.tx               = 127.0.0.1:21082
         Config cfg;
         std::string err;
         ASSERT_TRUE(cfg.load(path, &err)) << err;
-        EXPECT_EQ(cfg.radio_fcs, RadioFcsConfig::signal);
+        EXPECT_FALSE(cfg.radio_device.have_mplane);
+        EXPECT_EQ(cfg.radio_device.fcs, RadioFcsConfig::signal);
         std::remove(path.c_str());
     }
     {
@@ -374,7 +378,7 @@ upstream-0.tx               = 127.0.0.1:21082
         Config cfg;
         std::string err;
         ASSERT_TRUE(cfg.load(path, &err)) << err;
-        EXPECT_EQ(cfg.radio_fcs, RadioFcsConfig::actual);
+        EXPECT_EQ(cfg.radio_device.fcs, RadioFcsConfig::actual);
         std::remove(path.c_str());
     }
     {
@@ -462,4 +466,54 @@ upstream-0.tx               = 127.0.0.1:21082
         EXPECT_NE(err.find("winject.cca"), std::string::npos);
         std::remove(path.c_str());
     }
+}
+
+TEST(ConfigTest, RadioDeviceOptional)
+{
+    const std::string path = write_conf(R"(
+winject.channel       = 1
+winject.modulation    = OFDM_24M
+winject.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)");
+    Config cfg;
+    std::string err;
+    ASSERT_TRUE(cfg.load(path, &err)) << err;
+    EXPECT_FALSE(cfg.radio_device.have_mplane);
+    EXPECT_FALSE(cfg.radio_device.have_dplane);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, LoadsRadioDeviceFromLegacyKeys)
+{
+    const std::string path = write_conf(R"(
+winject.device        = 127.0.0.1
+winject.console       = 2201
+winject.dplane_port   = 9001
+winject.channel       = 1
+winject.modulation    = OFDM_24M
+winject.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)");
+    Config cfg;
+    std::string err;
+    ASSERT_TRUE(cfg.load(path, &err)) << err;
+    EXPECT_TRUE(cfg.radio_device.have_mplane);
+    EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 2201u);
+    EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9001u);
+    std::remove(path.c_str());
 }

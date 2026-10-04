@@ -1,7 +1,9 @@
 #include "console/ConsoleClient.h"
 
+#include "console/ConsoleParse.h"
 #include "console/MplaneCorrelation.h"
 #include "utils/Log.h"
+#include "utils/Version.h"
 #include "utils/NetUtil.h"
 
 #include <errno.h>
@@ -41,30 +43,21 @@ void ConsoleClient::close()
     pending.clear();
 }
 
-bool ConsoleClient::start_connect(const Config& cfg, std::string* error)
+bool ConsoleClient::start_connect(const sockaddr_in& radio_mplane,
+                                  std::string* error)
 {
     close();
-    in_addr ip = {};
-    if (!parse_host(cfg.device, &ip))
-    {
-        *error = "cannot resolve " + cfg.device;
-        return false;
-    }
-    sockaddr_in addr = {};
-    addr.sin_family = AF_INET;
-    addr.sin_addr = ip;
-    addr.sin_port = htons(cfg.console_port);
     sock = bfc::socket(bfc::create_udp4());
     if (sock.fd() < 0)
     {
         *error = strerror(errno);
         return false;
     }
-    const int cr = sock.connect(addr);
+    const int cr = sock.connect(radio_mplane);
     if (cr < 0 && errno != EINPROGRESS)
     {
-        *error = "console " + cfg.device + ":" +
-                 std::to_string(cfg.console_port) + ": " + strerror(errno);
+        *error = "console " + console_format_ipv4_port(radio_mplane) + ": " +
+                 strerror(errno);
         close();
         return false;
     }
@@ -444,71 +437,116 @@ void ConsoleClient::send_radio_tx(const std::string& kv_args, DoneFn done)
     request("radio_tx " + kv_args, std::move(done));
 }
 
-void ConsoleClient::send_radio_reset(uint8_t id, DoneFn done)
+void ConsoleClient::send_radio_reset(DoneFn done)
 {
-    request("reset id=" + std::to_string(id), std::move(done));
+    request("reset", std::move(done));
 }
 
 void ConsoleClient::apply_radio(const Config& cfg, uint8_t save_slot,
-                                DoneFn done, RadioCapsFn on_caps)
+                                DoneFn done, RadioCapsFn on_caps,
+                                RadioVersionFn on_version)
 {
     request(
-        "radio_caps_info",
+        "version",
         [this, cfg, save_slot, done = std::move(done),
-         on_caps = std::move(on_caps)](MplaneResult caps_r)
+         on_caps = std::move(on_caps),
+         on_version = std::move(on_version)](MplaneResult ver_r)
         {
-            if (on_caps)
+            if (!ver_r.ok)
             {
-                on_caps(caps_r);
-            }
-            if (!caps_r.ok)
-            {
-                const std::string& e = caps_r.error;
-                if (e != "ENOSYS" && e.find("ENOSYS") == std::string::npos)
+                const std::string& e = ver_r.error;
+                if (e == "ENOSYS" || e.find("ENOSYS") != std::string::npos)
                 {
-                    done(std::move(caps_r));
+                    MplaneResult fail;
+                    fail.error = "EPROTO";
+                    done(std::move(fail));
                     return;
                 }
+                done(std::move(ver_r));
+                return;
+            }
+            WinjectVersion radio_ver{};
+            if (!parse_version_from_mplane(ver_r, &radio_ver))
+            {
+                MplaneResult fail;
+                fail.error = "EPROTO";
+                done(std::move(fail));
+                return;
+            }
+            if (on_version)
+            {
+                on_version(true, radio_ver);
+            }
+            if (!protocol_compatible(radio_ver, own_version()))
+            {
+                MplaneResult fail;
+                fail.error = "EPROTO";
+                done(std::move(fail));
+                return;
             }
             request(
-                format_radio_tx_cmd(cfg),
-                [this, cfg, save_slot, done = std::move(done)](MplaneResult r1)
+                "radio_caps_info",
+                [this, cfg, save_slot, done = std::move(done),
+                 on_caps = std::move(on_caps)](MplaneResult caps_r)
                 {
-                    if (!r1.ok)
+                    if (on_caps)
                     {
-                        done(std::move(r1));
-                        return;
+                        on_caps(caps_r);
                     }
-                    send_rx_filter(
-                        cfg.domain,
-                        [this, cfg, save_slot,
-                         done = std::move(done)](MplaneResult r2)
+                    if (!caps_r.ok)
+                    {
+                        const std::string& e = caps_r.error;
+                        if (e != "ENOSYS" &&
+                            e.find("ENOSYS") == std::string::npos)
                         {
-                            if (!r2.ok)
+                            done(std::move(caps_r));
+                            return;
+                        }
+                    }
+                    request(
+                        format_radio_tx_cmd(cfg),
+                        [this, cfg, save_slot,
+                         done = std::move(done)](MplaneResult r1)
+                        {
+                            if (!r1.ok)
                             {
-                                done(std::move(r2));
+                                done(std::move(r1));
                                 return;
                             }
-                            send_save_slot(
-                                save_slot,
-                                [cfg, save_slot,
-                                 done = std::move(done)](MplaneResult r3)
+                            send_rx_filter(
+                                cfg.domain,
+                                [this, cfg, save_slot,
+                                 done = std::move(done)](MplaneResult r2)
                                 {
-                                    if (!r3.ok)
+                                    if (!r2.ok)
                                     {
-                                        done(std::move(r3));
+                                        done(std::move(r2));
                                         return;
                                     }
-                                    LOG_INF(
-                                        "radio programmed ch=%u mod=%s "
-                                        "pwr=%d domain=%s save=%u",
-                                        cfg.channel, cfg.modulation.c_str(),
-                                        cfg.power_dbm,
-                                        domain_to_string(cfg.domain).c_str(),
-                                        static_cast<unsigned>(save_slot));
-                                    MplaneResult ok;
-                                    ok.ok = true;
-                                    done(std::move(ok));
+                                    send_save_slot(
+                                        save_slot,
+                                        [cfg, save_slot,
+                                         done = std::move(done)](MplaneResult r3)
+                                        {
+                                            if (!r3.ok)
+                                            {
+                                                done(std::move(r3));
+                                                return;
+                                            }
+                                            LOG_INF(
+                                                "radio programmed ch=%u mod=%s "
+                                                "pwr=%d domain=%s save=%u",
+                                                cfg.channel,
+                                                cfg.modulation.c_str(),
+                                                cfg.power_dbm,
+                                                domain_to_string(cfg.domain)
+                                                    .c_str(),
+                                                static_cast<unsigned>(
+                                                    save_slot));
+                                            MplaneResult ok;
+                                            ok.ok = true;
+                                            done(std::move(ok));
+                                        });
                                 });
                         });
                 });
@@ -518,7 +556,17 @@ void ConsoleClient::apply_radio(const Config& cfg, uint8_t save_slot,
 void ConsoleClient::program(const Config& cfg, DoneFn done)
 {
     std::string err;
-    if (!start_connect(cfg, &err) || !finish_connect(&err))
+    if (!cfg.radio_device.have_mplane)
+    {
+        MplaneResult r;
+        r.error = "no radio m-plane";
+        if (done)
+        {
+            done(std::move(r));
+        }
+        return;
+    }
+    if (!start_connect(cfg.radio_device.mplane, &err) || !finish_connect(&err))
     {
         MplaneResult r;
         r.error = err;

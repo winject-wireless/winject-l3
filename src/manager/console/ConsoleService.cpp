@@ -1,7 +1,11 @@
 #include "console/ConsoleService.h"
 
 #include "console/ConsoleParse.h"
+#include "console/MplaneCorrelation.h"
+#include "console/MplaneErrno.h"
 #include "utils/Log.h"
+#include "utils/Version.h"
+#include "WinjectBuildVersion.h"
 
 #include <chrono>
 #include <errno.h>
@@ -33,8 +37,11 @@ constexpr const char k_help_text[] =
     "radio_caps_info|rci\n"
     "radio_stats|rs\n"
     "radio_tx|rt [channel= tx_power= modulation= cca=<0|1>]\n"
-    "reset|r id=<u8>\n"
-    "config slot=<u8>\n";
+    "reset|r\n"
+    "config slot=<u8>\n"
+    "radio_device|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] "
+    "[fcs=AUTO|SIGNAL|ACTUAL]\n"
+    "version|ver\n";
 
 bool parse_optional_ids(char* save, std::vector<uint8_t>* ids, std::string* err)
 {
@@ -47,7 +54,7 @@ bool parse_optional_ids(char* save, std::vector<uint8_t>* ids, std::string* err)
         {
             if (err != nullptr)
             {
-                *err = "INVALID_ARGUMENT";
+                *err = k_einval;
             }
             return false;
         }
@@ -55,7 +62,7 @@ bool parse_optional_ids(char* save, std::vector<uint8_t>* ids, std::string* err)
         {
             if (err != nullptr)
             {
-                *err = "INVALID_ARGUMENT";
+                *err = k_einval;
             }
             return false;
         }
@@ -75,7 +82,7 @@ bool parse_optional_keys(char* save, std::vector<std::string>* keys,
         {
             if (err != nullptr)
             {
-                *err = "INVALID_ARGUMENT";
+                *err = k_einval;
             }
             return false;
         }
@@ -83,7 +90,7 @@ bool parse_optional_keys(char* save, std::vector<std::string>* keys,
         {
             if (err != nullptr)
             {
-                *err = "INVALID_ARGUMENT";
+                *err = k_einval;
             }
             return false;
         }
@@ -135,7 +142,7 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
             {
                 if (err != nullptr)
                 {
-                    *err = "INVALID_ARGUMENT";
+                    *err = k_einval;
                 }
                 return false;
             }
@@ -161,7 +168,7 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
             {
                 if (err != nullptr)
                 {
-                    *err = "INVALID_ARGUMENT";
+                    *err = k_einval;
                 }
                 return false;
             }
@@ -187,7 +194,7 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
             {
                 if (err != nullptr)
                 {
-                    *err = "INVALID_ARGUMENT";
+                    *err = k_einval;
                 }
                 return false;
             }
@@ -202,7 +209,7 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
             {
                 if (err != nullptr)
                 {
-                    *err = "INVALID_ARGUMENT";
+                    *err = k_einval;
                 }
                 return false;
             }
@@ -212,7 +219,7 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
         }
         if (err != nullptr)
         {
-            *err = "INVALID_ARGUMENT";
+            *err = k_einval;
         }
         return false;
     }
@@ -231,7 +238,7 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
     {
         if (err != nullptr)
         {
-            *err = "INVALID_ARGUMENT";
+            *err = k_einval;
         }
         return false;
     }
@@ -244,7 +251,7 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
     {
         if (err != nullptr)
         {
-            *err = "INVALID_ARGUMENT";
+            *err = k_einval;
         }
         return false;
     }
@@ -287,7 +294,6 @@ ConsoleService::~ConsoleService()
 }
 
 bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
-                           const sockaddr_in& console_out,
                            ManagerConsoleHandlers handlers, std::string* error)
 {
     auto fail = [&](const char* msg) -> bool
@@ -303,14 +309,14 @@ bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
         !handlers.list_upstream_rx_stat || !handlers.list_upstream_tx_stat ||
         !handlers.get_metrics || !handlers.radio_info ||
         !handlers.radio_caps_info || !handlers.radio_stats ||
-        !handlers.radio_tx || !handlers.radio_reset || !handlers.config_slot)
+        !handlers.radio_tx || !handlers.radio_reset || !handlers.config_slot ||
+        !handlers.radio_device)
     {
         return fail("invalid manager console args");
     }
     stop();
     this->reactor = &reactor;
     handlers_ = std::move(handlers);
-    out_addr = console_out;
     sock = bfc::socket(bfc::create_udp4());
     if (sock.fd() < 0)
     {
@@ -335,11 +341,9 @@ bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
     }
     rx_buf.reserve(k_line_max);
     sockaddr_in in_log = console_in;
-    sockaddr_in out_log = console_out;
     LOG_INF(
-        "manager console in=%s out=%s",
-        bfc::sockaddr_to_string(reinterpret_cast<sockaddr*>(&in_log)).c_str(),
-        bfc::sockaddr_to_string(reinterpret_cast<sockaddr*>(&out_log)).c_str());
+        "manager console in=%s",
+        bfc::sockaddr_to_string(reinterpret_cast<sockaddr*>(&in_log)).c_str());
     return true;
 }
 
@@ -355,10 +359,18 @@ void ConsoleService::stop()
     }
     reactor = nullptr;
     handlers_ = {};
-    out_addr = {};
+    routes_.clear();
+    in_flight_.clear();
+    next_l3_id_ = 1;
 }
 
-void ConsoleService::reply(const char* text)
+ConsoleService::PeerKey ConsoleService::peer_key(const sockaddr_in& peer)
+{
+    return (static_cast<uint64_t>(peer.sin_addr.s_addr) << 16) |
+           static_cast<uint64_t>(peer.sin_port);
+}
+
+void ConsoleService::send_to(const sockaddr_in& to, const char* text)
 {
     if (sock.fd() < 0 || text == nullptr)
     {
@@ -371,11 +383,54 @@ void ConsoleService::reply(const char* text)
     }
     const bfc::const_buffer_view view(reinterpret_cast<const std::byte*>(text),
                                       n);
-    sock.send(view, 0, reinterpret_cast<const sockaddr*>(&out_addr),
-              sizeof(out_addr));
+    sock.send(view, 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
 }
 
-void ConsoleService::reply_ok_args(const char* args)
+uint32_t ConsoleService::open_route(const sockaddr_in& peer, bool has_id,
+                                    uint8_t id)
+{
+    uint32_t l3_id = next_l3_id_++;
+    if (next_l3_id_ == 0)
+    {
+        next_l3_id_ = 1;
+    }
+    Route route;
+    route.peer = peer;
+    route.has_client_id = has_id;
+    route.client_id = id;
+    routes_[l3_id] = route;
+    if (has_id)
+    {
+        in_flight_[{peer_key(peer), id}] = l3_id;
+    }
+    return l3_id;
+}
+
+void ConsoleService::respond(uint32_t l3_id, const std::string& text)
+{
+    const auto it = routes_.find(l3_id);
+    if (it == routes_.end())
+    {
+        LOG_WRN("manager console: reply for closed or unknown l3_id %u", l3_id);
+        return;
+    }
+    const Route route = it->second;
+    routes_.erase(it);
+    if (route.has_client_id)
+    {
+        in_flight_.erase({peer_key(route.peer), route.client_id});
+    }
+    std::string wire =
+        route.has_client_id ? format_correlated_reply(route.client_id, text)
+                            : text;
+    if (!wire.empty() && wire.back() != '\n')
+    {
+        wire += '\n';
+    }
+    send_to(route.peer, wire.c_str());
+}
+
+void ConsoleService::respond_ok_args(uint32_t l3_id, const char* args)
 {
     std::string text = "OK";
     if (args != nullptr && args[0] != '\0')
@@ -383,18 +438,14 @@ void ConsoleService::reply_ok_args(const char* args)
         text += ' ';
         text += args;
     }
-    if (text.back() != '\n')
-    {
-        text += '\n';
-    }
-    reply(text.c_str());
+    respond(l3_id, text);
 }
 
-void ConsoleService::reply_nok(const char* msg)
+void ConsoleService::respond_nok(uint32_t l3_id, const char* msg)
 {
-    char buf[320];
-    snprintf(buf, sizeof(buf), "NOK %s\n", msg != nullptr ? msg : "error");
-    reply(buf);
+    std::string text = "NOK ";
+    text += msg != nullptr ? msg : "error";
+    respond(l3_id, text);
 }
 
 void ConsoleService::on_datagram()
@@ -429,9 +480,17 @@ void ConsoleService::on_datagram()
     {
         return;
     }
+    if (peer.sin_family != AF_INET ||
+        peer_len < static_cast<socklen_t>(sizeof(sockaddr_in)))
+    {
+        LOG_WRN("manager console: ignored non-IPv4 peer");
+        return;
+    }
     if (n >= static_cast<ssize_t>(k_line_max) - 1)
     {
-        reply_nok("INVALID_ARGUMENT");
+        char buf[64];
+        snprintf(buf, sizeof(buf), "NOK %s\n", k_einval);
+        send_to(peer, buf);
         return;
     }
     char* line = reinterpret_cast<char*>(rx_buf.data());
@@ -441,10 +500,48 @@ void ConsoleService::on_datagram()
     {
         return;
     }
-    handle_line(line);
+
+    uint8_t client_id = 0;
+    const char* body = line;
+    bool malformed = false;
+    const bool tagged =
+        parse_mplane_cmd(line, &client_id, &body, &malformed);
+    if (tagged && malformed)
+    {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "NOK %s\n", k_einval);
+        send_to(peer, buf);
+        return;
+    }
+    if (tagged)
+    {
+        const PeerKey pk = peer_key(peer);
+        const auto inflight = in_flight_.find({pk, client_id});
+        if (inflight != in_flight_.end())
+        {
+            LOG_WRN("manager console: drop retransmit cmd:%u", client_id);
+            return;
+        }
+    }
+    if (routes_.size() >= k_max_routes)
+    {
+        std::string nok = std::string("NOK ") + k_ebusy;
+        if (tagged)
+        {
+            nok = format_correlated_reply(client_id, nok);
+        }
+        if (nok.back() != '\n')
+        {
+            nok += '\n';
+        }
+        send_to(peer, nok.c_str());
+        return;
+    }
+    const uint32_t l3_id = open_route(peer, tagged, client_id);
+    handle_line(l3_id, body);
 }
 
-void ConsoleService::handle_line(const char* line)
+void ConsoleService::handle_line(uint32_t l3_id, const char* line)
 {
     char copy[k_line_max];
     strncpy(copy, line, sizeof(copy) - 1);
@@ -459,12 +556,47 @@ void ConsoleService::handle_line(const char* line)
 
     if (console_cmd_is(cmd, "help", "?", "h"))
     {
-        reply(k_help_text);
+        respond(l3_id, k_help_text);
         return;
     }
     if (console_cmd_is(cmd, "ping", "p"))
     {
-        reply("pong\n");
+        respond(l3_id, "pong\n");
+        return;
+    }
+    // Frozen across protocol versions: docs/mplane.md § Version discovery.
+    if (console_cmd_is(cmd, "version", "ver"))
+    {
+        if (strtok_r(nullptr, " \t", &save) != nullptr)
+        {
+            respond_nok(l3_id, k_einval);
+            return;
+        }
+        const WinjectVersion v = own_version();
+        char buf[128];
+        snprintf(buf, sizeof(buf), "version ver=%s proto=%u.%u",
+                 WINJECT_VERSION_STRING, static_cast<unsigned>(v.x),
+                 static_cast<unsigned>(v.y));
+        respond_ok_args(l3_id, buf);
+        return;
+    }
+
+    if (console_cmd_is(cmd, "radio_device", "rd"))
+    {
+        ManagerRadioDeviceUpdate patch;
+        std::string err;
+        if (!console_parse_radio_device_args(save, &patch, &err))
+        {
+            respond_nok(l3_id, err.c_str());
+            return;
+        }
+        ManagerRadioDeviceView view;
+        if (!handlers_.radio_device(patch, &view, &err))
+        {
+            respond_nok(l3_id, err.c_str());
+            return;
+        }
+        respond_ok_args(l3_id, console_format_radio_device(view).c_str());
         return;
     }
 
@@ -474,17 +606,17 @@ void ConsoleService::handle_line(const char* line)
         std::string err;
         if (!parse_upstream_spec(save, &spec, true, nullptr, &err))
         {
-            reply_nok(err.c_str());
+            respond_nok(l3_id, err.c_str());
             return;
         }
         if (!handlers_.add_upstream(spec, &err))
         {
-            reply_nok(err.empty() ? "error" : err.c_str());
+            respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
         }
         std::string args;
         append_upstream_line(&args, spec);
-        reply_ok_args(args.c_str());
+        respond_ok_args(l3_id, args.c_str());
         return;
     }
 
@@ -494,13 +626,13 @@ void ConsoleService::handle_line(const char* line)
         std::string err;
         if (!parse_optional_ids(save, &ids, &err))
         {
-            reply_nok(err.c_str());
+            respond_nok(l3_id, err.c_str());
             return;
         }
         std::vector<ManagerUpstreamView> rows;
         if (!handlers_.list_upstream(ids, &rows, &err))
         {
-            reply_nok(err.empty() ? "error" : err.c_str());
+            respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
         }
         std::string body;
@@ -512,7 +644,7 @@ void ConsoleService::handle_line(const char* line)
             append_upstream_line(&body, u);
         }
         body += '\n';
-        reply(body.c_str());
+        respond(l3_id, body.c_str());
         return;
     }
 
@@ -536,7 +668,7 @@ void ConsoleService::handle_line(const char* line)
             {
                 if (!console_parse_fec_type(value, &patch.fec))
                 {
-                    reply_nok("INVALID_ARGUMENT");
+                    respond_nok(l3_id, k_einval);
                     return;
                 }
                 patch.have_fec = true;
@@ -559,7 +691,7 @@ void ConsoleService::handle_line(const char* line)
                 int ms = 0;
                 if (!console_parse_duration_ms(value, &ms))
                 {
-                    reply_nok("INVALID_ARGUMENT");
+                    respond_nok(l3_id, k_einval);
                     return;
                 }
                 patch.fec_timeout_ms = ms;
@@ -571,30 +703,30 @@ void ConsoleService::handle_line(const char* line)
             {
                 if (v == 0)
                 {
-                    reply_nok("INVALID_ARGUMENT");
+                    respond_nok(l3_id, k_einval);
                     return;
                 }
                 patch.quanta = static_cast<size_t>(v);
                 patch.have_quanta = true;
                 continue;
             }
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         if (!got_id)
         {
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         ManagerUpstreamView out;
         if (!handlers_.update_upstream(patch, &out, &err))
         {
-            reply_nok(err.empty() ? "error" : err.c_str());
+            respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
         }
         std::string args;
         append_upstream_line(&args, out);
-        reply_ok_args(args.c_str());
+        respond_ok_args(l3_id, args.c_str());
         return;
     }
 
@@ -608,15 +740,15 @@ void ConsoleService::handle_line(const char* line)
             !console_parse_u8(value, &id) ||
             strtok_r(nullptr, " \t", &save) != nullptr)
         {
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         if (!handlers_.remove_upstream(id, &err))
         {
-            reply_nok(err.empty() ? "error" : err.c_str());
+            respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
         }
-        reply("OK\n");
+        respond(l3_id, "OK\n");
         return;
     }
 
@@ -626,13 +758,13 @@ void ConsoleService::handle_line(const char* line)
         std::string err;
         if (!parse_optional_ids(save, &ids, &err))
         {
-            reply_nok(err.c_str());
+            respond_nok(l3_id, err.c_str());
             return;
         }
         std::vector<ManagerUpstreamRxStatView> rows;
         if (!handlers_.list_upstream_rx_stat(ids, &rows, &err))
         {
-            reply_nok(err.empty() ? "error" : err.c_str());
+            respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
         }
         std::string body;
@@ -665,7 +797,7 @@ void ConsoleService::handle_line(const char* line)
             body += line;
         }
         body += '\n';
-        reply(body.c_str());
+        respond(l3_id, body.c_str());
         return;
     }
 
@@ -675,13 +807,13 @@ void ConsoleService::handle_line(const char* line)
         std::string err;
         if (!parse_optional_ids(save, &ids, &err))
         {
-            reply_nok(err.c_str());
+            respond_nok(l3_id, err.c_str());
             return;
         }
         std::vector<ManagerUpstreamTxStatView> rows;
         if (!handlers_.list_upstream_tx_stat(ids, &rows, &err))
         {
-            reply_nok(err.empty() ? "error" : err.c_str());
+            respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
         }
         std::string body;
@@ -710,7 +842,7 @@ void ConsoleService::handle_line(const char* line)
             body += line;
         }
         body += '\n';
-        reply(body.c_str());
+        respond(l3_id, body.c_str());
         return;
     }
 
@@ -720,13 +852,13 @@ void ConsoleService::handle_line(const char* line)
         std::string err;
         if (!parse_optional_keys(save, &keys, &err))
         {
-            reply_nok(err.c_str());
+            respond_nok(l3_id, err.c_str());
             return;
         }
         std::vector<ManagerMetricView> rows;
         if (!handlers_.get_metrics(keys, &rows, &err))
         {
-            reply_nok(err.empty() ? "error" : err.c_str());
+            respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
         }
         std::string body;
@@ -745,25 +877,25 @@ void ConsoleService::handle_line(const char* line)
             body += row.value;
         }
         body += '\n';
-        reply(body.c_str());
+        respond(l3_id, body.c_str());
         return;
     }
 
     if (console_cmd_is(cmd, "radio_info", "ri"))
     {
         ManagerConsoleReply cr;
-        cr.send_text = [this](const std::string& text)
+        cr.send_text = [this, l3_id](const std::string& text)
         {
             std::string out = text;
             if (!out.empty() && out.back() != '\n')
             {
                 out += '\n';
             }
-            reply(out.c_str());
+            respond(l3_id, out);
         };
-        cr.send_nok = [this](const char* msg)
+        cr.send_nok = [this, l3_id](const char* msg)
         {
-            reply_nok(msg);
+            respond_nok(l3_id, msg);
         };
         handlers_.radio_info(cr);
         return;
@@ -773,17 +905,17 @@ void ConsoleService::handle_line(const char* line)
     {
         if (strtok_r(nullptr, " \t", &save) != nullptr)
         {
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         ManagerConsoleReply cr;
-        cr.send_text = [this](const std::string& text)
+        cr.send_text = [this, l3_id](const std::string& text)
         {
-            reply_ok_args(text.c_str());
+            respond_ok_args(l3_id, text.c_str());
         };
-        cr.send_nok = [this](const char* msg)
+        cr.send_nok = [this, l3_id](const char* msg)
         {
-            reply_nok(msg);
+            respond_nok(l3_id, msg);
         };
         handlers_.radio_caps_info(cr);
         return;
@@ -793,22 +925,22 @@ void ConsoleService::handle_line(const char* line)
     {
         if (strtok_r(nullptr, " \t", &save) != nullptr)
         {
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         ManagerConsoleReply cr;
-        cr.send_text = [this](const std::string& text)
+        cr.send_text = [this, l3_id](const std::string& text)
         {
             std::string out = text;
             if (!out.empty() && out.back() != '\n')
             {
                 out += '\n';
             }
-            reply(out.c_str());
+            respond(l3_id, out);
         };
-        cr.send_nok = [this](const char* msg)
+        cr.send_nok = [this, l3_id](const char* msg)
         {
-            reply_nok(msg);
+            respond_nok(l3_id, msg);
         };
         handlers_.radio_stats(cr);
         return;
@@ -855,22 +987,22 @@ void ConsoleService::handle_line(const char* line)
                 any = true;
                 continue;
             }
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         if (!any)
         {
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         ManagerConsoleReply cr;
-        cr.send_text = [this](const std::string& text)
+        cr.send_text = [this, l3_id](const std::string& text)
         {
-            reply(text.c_str());
+            respond(l3_id, text);
         };
-        cr.send_nok = [this](const char* msg)
+        cr.send_nok = [this, l3_id](const char* msg)
         {
-            reply_nok(msg);
+            respond_nok(l3_id, msg);
         };
         handlers_.radio_tx(patch, cr);
         return;
@@ -878,43 +1010,26 @@ void ConsoleService::handle_line(const char* line)
 
     if (console_cmd_is(cmd, "reset", "r"))
     {
-        const char* value = nullptr;
-        unsigned long id = 0;
-        bool have_id = false;
-        for (char* a = strtok_r(nullptr, " \t", &save); a != nullptr;
-             a = strtok_r(nullptr, " \t", &save))
+        if (strtok_r(nullptr, " 	", &save) != nullptr)
         {
-            if (console_parse_kv(a, "id=", &value) &&
-                console_parse_u(value, &id))
-            {
-                have_id = true;
-                continue;
-            }
-            reply_nok("INVALID_ARGUMENT");
-            return;
-        }
-        if (!have_id || id > 255)
-        {
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         ManagerConsoleReply cr;
-        cr.send_text = [this, id](const std::string& text)
+        cr.send_text = [this, l3_id](const std::string& text)
         {
             if (!text.empty())
             {
-                reply(text.c_str());
+                respond(l3_id, text);
                 return;
             }
-            char args[32];
-            snprintf(args, sizeof(args), "id=%lu", id);
-            reply_ok_args(args);
+            respond_ok_args(l3_id, nullptr);
         };
-        cr.send_nok = [this](const char* msg)
+        cr.send_nok = [this, l3_id](const char* msg)
         {
-            reply_nok(msg);
+            respond_nok(l3_id, msg);
         };
-        handlers_.radio_reset(static_cast<uint8_t>(id), cr);
+        handlers_.radio_reset(cr);
         return;
     }
 
@@ -932,35 +1047,35 @@ void ConsoleService::handle_line(const char* line)
                 have_slot = true;
                 continue;
             }
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         if (!have_slot || slot > 255)
         {
-            reply_nok("INVALID_ARGUMENT");
+            respond_nok(l3_id, k_einval);
             return;
         }
         ManagerConsoleReply cr;
-        cr.send_text = [this, slot](const std::string& text)
+        cr.send_text = [this, l3_id, slot](const std::string& text)
         {
             if (!text.empty())
             {
-                reply(text.c_str());
+                respond(l3_id, text);
                 return;
             }
             char args[32];
             snprintf(args, sizeof(args), "slot=%lu", slot);
-            reply_ok_args(args);
+            respond_ok_args(l3_id, args);
         };
-        cr.send_nok = [this](const char* msg)
+        cr.send_nok = [this, l3_id](const char* msg)
         {
-            reply_nok(msg);
+            respond_nok(l3_id, msg);
         };
         handlers_.config_slot(static_cast<uint8_t>(slot), cr);
         return;
     }
 
-    reply_nok("unknown command, type help");
+    respond_nok(l3_id, k_enosys);
 }
 
 }  // namespace winject

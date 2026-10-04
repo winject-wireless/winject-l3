@@ -2,6 +2,7 @@
 #define WINJECT_MANAGER_WIFI_UDP_H_
 
 #include "radio/RadioDefs.h"
+#include "radio/RxEvent.h"
 #include "utils/IOReactor.h"
 #include "utils/NetUtil.h"
 
@@ -29,19 +30,12 @@ public:
     WifiUdp(const WifiUdp&) = delete;
     WifiUdp& operator=(const WifiUdp&) = delete;
 
-    bool open(IOReactor& reactor, const sockaddr_in& inject,
-              uint16_t forward_port, rx on_rx, idle on_idle = {});
+    bool open(IOReactor& reactor, rx on_rx, idle on_idle = {});
+    void set_tx_dplane(const sockaddr_in& dplane);
+    void post_rx_event(RxEvent ev);
     bool register_forward();
     void close();
     bool send(const uint8_t* mpdu, size_t len);
-    uint16_t forward_port() const
-    {
-        return forward_port_;
-    }
-    uint16_t inject_port() const
-    {
-        return ntohs(inject.sin_port);
-    }
 
     void set_fcs_mode(RadioFcsMode mode)
     {
@@ -76,11 +70,17 @@ public:
 private:
     void on_forward();
     bool forward_trailer_ok(const uint8_t* frame, size_t len) const;
+    void handle_rx_event(const RxEvent& ev);
+    bool set_rx_dplane(const sockaddr_in& dplane);
 
     IOReactor* reactor = nullptr;
     bfc::socket sock;
-    uint16_t forward_port_ = 0;
-    sockaddr_in inject{};
+    // TxMux TX thread only.
+    sockaddr_in tx_dplane_{};
+    bool have_tx_dplane_ = false;
+    // Reactor thread only.
+    sockaddr_in rx_dplane_{};
+    bool have_rx_dplane_ = false;
     rx on_rx;
     idle on_idle;
     std::atomic<RadioFcsMode> fcs_mode_{RadioFcsMode::unknown};

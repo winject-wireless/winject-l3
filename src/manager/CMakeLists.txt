@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
-project(winject-manager CXX)
+project(winject-manager VERSION 1.0.0 LANGUAGES CXX)
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/WinjectVersion.cmake)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/WinjectBuildVersion.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/WinjectBuildVersion.h
+    @ONLY)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,6 +22,7 @@ add_executable(winject-manager
     Config.cpp
     utils/Log.cpp
     utils/MetricsRegistry.cpp
+    utils/Version.cpp
     console/ConsoleClient.cpp
     console/MplaneCorrelation.cpp
     console/ConsoleService.cpp
@@ -39,6 +46,7 @@ add_executable(winject-manager
 
 target_include_directories(winject-manager PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${bfc_SOURCE_DIR}/src
 )

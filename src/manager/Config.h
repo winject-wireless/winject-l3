@@ -77,10 +77,20 @@ static constexpr size_t k_radio_tx_queue_depth = 20;
 static constexpr size_t k_default_tx_burst_size = k_radio_tx_queue_depth;
 static constexpr uint32_t k_default_tx_burst_interval_us = 0;
 
+// One radio the manager drives (docs/mplane.md § radio_device). Each address
+// starts unset; once set it can change but not be cleared.
+struct RadioDeviceConfig
+{
+    bool have_mplane = false;
+    sockaddr_in mplane{};  // radio m-plane (ESP32 :22, Realtek :2201)
+    bool have_dplane = false;
+    sockaddr_in dplane{};  // radio d-plane: inject, registration, forward
+    RadioFcsConfig fcs = RadioFcsConfig::auto_detect;
+};
+
 struct Config
 {
-    std::string device;
-    uint16_t console_port = 22;
+    RadioDeviceConfig radio_device;
     uint8_t channel = 1;
     std::string modulation = "DSS_1M_L";
     int8_t power_dbm = 20;
@@ -99,20 +109,13 @@ struct Config
     uint32_t tx_gap_us = 0;
     // Max DATA MPDUs emitted per 250 us scheduler tick (1–32).
     size_t max_data_per_tick = 4;
-    std::string local_ip;
-    uint16_t inject_port = 9000;
-    uint16_t forward_port = 9210;
-    uint16_t forward_base = 9210;  // legacy alias for forward_port
-    bool skip_console = false;
-    RadioFcsConfig radio_fcs = RadioFcsConfig::auto_detect;
     // DATA MPDUs per inject burst (~half radio tx queue); gap before next
     // burst.
     size_t tx_burst_size = k_default_tx_burst_size;
     uint32_t tx_burst_interval_us = k_default_tx_burst_interval_us;
-    // Local UDP management console. Empty = disabled. Both required together.
-    // console_in = bind (recv commands); console_out = dest (send replies).
+    // Local UDP management console. Empty = disabled.
+    // console_in = bind address for m-plane commands; replies go to the sender.
     std::string manager_console_in;
-    std::string manager_console_out;
     std::vector<UpstreamConfig> upstreams;
 
     bool load(const std::string& path, std::string* error);

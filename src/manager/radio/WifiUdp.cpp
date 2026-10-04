@@ -1,11 +1,13 @@
 #include "radio/WifiUdp.h"
 
+#include "console/ConsoleParse.h"
 #include "radio/WifiFcs.h"
 #include "utils/Log.h"
 
 #include <errno.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <variant>
 
 namespace winject
 {
@@ -40,26 +42,16 @@ WifiUdp::~WifiUdp()
     close();
 }
 
-bool WifiUdp::open(IOReactor& reactor, const sockaddr_in& inject,
-                   uint16_t forward_port, rx on_rx, idle on_idle)
+bool WifiUdp::open(IOReactor& reactor, rx on_rx, idle on_idle)
 {
     close();
     this->reactor = &reactor;
-    this->inject = inject;
     this->on_rx = std::move(on_rx);
     this->on_idle = std::move(on_idle);
-    forward_port_ = forward_port;
     sock = bfc::socket(bfc::create_udp4());
     if (sock.fd() < 0)
     {
         LOG_ERR("radio udp socket failed: %s", strerror(errno));
-        close();
-        return false;
-    }
-    // D-plane RX is server mode on the radio: register with an empty datagram
-    // so the radio learns our return address for forwarded MPDUs.
-    if (!register_forward())
-    {
         close();
         return false;
     }
@@ -75,23 +67,60 @@ bool WifiUdp::open(IOReactor& reactor, const sockaddr_in& inject,
     return true;
 }
 
+void WifiUdp::set_tx_dplane(const sockaddr_in& dplane)
+{
+    tx_dplane_ = dplane;
+    have_tx_dplane_ = true;
+}
+
+void WifiUdp::post_rx_event(RxEvent ev)
+{
+    // App::radio outlives reactor.run(); callback captures this safely.
+    reactor->wake_up(
+        [this, ev = std::move(ev)]()
+        {
+            handle_rx_event(ev);
+        });
+}
+
+void WifiUdp::handle_rx_event(const RxEvent& ev)
+{
+    std::visit(
+        [this](const auto& e)
+        {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, EventCtrlRecvSocketChange>)
+            {
+                set_rx_dplane(e.dplane);
+                LOG_INF("rx dplane -> %s",
+                        console_format_ipv4_port(e.dplane).c_str());
+            }
+        },
+        ev);
+}
+
+bool WifiUdp::set_rx_dplane(const sockaddr_in& dplane)
+{
+    rx_dplane_ = dplane;
+    have_rx_dplane_ = true;
+    return register_forward();
+}
+
 bool WifiUdp::register_forward()
 {
-    if (sock.fd() < 0 || forward_port_ == 0)
+    if (sock.fd() < 0 || !have_rx_dplane_)
     {
         return false;
     }
-    sockaddr_in reg = inject;
-    reg.sin_port = htons(forward_port_);
     static const uint8_t k_reg = 0;
     const bfc::const_buffer_view reg_view(
         reinterpret_cast<const std::byte*>(&k_reg), 1);
-    const ssize_t sent = sock.send(
-        reg_view, 0, reinterpret_cast<const sockaddr*>(&reg), sizeof(reg));
+    const ssize_t sent =
+        sock.send(reg_view, 0, reinterpret_cast<const sockaddr*>(&rx_dplane_),
+                  sizeof(rx_dplane_));
     if (sent < 0)
     {
-        LOG_ERR("radio dplane_rx register %u failed: %s", forward_port_,
-                strerror(errno));
+        LOG_ERR("radio dplane_rx register failed: %s", strerror(errno));
         return false;
     }
     return true;
@@ -107,12 +136,13 @@ void WifiUdp::close()
         }
         bfc::socket(std::move(sock));
     }
-    forward_port_ = 0;
+    have_tx_dplane_ = false;
+    have_rx_dplane_ = false;
 }
 
 bool WifiUdp::send(const uint8_t* mpdu, size_t len)
 {
-    if (sock.fd() < 0 || mpdu == nullptr || len == 0)
+    if (sock.fd() < 0 || !have_tx_dplane_ || mpdu == nullptr || len == 0)
     {
         return false;
     }
@@ -122,8 +152,9 @@ bool WifiUdp::send(const uint8_t* mpdu, size_t len)
     }
     const bfc::const_buffer_view view(reinterpret_cast<const std::byte*>(mpdu),
                                       len);
-    const ssize_t sent = sock.send(
-        view, 0, reinterpret_cast<const sockaddr*>(&inject), sizeof(inject));
+    const ssize_t sent =
+        sock.send(view, 0, reinterpret_cast<const sockaddr*>(&tx_dplane_),
+                  sizeof(tx_dplane_));
     if (sent != static_cast<ssize_t>(len))
     {
         return false;

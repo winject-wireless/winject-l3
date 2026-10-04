@@ -112,17 +112,27 @@ bool Config::load(const std::string& path, std::string* error)
         parser.load_line(t);
     }
 
-    if (!require_arg(parser, "winject.device", &device, error))
+    std::string device;
+    const bool have_device = parser.arg("winject.device").has_value();
+    if (have_device)
     {
-        return false;
+        device = *parser.arg("winject.device");
     }
-    auto console = parser.as<unsigned>("winject.console");
-    if (!console || *console == 0 || *console > 65535)
+    unsigned console_port = 22;
+    if (auto console = parser.as<unsigned>("winject.console"))
     {
-        *error = "invalid winject.console";
-        return false;
+        if (*console == 0 || *console > 65535)
+        {
+            *error = "invalid winject.console";
+            return false;
+        }
+        console_port = *console;
     }
-    console_port = static_cast<uint16_t>(*console);
+    bool skip_console = false;
+    if (auto skip = parser.arg("winject.skip_console"))
+    {
+        skip_console = *skip == "1" || *skip == "true";
+    }
 
     auto ch = parser.as<unsigned>("winject.channel");
     if (!ch || *ch < 1 || *ch > 14)
@@ -192,10 +202,9 @@ bool Config::load(const std::string& path, std::string* error)
         }
         tx_gap_us = static_cast<uint32_t>(*gap);
     }
-    local_ip = parser.arg("winject.local_ip").value_or("");
-    if (auto skip = parser.arg("winject.skip_console"))
+    if (parser.arg("winject.local_ip").has_value())
     {
-        skip_console = *skip == "1" || *skip == "true";
+        LOG_WRN("winject.local_ip is ignored");
     }
     if (auto c = parser.arg("winject.cca"))
     {
@@ -224,15 +233,15 @@ bool Config::load(const std::string& path, std::string* error)
         }
         if (v == "auto")
         {
-            radio_fcs = RadioFcsConfig::auto_detect;
+            radio_device.fcs = RadioFcsConfig::auto_detect;
         }
         else if (v == "signal")
         {
-            radio_fcs = RadioFcsConfig::signal;
+            radio_device.fcs = RadioFcsConfig::signal;
         }
         else if (v == "actual")
         {
-            radio_fcs = RadioFcsConfig::actual;
+            radio_device.fcs = RadioFcsConfig::actual;
         }
         else
         {
@@ -268,12 +277,6 @@ bool Config::load(const std::string& path, std::string* error)
         tx_burst_interval_us = static_cast<uint32_t>(*bi);
     }
     manager_console_in = parser.arg("manager.console_in").value_or("");
-    manager_console_out = parser.arg("manager.console_out").value_or("");
-    if (manager_console_in.empty() != manager_console_out.empty())
-    {
-        *error = "manager.console_in and manager.console_out must both be set";
-        return false;
-    }
     if (!manager_console_in.empty())
     {
         sockaddr_in tmp = {};
@@ -282,28 +285,59 @@ bool Config::load(const std::string& path, std::string* error)
             *error = "invalid manager.console_in";
             return false;
         }
-        if (!parse_host_port(manager_console_out, &tmp))
+    }
+    if (parser.arg("winject.forward_port").has_value() ||
+        parser.arg("winject.forward_base").has_value())
+    {
+        LOG_WRN(
+            "winject.forward_port is obsolete: the radio uses one d-plane "
+            "port (winject.dplane_port)");
+    }
+    unsigned dplane_port = 9000;
+    bool dplane_from_dplane_key = false;
+    if (auto dp = parser.as<unsigned>("winject.dplane_port"))
+    {
+        if (*dp == 0 || *dp > 65535)
         {
-            *error = "invalid manager.console_out";
+            *error = "invalid winject.dplane_port";
             return false;
         }
+        dplane_port = *dp;
+        dplane_from_dplane_key = true;
     }
-    auto fwd_port = parser.as<unsigned>("winject.forward_port");
-    auto fwd_base = parser.as<unsigned>("winject.forward_base");
-    if (fwd_port && *fwd_port > 0 && *fwd_port <= 65535)
+    if (auto inj = parser.as<unsigned>("winject.inject_port"))
     {
-        forward_port = static_cast<uint16_t>(*fwd_port);
-        forward_base = forward_port;
+        if (*inj == 0 || *inj > 65535)
+        {
+            *error = "invalid winject.inject_port";
+            return false;
+        }
+        if (!dplane_from_dplane_key)
+        {
+            dplane_port = *inj;
+        }
     }
-    else if (fwd_base && *fwd_base > 0 && *fwd_base <= 65535)
+    if (have_device)
     {
-        forward_base = static_cast<uint16_t>(*fwd_base);
-        forward_port = forward_base;
-    }
-    auto inj = parser.as<unsigned>("winject.inject_port");
-    if (inj && *inj > 0 && *inj <= 65535)
-    {
-        inject_port = static_cast<uint16_t>(*inj);
+        in_addr dev_ip = {};
+        if (!parse_host(device, &dev_ip))
+        {
+            *error = "cannot resolve winject.device";
+            return false;
+        }
+        if (!skip_console)
+        {
+            radio_device.have_mplane = true;
+            radio_device.mplane = {};
+            radio_device.mplane.sin_family = AF_INET;
+            radio_device.mplane.sin_addr = dev_ip;
+            radio_device.mplane.sin_port = htons(static_cast<uint16_t>(console_port));
+        }
+        radio_device.have_dplane = true;
+        radio_device.dplane = {};
+        radio_device.dplane.sin_family = AF_INET;
+        radio_device.dplane.sin_addr = dev_ip;
+        radio_device.dplane.sin_port = htons(static_cast<uint16_t>(dplane_port));
     }
     stats_sec = parser.as<unsigned>("winject.stats_sec").value_or(0);
     if (const char* env = std::getenv("WINJECT_STATS_SEC"))
@@ -467,7 +501,8 @@ bool Config::load(const std::string& path, std::string* error)
     {
         return false;
     }
-    if (skip_console && radio_fcs == RadioFcsConfig::auto_detect)
+    if (have_device && skip_console &&
+        radio_device.fcs == RadioFcsConfig::auto_detect)
     {
         *error =
             "winject.skip_console requires winject.radio_fcs=signal|actual";

@@ -21,7 +21,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from radio_stats import MGR_A, MGR_B, mgr_request, save_snapshot, snapshot_managers
+from radio_stats import Endpoint, MGR_A, MGR_B, mgr_request, save_snapshot, snapshot_managers
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -167,10 +167,10 @@ class TestInterrupted(Exception):
 MGR_CMD_TIMEOUT_S = 5.0
 
 
-def mgr_console(mgr: tuple, cmd: str, label: str, quiet: bool) -> str:
+def mgr_console(mgr: Endpoint, cmd: str, label: str, quiet: bool) -> str:
     """One manager m-plane command (forwarded to the radio for radio_* commands)."""
     try:
-        text = mgr_request(*mgr, cmd, timeout=MGR_CMD_TIMEOUT_S)
+        text = mgr_request(mgr, cmd, timeout=MGR_CMD_TIMEOUT_S)
     except OSError as err:
         text = f"NOK {err}\n"
     if quiet:
@@ -244,15 +244,15 @@ def parse_status_modulation(text: str) -> str | None:
     return raw.upper() if raw else None
 
 
-def log_radio_info(mgr: tuple, label: str) -> str:
+def log_radio_info(mgr: Endpoint, label: str) -> str:
     """Radio PHY via the manager (`radio_info`); "" when unavailable."""
-    print(f"\n=== radio {label} (manager {mgr[1][0]}:{mgr[1][1]}) ===")
+    print(f"\n=== radio {label} (manager {mgr[0]}:{mgr[1]}) ===")
     text = mgr_console(mgr, "radio_info", label, quiet=False)
     return "" if text.startswith("NOK") else text
 
 
 def configure_radio(
-    mgr: tuple,
+    mgr: Endpoint,
     label: str,
     channel: int | None,
     modulation: str | None,

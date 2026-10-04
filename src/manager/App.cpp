@@ -1,13 +1,19 @@
 #include "App.h"
 
+#include "WinjectBuildVersion.h"
 #include "console/ConsoleParse.h"
+#include "console/MplaneCorrelation.h"
+#include "console/MplaneErrno.h"
 #include "endpoint/UdpEndpoint.h"
 #include "frames/Mpdu.h"
 #include "radio/RadioDefs.h"
 #include "radio/RadioMplaneParse.h"
+#include "radio/RxEvent.h"
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
+#include "utils/Version.h"
 
+#include <algorithm>
 #include <errno.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -17,43 +23,12 @@
 namespace winject
 {
 
-namespace
-{
-
-bool mplane_nok_token(const std::string& err, std::string* token)
-{
-    const auto nok = err.find(" -> nok ");
-    const auto nok_upper = err.find(" -> NOK ");
-    const size_t pos =
-        nok != std::string::npos
-            ? nok
-            : (nok_upper != std::string::npos ? nok_upper : std::string::npos);
-    if (pos == std::string::npos)
-    {
-        return false;
-    }
-    *token = err.substr(pos + 8);
-    return true;
-}
-
-}  // namespace
-
 bool App::load(const std::string& path)
 {
     std::string err;
     if (!cfg.load(path, &err))
     {
         LOG_ERR("%s", err.c_str());
-        return false;
-    }
-    if (!parse_host(cfg.device, &device_ip))
-    {
-        LOG_ERR("cannot resolve winject.device %s", cfg.device.c_str());
-        return false;
-    }
-    if (!cfg.local_ip.empty() && !parse_host(cfg.local_ip, &local_ip))
-    {
-        LOG_ERR("invalid winject.local_ip");
         return false;
     }
     return true;
@@ -86,12 +61,8 @@ bool App::add_upstream(const UpstreamConfig& uc)
 bool App::setup_radio()
 {
     radio = std::make_shared<WifiUdp>();
-    sockaddr_in inject = {};
-    inject.sin_family = AF_INET;
-    inject.sin_addr = device_ip;
-    inject.sin_port = htons(cfg.inject_port);
     if (!radio->open(
-            reactor, inject, cfg.forward_port,
+            reactor,
             [this](bfcext::shared_sized_buffer mpdu)
             {
                 rx_demux_.on_mpdu(std::move(mpdu));
@@ -103,17 +74,48 @@ bool App::setup_radio()
     {
         return false;
     }
-    if (cfg.radio_fcs == RadioFcsConfig::signal)
+    apply_radio_dplane();
+    apply_configured_fcs();
+    std::string dplane_log = "-";
+    if (cfg.radio_device.have_dplane)
     {
-        radio->set_fcs_mode(RadioFcsMode::signal);
+        dplane_log = console_format_ipv4_port(cfg.radio_device.dplane);
     }
-    else if (cfg.radio_fcs == RadioFcsConfig::actual)
-    {
-        radio->set_fcs_mode(RadioFcsMode::actual);
-    }
-    LOG_INF("radio inject=%u forward=%u fcs=%s", radio->inject_port(),
-            radio->forward_port(), radio_fcs_mode_name(radio->fcs_mode()));
+    LOG_INF("radio dplane=%s fcs=%s", dplane_log.c_str(),
+            console_format_radio_fcs(cfg.radio_device.fcs));
     return true;
+}
+
+void App::apply_radio_dplane()
+{
+    const RadioDeviceConfig& d = cfg.radio_device;
+    if (!d.have_dplane || radio == nullptr)
+    {
+        return;
+    }
+    tx_mux_.post_send_socket_change(radio, d.dplane);
+    radio->post_rx_event(EventCtrlRecvSocketChange{d.dplane});
+}
+
+void App::apply_configured_fcs()
+{
+    if (radio == nullptr)
+    {
+        return;
+    }
+    switch (cfg.radio_device.fcs)
+    {
+        case RadioFcsConfig::signal:
+            radio->set_fcs_mode(RadioFcsMode::signal);
+            break;
+        case RadioFcsConfig::actual:
+            radio->set_fcs_mode(RadioFcsMode::actual);
+            break;
+        case RadioFcsConfig::auto_detect:
+        default:
+            radio->set_fcs_mode(RadioFcsMode::unknown);
+            break;
+    }
 }
 
 bool App::setup_upstreams()
@@ -292,13 +294,13 @@ bool App::console_add_upstream(const ManagerUpstreamView& spec,
     };
     if (spec.bus_tx == 0 && spec.bus_rx == 0)
     {
-        return fail("INVALID_ARGUMENT");
+        return fail(k_einval);
     }
     for (const auto& prev : cfg.upstreams)
     {
         if (prev.index == spec.id)
         {
-            return fail("INVALID_ARGUMENT");
+            return fail(k_eexist);
         }
     }
     UpstreamConfig uc;
@@ -321,13 +323,13 @@ bool App::console_add_upstream(const ManagerUpstreamView& spec,
     std::string val_err;
     if (!Config::validate_upstreams(candidate, &val_err))
     {
-        return fail("INVALID_ARGUMENT");
+        return fail(k_einval);
     }
     cfg.upstreams.push_back(uc);
     if (!add_upstream(uc))
     {
         cfg.upstreams.pop_back();
-        return fail("INVALID_ARGUMENT");
+        return fail(k_eio);
     }
     return true;
 }
@@ -345,11 +347,11 @@ bool App::console_remove_upstream(uint8_t id, std::string* error)
     const size_t index = find_upstream_vec_index(cfg, id);
     if (index == k_upstream_not_found)
     {
-        return fail("NOT_FOUND");
+        return fail(k_enoent);
     }
     if (!radio_upstream_table_.remove(index))
     {
-        return fail("NOT_FOUND");
+        return fail(k_enoent);
     }
     if (upstreams[index])
     {
@@ -373,7 +375,7 @@ bool App::console_list_upstream(const std::vector<uint8_t>& ids,
     {
         if (error != nullptr)
         {
-            *error = "INVALID_ARGUMENT";
+            *error = k_einval;
         }
         return false;
     }
@@ -398,7 +400,7 @@ bool App::console_list_upstream(const std::vector<uint8_t>& ids,
         {
             if (error != nullptr)
             {
-                *error = "NOT_FOUND";
+                *error = k_enoent;
             }
             return false;
         }
@@ -407,7 +409,7 @@ bool App::console_list_upstream(const std::vector<uint8_t>& ids,
         {
             if (error != nullptr)
             {
-                *error = "NOT_FOUND";
+                *error = k_enoent;
             }
             return false;
         }
@@ -430,12 +432,12 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
     const size_t index = find_upstream_vec_index(cfg, patch.id);
     if (index == k_upstream_not_found)
     {
-        return fail("NOT_FOUND");
+        return fail(k_enoent);
     }
     if (!patch.have_fec && !patch.have_k && !patch.have_n &&
         !patch.have_fec_timeout && !patch.have_quanta)
     {
-        return fail("INVALID_ARGUMENT");
+        return fail(k_einval);
     }
     UpstreamConfig candidate;
     std::string val_err;
@@ -445,13 +447,13 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
             patch.have_fec, patch.have_k, patch.have_n, patch.have_fec_timeout,
             patch.have_quanta, cfg.upstreams, &candidate, &val_err))
     {
-        return fail("INVALID_ARGUMENT");
+        return fail(k_einval);
     }
     if (patch.have_quanta && !set_upstream_scheduler_budget(
                                  index, candidate.scheduler_budget, error))
     {
         return fail(error != nullptr && !error->empty() ? error->c_str()
-                                                        : "INVALID_ARGUMENT");
+                                                        : k_einval);
     }
     auto* udp = dynamic_cast<UdpEndpoint*>(upstreams[index].get());
     if (patch.have_fec_timeout)
@@ -459,9 +461,8 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
         if (udp == nullptr ||
             !udp->set_fec_timeout_ms(candidate.fec_timeout_ms, error))
         {
-            return fail(error != nullptr && !error->empty()
-                            ? error->c_str()
-                            : "INVALID_ARGUMENT");
+            return fail(error != nullptr && !error->empty() ? error->c_str()
+                                                            : k_einval);
         }
     }
     if (patch.have_fec || patch.have_k || patch.have_n)
@@ -469,15 +470,14 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
         if (!set_upstream_fec(index, candidate.fec_type, candidate.fec_k,
                               candidate.fec_n, error))
         {
-            return fail(error != nullptr && !error->empty()
-                            ? error->c_str()
-                            : "INVALID_ARGUMENT");
+            return fail(error != nullptr && !error->empty() ? error->c_str()
+                                                            : k_einval);
         }
     }
     cfg.upstreams[index] = candidate;
     if (out == nullptr || !fill_upstream_view(index, out))
     {
-        return fail("NOT_FOUND");
+        return fail(k_enoent);
     }
     return true;
 }
@@ -527,7 +527,7 @@ bool App::console_list_upstream_rx_stat(
     {
         if (error != nullptr)
         {
-            *error = "INVALID_ARGUMENT";
+            *error = k_einval;
         }
         return false;
     }
@@ -540,7 +540,7 @@ bool App::console_list_upstream_rx_stat(
         {
             if (error != nullptr)
             {
-                *error = "NOT_FOUND";
+                *error = k_enoent;
             }
             return false;
         }
@@ -577,7 +577,7 @@ bool App::console_list_upstream_tx_stat(
     {
         if (error != nullptr)
         {
-            *error = "INVALID_ARGUMENT";
+            *error = k_einval;
         }
         return false;
     }
@@ -590,7 +590,7 @@ bool App::console_list_upstream_tx_stat(
         {
             if (error != nullptr)
             {
-                *error = "NOT_FOUND";
+                *error = k_enoent;
             }
             return false;
         }
@@ -645,6 +645,8 @@ void App::refresh_host_metrics()
         metrics_registry_.get_metrics<MetricU64>("radio_fcs_mode")
             ->store(static_cast<uint64_t>(fcs));
     }
+    metrics_registry_.get_metrics<MetricU64>("radio_proto_ok")
+        ->store(radio_proto_ok_ ? 1u : 0u);
     for (size_t i = 0; i < upstreams.size(); ++i)
     {
         const Upstream* up = upstreams[i].get();
@@ -680,7 +682,7 @@ bool App::console_get_metrics(const std::vector<std::string>& keys,
     {
         if (error != nullptr)
         {
-            *error = "INVALID_ARGUMENT";
+            *error = k_einval;
         }
         return false;
     }
@@ -688,6 +690,27 @@ bool App::console_get_metrics(const std::vector<std::string>& keys,
     const std::map<std::string, Metrics> snapshot =
         metrics_registry_.getMetrics(keys);
     out->clear();
+    const auto want_key = [&](const std::string& k) -> bool
+    {
+        return keys.empty() ||
+               std::find(keys.begin(), keys.end(), k) != keys.end();
+    };
+    if (want_key("radio_version"))
+    {
+        ManagerMetricView row;
+        row.key = "radio_version";
+        if (radio_version_known_)
+        {
+            row.value = "v" + std::to_string(radio_version_.x) + "." +
+                        std::to_string(radio_version_.y) + "." +
+                        std::to_string(radio_version_.z);
+        }
+        else
+        {
+            row.value = "-";
+        }
+        out->push_back(std::move(row));
+    }
     for (const auto& entry : snapshot)
     {
         ManagerMetricView row;
@@ -719,16 +742,6 @@ std::string mplane_join_body(const MplaneResult& r)
     return body;
 }
 
-std::string mplane_err_string(const std::string& err)
-{
-    std::string token;
-    if (mplane_nok_token(err, &token))
-    {
-        return token;
-    }
-    return err.empty() ? "error" : err;
-}
-
 }  // namespace
 
 void App::apply_radio_caps_mplane(const MplaneResult& r)
@@ -749,18 +762,17 @@ void App::apply_radio_caps_mplane(const MplaneResult& r)
     {
         LOG_WRN("radio has no radio_caps_info; assuming fcs=ACTUAL");
     }
-    if (cfg.radio_fcs == RadioFcsConfig::signal && mode != RadioFcsMode::signal)
+    if (cfg.radio_device.fcs == RadioFcsConfig::signal &&
+        mode != RadioFcsMode::signal)
     {
-        LOG_WRN(
-            "winject.radio_fcs=signal but radio reports fcs=%s; using radio",
-            radio_fcs_mode_name(mode));
+        LOG_WRN("radio_device fcs=SIGNAL but radio reports fcs=%s; using radio",
+                radio_fcs_mode_name(mode));
     }
-    else if (cfg.radio_fcs == RadioFcsConfig::actual &&
+    else if (cfg.radio_device.fcs == RadioFcsConfig::actual &&
              mode != RadioFcsMode::actual)
     {
-        LOG_WRN(
-            "winject.radio_fcs=actual but radio reports fcs=%s; using radio",
-            radio_fcs_mode_name(mode));
+        LOG_WRN("radio_device fcs=ACTUAL but radio reports fcs=%s; using radio",
+                radio_fcs_mode_name(mode));
     }
     const RadioFcsMode prev = radio->fcs_mode();
     if (prev != mode && prev != RadioFcsMode::unknown)
@@ -771,11 +783,135 @@ void App::apply_radio_caps_mplane(const MplaneResult& r)
     radio->set_fcs_mode(mode);
 }
 
+void App::send_radio_unavailable_nok(ManagerConsoleReply reply) const
+{
+    if (!cfg.radio_device.have_mplane)
+    {
+        reply.send_nok(k_enodev);
+        return;
+    }
+    if (radio_version_known_ && !radio_proto_ok_)
+    {
+        reply.send_nok(k_eproto);
+        return;
+    }
+    reply.send_nok(k_enodev);
+}
+
+void App::on_radio_version(bool known, const WinjectVersion& v)
+{
+    radio_version_known_ = known;
+    radio_version_ = v;
+    radio_proto_ok_ = known && protocol_compatible(v, own_version());
+    if (known && !radio_proto_ok_)
+    {
+        log_proto_mismatch_once(v);
+    }
+    if (known && radio_proto_ok_)
+    {
+        proto_mismatch_logged_ = false;
+    }
+}
+
+void App::log_proto_mismatch_once(const WinjectVersion& radio_ver)
+{
+    if (proto_mismatch_logged_)
+    {
+        return;
+    }
+    proto_mismatch_logged_ = true;
+    const WinjectVersion mgr = own_version();
+    LOG_ERR(
+        "radio is v%u.%u.%u, manager is v%u.%u.%u: protocol %u.%u != %u.%u, "
+        "not using its m-plane",
+        static_cast<unsigned>(radio_ver.x), static_cast<unsigned>(radio_ver.y),
+        static_cast<unsigned>(radio_ver.z), static_cast<unsigned>(mgr.x),
+        static_cast<unsigned>(mgr.y), static_cast<unsigned>(mgr.z),
+        static_cast<unsigned>(radio_ver.x), static_cast<unsigned>(radio_ver.y),
+        static_cast<unsigned>(mgr.x), static_cast<unsigned>(mgr.y));
+}
+
+bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
+                               ManagerRadioDeviceView* out, std::string* error)
+{
+    if (patch.id != 0)
+    {
+        if (error != nullptr)
+        {
+            *error = k_einval;
+        }
+        return false;
+    }
+    RadioDeviceConfig next = cfg.radio_device;
+    if (patch.have_mplane)
+    {
+        next.have_mplane = true;
+        next.mplane = patch.mplane;
+    }
+    if (patch.have_dplane)
+    {
+        next.have_dplane = true;
+        next.dplane = patch.dplane;
+    }
+    if (patch.have_fcs)
+    {
+        next.fcs = patch.fcs;
+    }
+    const bool mplane_changed =
+        patch.have_mplane &&
+        (!cfg.radio_device.have_mplane ||
+         cfg.radio_device.mplane.sin_addr.s_addr !=
+             patch.mplane.sin_addr.s_addr ||
+         cfg.radio_device.mplane.sin_port != patch.mplane.sin_port);
+    const bool dplane_changed =
+        patch.have_dplane &&
+        (!cfg.radio_device.have_dplane ||
+         cfg.radio_device.dplane.sin_addr.s_addr !=
+             patch.dplane.sin_addr.s_addr ||
+         cfg.radio_device.dplane.sin_port != patch.dplane.sin_port);
+    const bool fcs_changed =
+        patch.have_fcs && cfg.radio_device.fcs != patch.fcs;
+    cfg.radio_device = next;
+    if (dplane_changed)
+    {
+        apply_radio_dplane();
+    }
+    if (mplane_changed)
+    {
+        drop_console();
+        radio_version_known_ = false;
+        radio_proto_ok_ = false;
+        apply_configured_fcs();
+        reconnect_ticks = k_reconnect_ticks;
+    }
+    else if (fcs_changed)
+    {
+        if (console_ok && cfg.radio_device.fcs == RadioFcsConfig::auto_detect)
+        {
+            console.query_radio_caps(
+                [this](MplaneResult r)
+                {
+                    apply_radio_caps_mplane(r);
+                });
+        }
+        else if (!console_ok)
+        {
+            apply_configured_fcs();
+        }
+    }
+    if (out != nullptr)
+    {
+        out->id = 0;
+        out->device = cfg.radio_device;
+    }
+    return true;
+}
+
 void App::console_radio_info(ManagerConsoleReply reply)
 {
     if (!console_ok)
     {
-        reply.send_nok("NOT_FOUND");
+        send_radio_unavailable_nok(reply);
         return;
     }
     console.query_radio_info(
@@ -816,16 +952,21 @@ void App::console_radio_caps_info(ManagerConsoleReply reply)
                 if (radio == nullptr ||
                     radio->fcs_mode() == RadioFcsMode::unknown)
                 {
-                    reply.send_nok("NOT_FOUND");
+                    reply.send_nok(k_enodata);
                     return;
                 }
                 reply.send_text(format_radio_caps_ok_line(radio->fcs_mode()));
             });
         return;
     }
-    if (radio == nullptr || radio->fcs_mode() == RadioFcsMode::unknown)
+    if (radio == nullptr)
     {
-        reply.send_nok("NOT_FOUND");
+        reply.send_nok(k_enodev);
+        return;
+    }
+    if (radio->fcs_mode() == RadioFcsMode::unknown)
+    {
+        reply.send_nok(k_enodata);
         return;
     }
     reply.send_text(format_radio_caps_ok_line(radio->fcs_mode()));
@@ -835,7 +976,7 @@ void App::console_radio_stats(ManagerConsoleReply reply)
 {
     if (!console_ok)
     {
-        reply.send_nok("NOT_FOUND");
+        send_radio_unavailable_nok(reply);
         return;
     }
     console.query_radio_counters(
@@ -855,7 +996,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
 {
     if (!console_ok)
     {
-        reply.send_nok("NOT_FOUND");
+        send_radio_unavailable_nok(reply);
         return;
     }
     std::string kv;
@@ -879,7 +1020,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
             !Config::modulation_ok_for_channel(
                 canonical, patch.have_channel ? patch.channel : cfg.channel))
         {
-            reply.send_nok("INVALID_ARGUMENT");
+            reply.send_nok(k_einval);
             return;
         }
         if (!kv.empty())
@@ -942,15 +1083,14 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
         });
 }
 
-void App::console_radio_reset(uint8_t id, ManagerConsoleReply reply)
+void App::console_radio_reset(ManagerConsoleReply reply)
 {
     if (!console_ok)
     {
-        reply.send_nok("NOT_FOUND");
+        send_radio_unavailable_nok(reply);
         return;
     }
     console.send_radio_reset(
-        id,
         [reply](MplaneResult r)
         {
             if (!r.ok)
@@ -966,7 +1106,7 @@ void App::console_config_slot(uint8_t slot, ManagerConsoleReply reply)
 {
     if (!console_ok)
     {
-        reply.send_nok("NOT_FOUND");
+        send_radio_unavailable_nok(reply);
         return;
     }
     console.send_save_slot(
@@ -1000,11 +1140,9 @@ bool App::start_manager_console()
         return true;
     }
     sockaddr_in in_addr = {};
-    sockaddr_in out_addr = {};
-    if (!parse_host_port(cfg.manager_console_in, &in_addr) ||
-        !parse_host_port(cfg.manager_console_out, &out_addr))
+    if (!parse_host_port(cfg.manager_console_in, &in_addr))
     {
-        LOG_ERR("manager console: invalid console_in/out");
+        LOG_ERR("manager console: invalid console_in");
         return false;
     }
     ManagerConsoleHandlers handlers;
@@ -1059,9 +1197,9 @@ bool App::start_manager_console()
     {
         console_radio_stats(reply);
     };
-    handlers.radio_reset = [this](uint8_t id, ManagerConsoleReply reply)
+    handlers.radio_reset = [this](ManagerConsoleReply reply)
     {
-        console_radio_reset(id, reply);
+        console_radio_reset(reply);
     };
     handlers.radio_tx =
         [this](const ManagerRadioUpdate& patch, ManagerConsoleReply reply)
@@ -1072,9 +1210,14 @@ bool App::start_manager_console()
     {
         console_config_slot(slot, reply);
     };
+    handlers.radio_device = [this](const ManagerRadioDeviceUpdate& patch,
+                                   ManagerRadioDeviceView* out,
+                                   std::string* error)
+    {
+        return console_radio_device(patch, out, error);
+    };
     std::string err;
-    if (!mgr_console.start(reactor, in_addr, out_addr, std::move(handlers),
-                           &err))
+    if (!mgr_console.start(reactor, in_addr, std::move(handlers), &err))
     {
         LOG_ERR("manager console: %s", err.c_str());
         return false;
@@ -1098,6 +1241,10 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
         {
             if (!r.ok)
             {
+                if (r.error == "EPROTO")
+                {
+                    radio_proto_ok_ = false;
+                }
                 if (done)
                 {
                     done(false);
@@ -1113,15 +1260,15 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
         [this](const MplaneResult& caps)
         {
             apply_radio_caps_mplane(caps);
+        },
+        [this](bool known, const WinjectVersion& v)
+        {
+            on_radio_version(known, v);
         });
 }
 
 bool App::apply_console()
 {
-    if (cfg.local_ip.empty())
-    {
-        local_ip = console.local_ip();
-    }
     if (!hold_console())
     {
         return false;
@@ -1176,15 +1323,16 @@ void App::begin_console()
         return;
     }
     std::string err;
-    if (!console.start_connect(cfg, &err) || !console.finish_connect(&err))
+    if (!console.start_connect(cfg.radio_device.mplane, &err) ||
+        !console.finish_connect(&err))
     {
         LOG_ERR("console: %s", err.c_str());
         drop_console();
         return;
     }
     reconnect_ticks = 0;
-    LOG_INF("console ready %s:%u local %s", cfg.device.c_str(),
-            cfg.console_port, ipv4_to_string(console.local_ip()).c_str());
+    LOG_INF("console ready %s",
+            console_format_ipv4_port(cfg.radio_device.mplane).c_str());
     if (!apply_console())
     {
         drop_console();
@@ -1228,7 +1376,7 @@ void App::on_console()
 
 void App::reconnect_tick()
 {
-    if (cfg.skip_console)
+    if (!cfg.radio_device.have_mplane)
     {
         return;
     }
@@ -1328,6 +1476,7 @@ void App::flush_shutdown()
 
 int App::run()
 {
+    LOG_INF("winject-manager %s", WINJECT_VERSION_STRING);
     if (!setup_upstreams())
     {
         return 1;
@@ -1407,73 +1556,26 @@ int App::run()
     {
         return 1;
     }
-    if (!cfg.local_ip.empty() && parse_host(cfg.local_ip, &local_ip))
+    if (cfg.radio_device.have_mplane)
     {
-        // keep configured local_ip for set_upstream_rx
-    }
-    if (cfg.skip_console)
-    {
-        LOG_WRN("skip_console=1: radio rx_filter_addr3 is not managed");
-    }
-    if (!cfg.skip_console)
-    {
-        std::string err;
-        if (!console.start_connect(cfg, &err) || !console.finish_connect(&err))
-        {
-            LOG_ERR("%s", err.c_str());
-            reconnect_ticks = k_reconnect_ticks;
-        }
-        else if (!hold_console())
-        {
-            drop_console();
-            reconnect_ticks = k_reconnect_ticks;
-        }
-        else
-        {
-            console.apply_radio(
-                cfg, cfg.config_slot,
-                [this](MplaneResult r)
-                {
-                    if (!r.ok)
-                    {
-                        LOG_ERR("radio program failed: %s", r.error.c_str());
-                        drop_console();
-                        reconnect_ticks = k_reconnect_ticks;
-                        return;
-                    }
-                    if (cfg.local_ip.empty())
-                    {
-                        local_ip = console.local_ip();
-                    }
-                    radio_manager_.on_phy_programmed();
-                    LOG_INF("console ready %s:%u", cfg.device.c_str(),
-                            cfg.console_port);
-                },
-                [this](const MplaneResult& caps)
-                {
-                    apply_radio_caps_mplane(caps);
-                });
-        }
+        begin_console();
         if (!console_ok)
         {
-            LOG_WRN("waiting for console %s:%u", cfg.device.c_str(),
-                    cfg.console_port);
+            LOG_WRN("waiting for radio m-plane %s",
+                    console_format_ipv4_port(cfg.radio_device.mplane).c_str());
         }
-    }
-    else if (!cfg.local_ip.empty())
-    {
-        parse_host(cfg.local_ip, &local_ip);
     }
     else
     {
-        LOG_ERR("winject.skip_console requires winject.local_ip");
-        return 1;
+        LOG_INF("no radio m-plane configured; radio is not managed");
     }
-    LOG_INF(
-        "manager running local %s forward_base %u max_rate %u kbps "
-        "burst=%zu burst_us=%u (%s)",
-        ipv4_to_string(local_ip).c_str(), cfg.forward_base, cfg.max_rate_kbps,
-        cfg.tx_burst_size, cfg.tx_burst_interval_us, cfg.modulation.c_str());
+    ManagerRadioDeviceView rd_view;
+    rd_view.id = 0;
+    rd_view.device = cfg.radio_device;
+    LOG_INF("manager running %s max_rate %u kbps burst=%zu burst_us=%u (%s)",
+            console_format_radio_device(rd_view).c_str(), cfg.max_rate_kbps,
+            cfg.tx_burst_size, cfg.tx_burst_interval_us,
+            cfg.modulation.c_str());
     last_stats = std::chrono::steady_clock::now();
     if (cfg.stats_sec > 0)
     {

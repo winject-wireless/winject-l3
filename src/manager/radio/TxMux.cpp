@@ -1,5 +1,6 @@
 #include "radio/TxMux.h"
 
+#include "console/ConsoleParse.h"
 #include "endpoint/Upstream.h"
 #include "endpoint/UpstreamStats.h"
 #include "frames/Mpdu.h"
@@ -299,7 +300,7 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
     for (size_t p = 0; p < plan.size(); p++)
     {
         mpdu.set_slot_payload(static_cast<uint8_t>(p),
-                            static_cast<uint16_t>(plan[p].framed_bytes));
+                              static_cast<uint16_t>(plan[p].framed_bytes));
     }
     assert(mpdu.rescan());
     for (size_t p = 0; p < plan.size(); p++)
@@ -333,8 +334,7 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
             interval_us = cap_us;
         }
     }
-    const auto floor_time =
-        now - std::chrono::microseconds(pacing_credit_us_);
+    const auto floor_time = now - std::chrono::microseconds(pacing_credit_us_);
     next_tx_at_ = std::max(next_tx_at_, floor_time) +
                   std::chrono::microseconds(interval_us);
     for (const TxMpduEntryPlan& entry_plan : plan)
@@ -423,6 +423,50 @@ void TxMux::log_stats(double interval_sec)
             static_cast<unsigned long long>(total_lost));
 }
 
+bool TxMux::pop_event(TxEvent* out)
+{
+    return tx_events_.pop(out);
+}
+
+void TxMux::handle_event(TxEvent& ev)
+{
+    if (std::holds_alternative<EventData>(ev))
+    {
+        return;
+    }
+    auto& ctrl = std::get<EventCtrlSendSocketChange>(ev);
+    if (ctrl.radio)
+    {
+        std::lock_guard<std::mutex> lock(table_.mutex());
+        ctrl.radio->set_tx_dplane(ctrl.dplane);
+        LOG_INF("tx dplane -> %s",
+                console_format_ipv4_port(ctrl.dplane).c_str());
+    }
+}
+
+void TxMux::apply_queued_socket_changes()
+{
+    tx_events_.drop_data();
+    TxEvent ev;
+    while (pop_event(&ev))
+    {
+        handle_event(ev);
+    }
+}
+
+void TxMux::post_send_socket_change(std::shared_ptr<WifiUdp> radio,
+                                    const sockaddr_in& dplane)
+{
+    EventCtrlSendSocketChange ctrl;
+    ctrl.radio = std::move(radio);
+    ctrl.dplane = dplane;
+    {
+        std::lock_guard<std::mutex> lock(wake_mu_);
+        tx_events_.push(std::move(ctrl));
+    }
+    wake_cv_.notify_one();
+}
+
 void TxMux::start()
 {
     if (tx_thread_.joinable())
@@ -432,7 +476,7 @@ void TxMux::start()
     tx_stop_ = false;
     {
         std::lock_guard<std::mutex> lock(wake_mu_);
-        tx_work_.clear();
+        apply_queued_socket_changes();
     }
     tx_thread_ = std::thread(
         [this]()
@@ -449,16 +493,17 @@ void TxMux::stop()
     {
         tx_thread_.join();
     }
+    {
+        std::lock_guard<std::mutex> lock(wake_mu_);
+        apply_queued_socket_changes();
+    }
 }
 
 void TxMux::request_tick()
 {
     {
         std::lock_guard<std::mutex> lock(wake_mu_);
-        if (tx_work_.empty())
-        {
-            tx_work_.push_back(k_tx_work_tick);
-        }
+        tx_events_.push_data();
     }
     wake_cv_.notify_one();
 }
@@ -471,6 +516,19 @@ void TxMux::sync_tick()
 
 void TxMux::tx_thread_main()
 {
+    auto drain = [this](std::unique_lock<std::mutex>& wlock) -> bool
+    {
+        bool any = false;
+        TxEvent ev;
+        while (pop_event(&ev))
+        {
+            wlock.unlock();
+            handle_event(ev);
+            wlock.lock();
+            any = true;
+        }
+        return any;
+    };
     while (!tx_stop_)
     {
         {
@@ -479,13 +537,13 @@ void TxMux::tx_thread_main()
                               std::chrono::microseconds(k_tx_tick_interval_us),
                               [this]()
                               {
-                                  return !tx_work_.empty() || tx_stop_.load();
+                                  return !tx_events_.empty() || tx_stop_.load();
                               });
             if (tx_stop_)
             {
                 break;
             }
-            tx_work_.clear();
+            drain(lock);
         }
         for (;;)
         {
@@ -498,32 +556,30 @@ void TxMux::tx_thread_main()
                 pacing_until = next_tx_at_;
             }
             std::unique_lock<std::mutex> wlock(wake_mu_);
-            if (!tx_work_.empty())
+            if (drain(wlock))
             {
-                tx_work_.clear();
                 break;
             }
-            if (!pending ||
-                std::chrono::steady_clock::now() >= pacing_until)
+            if (!pending || std::chrono::steady_clock::now() >= pacing_until)
             {
                 break;
             }
             const auto now = std::chrono::steady_clock::now();
-            const auto until =
-                std::min(pacing_until,
-                         now + std::chrono::microseconds(k_tx_tick_interval_us));
+            const auto until = std::min(
+                pacing_until,
+                now + std::chrono::microseconds(k_tx_tick_interval_us));
             wake_cv_.wait_until(wlock, until,
                                 [this]()
                                 {
-                                    return !tx_work_.empty() || tx_stop_.load();
+                                    return !tx_events_.empty() ||
+                                           tx_stop_.load();
                                 });
             if (tx_stop_)
             {
                 break;
             }
-            if (!tx_work_.empty())
+            if (drain(wlock))
             {
-                tx_work_.clear();
                 break;
             }
         }

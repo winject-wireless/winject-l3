@@ -5,12 +5,14 @@
 #include "radio/PhyAirtime.h"
 #include "radio/RadioDefs.h"
 #include "radio/RadioUpstreamTable.h"
+#include "radio/TxEvent.h"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <deque>
+#include <memory>
 #include <mutex>
+#include <netinet/in.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <thread>
@@ -20,8 +22,9 @@ namespace winject
 {
 
 inline constexpr uint32_t k_tx_tick_interval_us = 250;
-inline constexpr uint8_t k_tx_work_tick = 1;
 inline constexpr size_t k_pacing_full_psdu_bytes = 1504;
+
+class WifiUdp;
 
 class TxMux
 {
@@ -55,6 +58,8 @@ public:
     void start();
     void stop();
     void request_tick();
+    void post_send_socket_change(std::shared_ptr<WifiUdp> radio,
+                                 const sockaddr_in& dplane);
     void sync_tick();
     void log_stats(double interval_sec);
     uint64_t take_air_bytes();
@@ -70,6 +75,9 @@ private:
                    size_t* data_sent);
     bool data_burst_allows() const;
     void note_data_burst_emit();
+    bool pop_event(TxEvent* out);
+    void handle_event(TxEvent& ev);
+    void apply_queued_socket_changes();
 
     RadioUpstreamTable& table_;
     PhyMode phy_{};
@@ -94,7 +102,7 @@ private:
     std::thread tx_thread_;
     std::mutex wake_mu_;
     std::condition_variable wake_cv_;
-    std::deque<uint8_t> tx_work_;
+    TxEventQueue tx_events_;
     std::atomic<bool> tx_stop_{false};
 };
 

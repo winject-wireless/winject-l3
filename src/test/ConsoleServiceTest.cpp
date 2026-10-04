@@ -1,6 +1,9 @@
 #include "console/ConsoleParse.h"
+#include "console/ManagerConsoleTypes.h"
+#include "console/MplaneErrno.h"
 
 #include <gtest/gtest.h>
+#include <netinet/in.h>
 #include <string.h>
 #include <vector>
 
@@ -106,4 +109,37 @@ TEST(ConsoleParseTest, FecDisplay)
     EXPECT_TRUE(console_format_fec_display(FecType::RsBlockErasure, 10, 16, buf,
                                            sizeof(buf)));
     EXPECT_STREQ(buf, "block(10,16)");
+}
+
+TEST(ConsoleParseTest, ParseIpv4Port)
+{
+    sockaddr_in addr = {};
+    EXPECT_TRUE(console_parse_ipv4_port("127.0.0.1:22", &addr));
+    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1", &addr));
+    EXPECT_FALSE(console_parse_ipv4_port(":22", &addr));
+    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:", &addr));
+    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:0", &addr));
+    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:65536", &addr));
+    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:22x", &addr));
+    EXPECT_FALSE(console_parse_ipv4_port("localhost:22", &addr));
+}
+
+TEST(ConsoleParseTest, ParseRadioDeviceArgs)
+{
+    char buf[256];
+    strncpy(buf, "radio_device id=0", sizeof(buf));
+    char* save = nullptr;
+    strtok_r(buf, " \t", &save);
+    ManagerRadioDeviceUpdate patch;
+    std::string err;
+    EXPECT_TRUE(console_parse_radio_device_args(save, &patch, &err));
+    EXPECT_FALSE(patch.have_mplane);
+}
+
+TEST(ConsoleParseTest, FormatRadioDevice)
+{
+    ManagerRadioDeviceView view;
+    view.id = 0;
+    EXPECT_EQ(console_format_radio_device(view),
+              "radio_device id=0 mplane=- dplane=- fcs=AUTO");
 }

@@ -1,7 +1,7 @@
-#include "console/ConsoleService.h"
-#include "console/ManagerConsoleTypes.h"
+#include "ConsoleTestHelpers.h"
 #include "endpoint/UdpEndpoint.h"
 #include "radio/WifiFcs.h"
+#include "radio/RxEvent.h"
 #include "radio/WifiUdp.h"
 #include "utils/IOReactor.h"
 
@@ -18,103 +18,9 @@
 
 namespace winject
 {
-namespace
-{
-
-uint16_t reserve_free_udp_port()
-{
-    bfc::socket probe(bfc::create_udp4());
-    sockaddr_in addr = {};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port = 0;
-    if (probe.bind(addr) < 0)
-    {
-        return 0;
-    }
-    socklen_t len = sizeof(addr);
-    if (getsockname(probe.fd(), reinterpret_cast<sockaddr*>(&addr), &len) < 0)
-    {
-        return 0;
-    }
-    return ntohs(addr.sin_port);
-}
-
-bool run_reactor_with_watchdog(IOReactor& reactor,
-                               const std::function<void()>& unblock)
-{
-    reactor.get_timer().wait_ms(50,
-                                [&]()
-                                {
-                                    reactor.stop();
-                                });
-    std::promise<void> done;
-    std::future<void> finished = done.get_future();
-    std::thread worker(
-        [&]()
-        {
-            reactor.run();
-            done.set_value();
-        });
-    const bool ok =
-        finished.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
-    if (!ok)
-    {
-        unblock();
-    }
-    worker.join();
-    return ok;
-}
-
-ManagerConsoleHandlers stub_console_handlers()
-{
-    ManagerConsoleHandlers h;
-    h.add_upstream = [](const ManagerUpstreamView&, std::string*) -> bool
-    {
-        return false;
-    };
-    h.remove_upstream = [](uint8_t, std::string*) -> bool
-    {
-        return false;
-    };
-    h.list_upstream = [](const std::vector<uint8_t>&,
-                         std::vector<ManagerUpstreamView>*,
-                         std::string*) -> bool
-    {
-        return false;
-    };
-    h.update_upstream = [](const ManagerUpstreamUpdate&, ManagerUpstreamView*,
-                           std::string*) -> bool
-    {
-        return false;
-    };
-    h.list_upstream_rx_stat = [](const std::vector<uint8_t>&,
-                                 std::vector<ManagerUpstreamRxStatView>*,
-                                 std::string*) -> bool
-    {
-        return false;
-    };
-    h.list_upstream_tx_stat = [](const std::vector<uint8_t>&,
-                                 std::vector<ManagerUpstreamTxStatView>*,
-                                 std::string*) -> bool
-    {
-        return false;
-    };
-    h.get_metrics = [](const std::vector<std::string>&,
-                       std::vector<ManagerMetricView>*, std::string*) -> bool
-    {
-        return false;
-    };
-    h.radio_info = [](ManagerConsoleReply) {};
-    h.radio_caps_info = [](ManagerConsoleReply) {};
-    h.radio_stats = [](ManagerConsoleReply) {};
-    h.radio_tx = [](const ManagerRadioUpdate&, ManagerConsoleReply) {};
-    h.radio_reset = [](uint8_t, ManagerConsoleReply) {};
-    h.config_slot = [](uint8_t, ManagerConsoleReply) {};
-    return h;
-}
-
-}  // namespace
+using test::reserve_free_udp_port;
+using test::run_reactor_with_watchdog;
+using test::stub_console_handlers;
 
 TEST(ReactorDrainTest, UdpEndpointDrainDoesNotBlock)
 {
@@ -201,9 +107,7 @@ TEST(ReactorDrainTest, UdpEndpointDrainIsBounded)
 TEST(ReactorDrainTest, ConsoleServiceDrainDoesNotBlock)
 {
     const uint16_t in_port = reserve_free_udp_port();
-    const uint16_t out_port = reserve_free_udp_port();
     ASSERT_NE(in_port, 0u);
-    ASSERT_NE(out_port, 0u);
 
     IOReactor reactor;
     ConsoleService service;
@@ -211,18 +115,10 @@ TEST(ReactorDrainTest, ConsoleServiceDrainDoesNotBlock)
     console_in.sin_family = AF_INET;
     console_in.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     console_in.sin_port = htons(in_port);
-    sockaddr_in console_out = {};
-    console_out.sin_family = AF_INET;
-    console_out.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    console_out.sin_port = htons(out_port);
 
     std::string err;
-    ASSERT_TRUE(service.start(reactor, console_in, console_out,
-                              stub_console_handlers(), &err));
-
-    bfc::socket reply_sock(bfc::create_udp4());
-    sockaddr_in reply_bind = console_out;
-    ASSERT_EQ(reply_sock.bind(reply_bind), 0);
+    ASSERT_TRUE(service.start(reactor, console_in, stub_console_handlers(),
+                              &err));
 
     bfc::socket client(bfc::create_udp4());
     const char ping[] = "ping\n";
@@ -247,7 +143,7 @@ TEST(ReactorDrainTest, ConsoleServiceDrainDoesNotBlock)
     sockaddr_in from = {};
     socklen_t from_len = sizeof(from);
     const ssize_t n =
-        ::recvfrom(reply_sock.fd(), buf, sizeof(buf), MSG_DONTWAIT,
+        ::recvfrom(client.fd(), buf, sizeof(buf), MSG_DONTWAIT,
                    reinterpret_cast<sockaddr*>(&from), &from_len);
     ASSERT_GT(n, 0);
     buf[n] = '\0';
@@ -269,10 +165,10 @@ TEST(ReactorDrainTest, WifiUdpDrainDoesNotBlock)
 
     IOReactor reactor;
     WifiUdp wifi;
-    sockaddr_in inject = {};
-    inject.sin_family = AF_INET;
-    inject.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    inject.sin_port = htons(19000);
+    sockaddr_in dplane = {};
+    dplane.sin_family = AF_INET;
+    dplane.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    dplane.sin_port = htons(fwd_port);
 
     int rx_calls = 0;
     const auto on_rx = [&](bfcext::shared_sized_buffer)
@@ -280,7 +176,10 @@ TEST(ReactorDrainTest, WifiUdpDrainDoesNotBlock)
         ++rx_calls;
     };
 
-    ASSERT_TRUE(wifi.open(reactor, inject, fwd_port, on_rx));
+    ASSERT_TRUE(wifi.open(reactor, on_rx));
+    wifi.set_tx_dplane(dplane);
+    wifi.post_rx_event(winject::EventCtrlRecvSocketChange{dplane});
+    ASSERT_TRUE(run_reactor_with_watchdog(reactor, []() {}));
     wifi.set_fcs_mode(winject::RadioFcsMode::actual);
 
     uint8_t reg_buf[8] = {};

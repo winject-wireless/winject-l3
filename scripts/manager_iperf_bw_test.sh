@@ -338,10 +338,9 @@ fi
 ensure_winject_manager "$ROOT"
 
 patch_conf() {
-  local file="$1" device="$2" gci_in="$3" gci_out="$4"
+  local file="$1" device="$2" gci_in="$3"
   local -a sed_args=(
     -e "s/^winject\.device.*/winject.device        = ${device}/"
-    -e "s/^winject\.local_ip.*/winject.local_ip      = ${HOST_IP}/"
   )
   if [[ -n "$CHANNEL" ]]; then
     sed_args+=(-e "s/^winject\.channel.*/winject.channel       = ${CHANNEL}/")
@@ -357,20 +356,19 @@ patch_conf() {
     printf 'winject.cca           = %s\n' "$CCA"
   fi
   printf 'manager.console_in    = 127.0.0.1:%s\n' "$gci_in"
-  printf 'manager.console_out   = 127.0.0.1:%s\n' "$gci_out"
 }
 
 CONF_A_RUN="$LOG_DIR/winject_a.conf"
 CONF_B_RUN="$LOG_DIR/winject_b.conf"
-patch_conf "$CONF_A" "$RADIO_A" 2400 2401 >"$CONF_A_RUN"
-patch_conf "$CONF_B" "$RADIO_B" 2410 2411 >"$CONF_B_RUN"
+patch_conf "$CONF_A" "$RADIO_A" 2400 >"$CONF_A_RUN"
+patch_conf "$CONF_B" "$RADIO_B" 2410 >"$CONF_B_RUN"
 
 radio_snapshot() {
   local tag="$1"
   # Through the managers' m-plane (console ports set in patch_conf).
   python3 "$ROOT/tools/radio_stats.py" \
-    --mgr-a-bind 127.0.0.1:2401 --mgr-a-dest 127.0.0.1:2400 \
-    --mgr-b-bind 127.0.0.1:2411 --mgr-b-dest 127.0.0.1:2410 \
+    --mgr-a 127.0.0.1:2400 \
+    --mgr-b 127.0.0.1:2410 \
     --save "$LOG_DIR/radio_${tag}.json" || true
 }
 

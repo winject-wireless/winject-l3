@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "WinjectBuildVersion.h"
 #include "console/ConsoleClient.h"
 #include "console/MplaneCorrelation.h"
 
@@ -70,6 +71,26 @@ bool recv_cmd(int fd, uint8_t* id_out, std::string* line_out)
     return true;
 }
 
+sockaddr_in loopback_mplane(uint16_t port)
+{
+    sockaddr_in a = {};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = htons(port);
+    return a;
+}
+
+std::string version_ok_payload()
+{
+    return std::string("version ver=") + WINJECT_VERSION_STRING + " proto=1.0";
+}
+
+bool client_connect(ConsoleClient& client, uint16_t port, std::string* err)
+{
+    return client.start_connect(loopback_mplane(port), err) &&
+           client.finish_connect(err);
+}
+
 }  // namespace
 
 TEST(ConsoleClientTest, OutOfOrderRepliesCompleteCorrectCallbacks)
@@ -78,14 +99,9 @@ TEST(ConsoleClientTest, OutOfOrderRepliesCompleteCorrectCallbacks)
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    Config cfg;
-    cfg.device = "127.0.0.1";
-    cfg.console_port = port;
-
     ConsoleClient client;
     std::string err;
-    ASSERT_TRUE(client.start_connect(cfg, &err));
-    ASSERT_TRUE(client.finish_connect(&err));
+    ASSERT_TRUE(client_connect(client, port, &err));
 
     std::atomic<int> done_count{0};
     std::string first_payload;
@@ -141,14 +157,9 @@ TEST(ConsoleClientTest, DeadlineCompletesWithTimeout)
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    Config cfg;
-    cfg.device = "127.0.0.1";
-    cfg.console_port = port;
-
     ConsoleClient client;
     std::string err;
-    ASSERT_TRUE(client.start_connect(cfg, &err));
-    ASSERT_TRUE(client.finish_connect(&err));
+    ASSERT_TRUE(client_connect(client, port, &err));
 
     std::atomic<bool> timed_out{false};
     ASSERT_TRUE(client.request("ping", std::chrono::milliseconds(5),
@@ -180,8 +191,6 @@ TEST(ConsoleClientTest, ApplyRadioQueriesCapsFirst)
     ASSERT_GE(srv, 0);
 
     Config cfg;
-    cfg.device = "127.0.0.1";
-    cfg.console_port = port;
     cfg.channel = 1;
     cfg.power_dbm = 20;
     cfg.modulation = "OFDM_24M";
@@ -189,8 +198,7 @@ TEST(ConsoleClientTest, ApplyRadioQueriesCapsFirst)
 
     ConsoleClient client;
     std::string err;
-    ASSERT_TRUE(client.start_connect(cfg, &err));
-    ASSERT_TRUE(client.finish_connect(&err));
+    ASSERT_TRUE(client_connect(client, port, &err));
 
     std::atomic<bool> done{false};
     std::atomic<bool> caps_cb{false};
@@ -209,6 +217,10 @@ TEST(ConsoleClientTest, ApplyRadioQueriesCapsFirst)
 
     uint8_t id = 0;
     std::string line;
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "version");
+    client.on_line("OK:" + std::to_string(id) + " " + version_ok_payload());
+
     ASSERT_TRUE(recv_cmd(srv, &id, &line));
     EXPECT_EQ(line, "radio_caps_info");
     client.on_line("OK:" + std::to_string(id) + " radio_caps_info fcs=SIGNAL");
@@ -234,15 +246,13 @@ TEST(ConsoleClientTest, ApplyRadioQueriesCapsFirst)
     close(srv);
 }
 
-TEST(ConsoleClientTest, ApplyRadioEnosysStillPrograms)
+TEST(ConsoleClientTest, ApplyRejectsMissingVersion)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
     Config cfg;
-    cfg.device = "127.0.0.1";
-    cfg.console_port = port;
     cfg.channel = 1;
     cfg.power_dbm = 20;
     cfg.modulation = "OFDM_24M";
@@ -250,29 +260,22 @@ TEST(ConsoleClientTest, ApplyRadioEnosysStillPrograms)
 
     ConsoleClient client;
     std::string err;
-    ASSERT_TRUE(client.start_connect(cfg, &err));
-    ASSERT_TRUE(client.finish_connect(&err));
+    ASSERT_TRUE(client_connect(client, port, &err));
 
     std::atomic<bool> done{false};
     client.apply_radio(cfg, 0,
                        [&](MplaneResult r)
                        {
-                           EXPECT_TRUE(r.ok);
+                           EXPECT_FALSE(r.ok);
+                           EXPECT_EQ(r.error, "EPROTO");
                            done = true;
                        });
 
     uint8_t id = 0;
     std::string line;
     ASSERT_TRUE(recv_cmd(srv, &id, &line));
-    EXPECT_EQ(line, "radio_caps_info");
+    EXPECT_EQ(line, "version");
     client.on_line("NOK:" + std::to_string(id) + " ENOSYS");
-
-    ASSERT_TRUE(recv_cmd(srv, &id, &line));
-    client.on_line("OK:" + std::to_string(id) + " " + line);
-    ASSERT_TRUE(recv_cmd(srv, &id, &line));
-    client.on_line("OK:" + std::to_string(id));
-    ASSERT_TRUE(recv_cmd(srv, &id, &line));
-    client.on_line("OK:" + std::to_string(id));
 
     for (int i = 0; i < 50 && !done; ++i)
     {
@@ -289,8 +292,6 @@ TEST(ConsoleClientTest, ApplyRadioSendsCcaWhenConfigured)
     ASSERT_GE(srv, 0);
 
     Config cfg;
-    cfg.device = "127.0.0.1";
-    cfg.console_port = port;
     cfg.channel = 1;
     cfg.power_dbm = 20;
     cfg.modulation = "OFDM_24M";
@@ -300,13 +301,16 @@ TEST(ConsoleClientTest, ApplyRadioSendsCcaWhenConfigured)
 
     ConsoleClient client;
     std::string err;
-    ASSERT_TRUE(client.start_connect(cfg, &err));
-    ASSERT_TRUE(client.finish_connect(&err));
+    ASSERT_TRUE(client_connect(client, port, &err));
 
     client.apply_radio(cfg, 0, [](MplaneResult) {});
 
     uint8_t id = 0;
     std::string line;
+    ASSERT_TRUE(recv_cmd(srv, &id, &line));
+    EXPECT_EQ(line, "version");
+    client.on_line("OK:" + std::to_string(id) + " " + version_ok_payload());
+
     ASSERT_TRUE(recv_cmd(srv, &id, &line));
     EXPECT_EQ(line, "radio_caps_info");
     client.on_line("OK:" + std::to_string(id) + " radio_caps_info fcs=SIGNAL");
@@ -323,14 +327,9 @@ TEST(ConsoleClientTest, QueryRadioCountersJoinsTxAndRx)
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    Config cfg;
-    cfg.device = "127.0.0.1";
-    cfg.console_port = port;
-
     ConsoleClient client;
     std::string err;
-    ASSERT_TRUE(client.start_connect(cfg, &err));
-    ASSERT_TRUE(client.finish_connect(&err));
+    ASSERT_TRUE(client_connect(client, port, &err));
 
     bool done = false;
     MplaneResult result;
@@ -368,14 +367,9 @@ TEST(ConsoleClientTest, QueryRadioCountersStopsOnTxError)
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    Config cfg;
-    cfg.device = "127.0.0.1";
-    cfg.console_port = port;
-
     ConsoleClient client;
     std::string err;
-    ASSERT_TRUE(client.start_connect(cfg, &err));
-    ASSERT_TRUE(client.finish_connect(&err));
+    ASSERT_TRUE(client_connect(client, port, &err));
 
     bool done = false;
     MplaneResult result;
@@ -403,14 +397,9 @@ TEST(ConsoleClientTest, MultiLineReplyCompletesOnLastLine)
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    Config cfg;
-    cfg.device = "127.0.0.1";
-    cfg.console_port = port;
-
     ConsoleClient client;
     std::string err;
-    ASSERT_TRUE(client.start_connect(cfg, &err));
-    ASSERT_TRUE(client.finish_connect(&err));
+    ASSERT_TRUE(client_connect(client, port, &err));
 
     bool done = false;
     MplaneResult result;

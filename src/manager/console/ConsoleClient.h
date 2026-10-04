@@ -2,6 +2,7 @@
 #define WINJECT_MANAGER_CONSOLE_CLIENT_H_
 
 #include "Config.h"
+#include "utils/Version.h"
 
 #include <bfc/socket.hpp>
 #include <chrono>
@@ -30,7 +31,7 @@ public:
 
     ~ConsoleClient();
 
-    bool start_connect(const Config& cfg, std::string* error);
+    bool start_connect(const sockaddr_in& radio_mplane, std::string* error);
     bool finish_connect(std::string* error);
     void close();
     int fd() const
@@ -60,14 +61,16 @@ public:
 
     void program(const Config& cfg, DoneFn done);
     using RadioCapsFn = std::function<void(const MplaneResult&)>;
+    using RadioVersionFn =
+        std::function<void(bool known, const WinjectVersion& v)>;
     void apply_radio(const Config& cfg, uint8_t save_slot, DoneFn done,
-                     RadioCapsFn on_caps = {});
+                     RadioCapsFn on_caps = {}, RadioVersionFn on_version = {});
     void query_radio_caps(DoneFn done);
     void query_radio_info(DoneFn done);
     // Radio tx_info then rx_info; body_lines holds both reply lines.
     void query_radio_counters(DoneFn done);
     void send_radio_tx(const std::string& kv_args, DoneFn done);
-    void send_radio_reset(uint8_t id, DoneFn done);
+    void send_radio_reset(DoneFn done);
     void send_ping(DoneFn done);
     void send_save_slot(uint8_t slot, DoneFn done);
     void send_load_slot(uint8_t slot, DoneFn done);

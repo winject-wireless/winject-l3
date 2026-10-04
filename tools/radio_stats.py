@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import socket
 import sys
 from pathlib import Path
 from typing import Any
 
-# Bench manager m-plane endpoints: (console_out to bind, console_in to send to).
+# Bench manager m-plane: UDP console_in (replies return to the sender).
 Endpoint = tuple[str, int]
-MGR_A: tuple[Endpoint, Endpoint] = (("127.0.0.1", 2401), ("127.0.0.1", 2400))
-MGR_B: tuple[Endpoint, Endpoint] = (("127.0.0.1", 2411), ("127.0.0.1", 2410))
+MGR_A: Endpoint = ("127.0.0.1", 2400)
+MGR_B: Endpoint = ("127.0.0.1", 2410)
 U32_MOD = 2**32
 
 TX_COUNTERS = (
@@ -192,30 +193,52 @@ def format_stages(
     return "\n".join(lines)
 
 
-def mgr_request(
-    bind: tuple[str, int],
-    dest: tuple[str, int],
-    cmd: str,
-    timeout: float = 2.0,
-) -> str:
-    """Send one manager m-plane command; the reply arrives on `bind` (console_out)."""
+def _strip_correlation_tag(text: str) -> str:
+    parts = text.splitlines(keepends=True)
+    if not parts:
+        return text
+    head = parts[0].rstrip("\n\r")
+    tail = "".join(parts[1:])
+    if head.startswith("OK:"):
+        rest = head[3:]
+        sp = rest.find(" ")
+        if sp < 0:
+            return tail
+        payload = rest[sp + 1 :]
+        if payload.startswith("OK "):
+            out = payload + ("\n" if not payload.endswith("\n") else "")
+            return out + tail
+        sep = "\n" if payload or not tail else ""
+        return payload + sep + tail
+    if head.startswith("NOK:"):
+        rest = head[4:]
+        sp = rest.find(" ")
+        if sp < 0:
+            return "NOK\n"
+        return "NOK " + rest[sp + 1 :] + "\n" + tail
+    return text
+
+
+def mgr_request(dest: Endpoint, cmd: str, timeout: float = 2.0) -> str:
+    """Send one manager m-plane command; read the correlated reply on the same socket."""
+    req_id = random.randint(0, 255)
+    wire = f"cmd:{req_id} {cmd}"
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
     try:
-        sock.bind(bind)
-        sock.sendto(cmd.encode(), dest)
-        return sock.recvfrom(65535)[0].decode(errors="replace")
+        sock.sendto(wire.encode(), dest)
+        while True:
+            raw = sock.recvfrom(65535)[0].decode(errors="replace")
+            line = raw.splitlines()[0] if raw else ""
+            if line.startswith(f"OK:{req_id}") or line.startswith(f"NOK:{req_id}"):
+                return _strip_correlation_tag(raw)
     finally:
         sock.close()
 
 
-def read_via_manager(
-    bind: tuple[str, int],
-    dest: tuple[str, int],
-    timeout: float = 3.0,
-) -> dict[str, Any]:
+def read_via_manager(dest: Endpoint, timeout: float = 3.0) -> dict[str, Any]:
     """Radio counters through the manager's `radio_stats`: {'manager', 'tx', 'rx'}."""
-    text = mgr_request(bind, dest, "radio_stats", timeout)
+    text = mgr_request(dest, "radio_stats", timeout)
     if text.startswith("NOK"):
         raise OSError(f"manager radio_stats failed: {text.strip()}")
     out: dict[str, Any] = {"manager": f"{dest[0]}:{dest[1]}", "tx": {}, "rx": {}}
@@ -227,12 +250,41 @@ def read_via_manager(
     return out
 
 
-def mgr_get_metrics(
-    bind: tuple[str, int],
-    dest: tuple[str, int],
-    timeout: float = 2.0,
-) -> dict[str, int]:
-    text = mgr_request(bind, dest, "get_metrics", timeout)
+def mgr_version(dest: Endpoint, timeout: float = 2.0) -> str:
+    """Manager `version` reply body (first line), e.g. ``version ver=v1.0.0 proto=1.0``."""
+    text = mgr_request(dest, "version", timeout)
+    if text.startswith("NOK"):
+        raise OSError(f"manager version failed: {text.strip()}")
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    if not line.startswith("version "):
+        raise OSError(f"unexpected manager version reply: {text.strip()}")
+    return line
+
+
+def print_manager_versions(
+    mgr_a: Endpoint,
+    mgr_b: Endpoint,
+    *,
+    quiet: bool = False,
+) -> None:
+    if quiet:
+        return
+    for name, dest in (("A", mgr_a), ("B", mgr_b)):
+        try:
+            body = mgr_version(dest)
+            print(
+                f"manager {name} ({dest[0]}:{dest[1]}): {body}",
+                file=sys.stderr,
+            )
+        except OSError as err:
+            print(
+                f"warning: manager {name} version failed: {err}",
+                file=sys.stderr,
+            )
+
+
+def mgr_get_metrics(dest: Endpoint, timeout: float = 2.0) -> dict[str, int]:
+    text = mgr_request(dest, "get_metrics", timeout)
     out: dict[str, int] = {}
     for line in text.splitlines():
         if "=" not in line:
@@ -251,24 +303,24 @@ def mgr_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
 
 
 def snapshot_managers(
-    mgr_a: tuple[Endpoint, Endpoint] = MGR_A,
-    mgr_b: tuple[Endpoint, Endpoint] = MGR_B,
+    mgr_a: Endpoint = MGR_A,
+    mgr_b: Endpoint = MGR_B,
     *,
     quiet: bool = False,
 ) -> dict[str, Any]:
     """Radio counters and manager metrics for both sides, via the managers only."""
+    print_manager_versions(mgr_a, mgr_b, quiet=quiet)
 
-    def side(name: str, ends: tuple[Endpoint, Endpoint]) -> tuple[dict[str, Any], dict[str, int]]:
-        bind, dest = ends
+    def side(name: str, dest: Endpoint) -> tuple[dict[str, Any], dict[str, int]]:
         radio: dict[str, Any] = {"tx": {}, "rx": {}}
         metrics: dict[str, int] = {}
         try:
-            radio = read_via_manager(bind, dest)
+            radio = read_via_manager(dest)
         except OSError as err:
             if not quiet:
                 print(f"warning: manager {name} radio_stats failed: {err}", file=sys.stderr)
         try:
-            metrics = mgr_get_metrics(bind, dest)
+            metrics = mgr_get_metrics(dest)
         except OSError as err:
             if not quiet:
                 print(f"warning: manager {name} get_metrics failed: {err}", file=sys.stderr)
@@ -349,18 +401,13 @@ def main() -> int:
     p.add_argument("--save", metavar="FILE", help="write JSON snapshot (both radios)")
     p.add_argument("--diff", nargs=2, metavar=("BEFORE", "AFTER"), help="print stage table")
     p.add_argument("--dir", choices=("ab", "ba"), help="direction for --diff")
+    p.add_argument("--mgr-a", default="127.0.0.1:2400", help="manager A console_in")
+    p.add_argument("--mgr-b", default="127.0.0.1:2410", help="manager B console_in")
     p.add_argument(
-        "--mgr-a-bind",
-        default="127.0.0.1:2401",
-        help="manager A console_out, bound for replies (default 127.0.0.1:2401)",
+        "--quiet",
+        action="store_true",
+        help="suppress stderr warnings and manager version lines",
     )
-    p.add_argument(
-        "--mgr-a-dest",
-        default="127.0.0.1:2400",
-        help="manager A console_in (default 127.0.0.1:2400)",
-    )
-    p.add_argument("--mgr-b-bind", default="127.0.0.1:2411")
-    p.add_argument("--mgr-b-dest", default="127.0.0.1:2410")
     args = p.parse_args()
 
     def parse_ep(s: str) -> tuple[str, int]:
@@ -378,8 +425,9 @@ def main() -> int:
         return 0
 
     data = snapshot_managers(
-        (parse_ep(args.mgr_a_bind), parse_ep(args.mgr_a_dest)),
-        (parse_ep(args.mgr_b_bind), parse_ep(args.mgr_b_dest)),
+        parse_ep(args.mgr_a),
+        parse_ep(args.mgr_b),
+        quiet=args.quiet,
     )
     if args.save:
         save_snapshot(Path(args.save), data)

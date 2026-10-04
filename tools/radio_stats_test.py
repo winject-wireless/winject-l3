@@ -11,6 +11,8 @@ from radio_stats import (
     delta,
     firmware_has_metrics,
     mgr_delta,
+    mgr_request,
+    mgr_version,
     parse_kv_line,
     read_via_manager,
     residual_checks,
@@ -18,24 +20,46 @@ from radio_stats import (
 )
 
 
-def fake_manager(reply: str) -> tuple[tuple[str, int], tuple[str, int], threading.Thread]:
-    """One-shot manager console: answers the first command on console_out."""
+def fake_manager(reply: str) -> tuple[tuple[str, int], threading.Thread]:
+    """One-shot manager console: replies to the request source with the same tag."""
+
     srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     srv.bind(("127.0.0.1", 0))
-    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    probe.bind(("127.0.0.1", 0))
-    out = probe.getsockname()
-    probe.close()
+    dest = srv.getsockname()
 
     def serve() -> None:
         srv.settimeout(2.0)
-        cmd, _ = srv.recvfrom(512)
-        srv.sendto(reply.encode() if cmd == b"radio_stats" else b"NOK", out)
+        cmd, peer = srv.recvfrom(512)
+        text = cmd.decode(errors="replace").strip()
+        tag = ""
+        body = text
+        if text.startswith("cmd:"):
+            sp = text.find(" ")
+            tag = text[4:sp] if sp > 0 else ""
+            body = text[sp + 1 :] if sp > 0 else ""
+        if body == "radio_stats":
+            out = reply if reply.endswith("\n") else reply + "\n"
+            if out.startswith("NOK "):
+                srv.sendto(f"NOK:{tag} {out[4:]}".encode(), peer)
+            elif out.startswith("OK "):
+                srv.sendto(f"OK:{tag} {out[3:]}".encode(), peer)
+            else:
+                first, *rest = out.split("\n", 1)
+                wire = f"OK:{tag} {first}\n"
+                if rest:
+                    wire += rest[0]
+                srv.sendto(wire.encode(), peer)
+        elif body == "ping":
+            srv.sendto(f"OK:{tag} pong\n".encode(), peer)
+        elif body == "version":
+            srv.sendto(f"OK:{tag} version ver=v1.0.0 proto=1.0\n".encode(), peer)
+        else:
+            srv.sendto(f"NOK:{tag} EINVAL\n".encode(), peer)
         srv.close()
 
     t = threading.Thread(target=serve)
     t.start()
-    return out, srv.getsockname(), t
+    return dest, t
 
 
 class RadioStatsTest(unittest.TestCase):
@@ -107,19 +131,45 @@ class RadioStatsTest(unittest.TestCase):
         )
 
     def test_read_via_manager(self) -> None:
-        bind, dest, t = fake_manager(
+        dest, t = fake_manager(
             "tx_info ether_pkt=10 air_pkt=9 ts=1\nrx_info ether_pkt=8 air_pkt=9 ts=2\n"
         )
-        snap = read_via_manager(bind, dest)
+        snap = read_via_manager(dest)
         t.join()
         self.assertEqual(snap["tx"]["ether_pkt"], 10)
         self.assertEqual(snap["rx"]["ether_pkt"], 8)
 
     def test_read_via_manager_nok(self) -> None:
-        bind, dest, t = fake_manager("NOK NOT_FOUND\n")
+        dest, t = fake_manager("NOK ENODEV\n")
         with self.assertRaises(OSError):
-            read_via_manager(bind, dest)
+            read_via_manager(dest)
         t.join()
+
+    def test_mgr_version(self) -> None:
+        dest, t = fake_manager("")
+        body = mgr_version(dest)
+        t.join()
+        self.assertEqual(body, "version ver=v1.0.0 proto=1.0")
+
+    def test_mgr_request_skips_wrong_tag(self) -> None:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        srv.bind(("127.0.0.1", 0))
+        dest = srv.getsockname()
+        done = threading.Event()
+
+        def serve() -> None:
+            srv.settimeout(2.0)
+            cmd, peer = srv.recvfrom(512)
+            text = cmd.decode(errors="replace").strip()
+            tag = text[4 : text.find(" ")] if text.startswith("cmd:") else "0"
+            srv.sendto(f"OK:1 pong\n".encode(), peer)
+            srv.sendto(f"OK:{tag} pong\n".encode(), peer)
+            srv.close()
+            done.set()
+
+        threading.Thread(target=serve).start()
+        self.assertEqual(mgr_request(dest, "ping"), "pong\n")
+        done.wait(timeout=2.0)
 
 
 if __name__ == "__main__":

@@ -421,7 +421,7 @@ bool UdpEndpoint::set_fec_timeout_ms(int timeout_ms, std::string* error)
     {
         if (error != nullptr)
         {
-            *error = "INVALID_ARGUMENT";
+            *error = "EINVAL";
         }
         return false;
     }

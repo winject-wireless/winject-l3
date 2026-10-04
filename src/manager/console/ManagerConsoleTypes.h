@@ -4,6 +4,7 @@
 #include "Config.h"
 
 #include <functional>
+#include <netinet/in.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string>
@@ -85,6 +86,23 @@ struct ManagerRadioView
     bool cca_valid = false;
 };
 
+struct ManagerRadioDeviceUpdate
+{
+    uint8_t id = 0;
+    bool have_mplane = false;
+    sockaddr_in mplane{};
+    bool have_dplane = false;
+    sockaddr_in dplane{};
+    bool have_fcs = false;
+    RadioFcsConfig fcs = RadioFcsConfig::auto_detect;
+};
+
+struct ManagerRadioDeviceView
+{
+    uint8_t id = 0;
+    RadioDeviceConfig device;
+};
+
 struct ManagerRadioUpdate
 {
     bool have_channel = false;
@@ -133,13 +151,16 @@ struct ManagerConsoleHandlers
     std::function<bool(const std::vector<std::string>& keys,
                        std::vector<ManagerMetricView>* out, std::string* error)>
         get_metrics;
+    std::function<bool(const ManagerRadioDeviceUpdate& patch,
+                       ManagerRadioDeviceView* out, std::string* error)>
+        radio_device;
     std::function<void(ManagerConsoleReply reply)> radio_info;
     std::function<void(ManagerConsoleReply reply)> radio_caps_info;
     std::function<void(ManagerConsoleReply reply)> radio_stats;
     std::function<void(const ManagerRadioUpdate& patch,
                        ManagerConsoleReply reply)>
         radio_tx;
-    std::function<void(uint8_t id, ManagerConsoleReply reply)> radio_reset;
+    std::function<void(ManagerConsoleReply reply)> radio_reset;
     std::function<void(uint8_t slot, ManagerConsoleReply reply)> config_slot;
 };
 

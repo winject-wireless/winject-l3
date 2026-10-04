@@ -1,0 +1,41 @@
+name: Guidelines
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  guidelines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Check format and run tests
+        run: ./scripts/check_guidelines.sh
+
+  tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+
+      - name: Build and test with ThreadSanitizer
+        env:
+          WINJECT_TEST_BUILD_DIR: build_test_tsan
+        run: |
+          cmake -S src/test -B "$WINJECT_TEST_BUILD_DIR" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build "$WINJECT_TEST_BUILD_DIR" -j"$(nproc)"
+          ctest --test-dir "$WINJECT_TEST_BUILD_DIR" --output-on-failure

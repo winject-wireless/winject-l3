@@ -14,8 +14,7 @@ This document covers the system architecture, the manager's internal structure, 
 |        |   v  upstreams       |                    |        |   v  upstreams       |
 | winject-manager               |                    | winject-manager               |
 |   m-plane (UDP 22) --------+  |                    |  +-------- m-plane (UDP 22)   |
-|   d-plane inject  (:9000) -+  |                    |  +- d-plane inject  (:9000)   |
-|   d-plane forward (:9210) -+  |                    |  +- d-plane forward (:9210)   |
+|   d-plane (:9000) --------+  |                    |  +- d-plane (:9000)          |
 +----------------------------|--+                    +--|----------------------------+
                 Ethernet     |                          |     Ethernet
 +----------------------------v--+                    +--v----------------------------+
@@ -32,9 +31,8 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | Plane | Endpoint | Purpose |
 |---|---|---|
 | Radio m-plane | radio UDP **22** | Text commands from the manager to the radio: PHY (`radio_tx`), domain filter (`rx_filter_addr3`), capabilities (`radio_caps_info`), counters (`tx_info`, `rx_info`), `save` / `load`, `reset`. Specified in the winject-radio-esp32 repository |
-| Radio d-plane inject | radio UDP **9000** | Host → radio. Each UDP payload is one complete MPDU (24–1472 bytes, no FCS), transmitted as-is. Must be one unfragmented datagram |
-| Radio d-plane forward | radio UDP **9210** | Radio → host. The radio sends every received frame for its domain to the host that last sent any datagram to 9210, as MPDU + 4-byte trailer. The trailer is the on-air FCS (`fcs=ACTUAL`) or a pass/fail verdict (`fcs=SIGNAL`, ESP32) |
-| Manager m-plane | `manager.console_in` / `console_out` | Text commands from operators and tools to the manager: upstreams, metrics, radio passthrough. Specified in [mplane.md](mplane.md) |
+| Radio d-plane | radio UDP **9000** (typical) | One port for inject (24–1472 byte MPDUs), peer registration (1–23 bytes), and forward (MPDU + 4-byte trailer to the registered peer). See the radio repos for the length rules |
+| Manager m-plane | `manager.console_in` | Text commands from operators and tools to the manager: upstreams, metrics, radio passthrough. Specified in [mplane.md](mplane.md) |
 
 ## Manager
 
@@ -46,9 +44,9 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | `Config` | [`Config.*`](../src/manager/Config.cpp) | Parses the `winject.*`, `upstream-N.*` and `manager.*` keys |
 | `IOReactor` | [`IOReactor.h`](../src/manager/utils/IOReactor.h) | epoll reactor (`bfcext::epoll_reactor`); runs all socket I/O and timers on one thread |
 | `ConsoleClient` | [`ConsoleClient.*`](../src/manager/console/ConsoleClient.cpp) | Radio m-plane client: correlated requests (`cmd:<u8>`), timeouts, `apply_radio`, `radio_caps_info` query |
-| `ConsoleService` | [`ConsoleService.*`](../src/manager/console/ConsoleService.cpp) | Manager m-plane server (`console_in` → `console_out`) |
+| `ConsoleService` | [`ConsoleService.*`](../src/manager/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender) |
 | `RadioManager` | [`RadioManager.*`](../src/manager/radio/RadioManager.cpp) | Keeps the radio in the configured state: PHY reconcile, filter reconcile, heartbeat, forward re-registration, TX pacing per modulation |
-| `WifiUdp` | [`WifiUdp.*`](../src/manager/radio/WifiUdp.cpp) | d-plane socket: sends MPDUs to radio:9000, registers on radio:9210, checks the forward trailer per FCS mode |
+| `WifiUdp` | [`WifiUdp.*`](../src/manager/radio/WifiUdp.cpp) | d-plane socket: MPDUs and 1-byte registration to `radio_device dplane`; checks the forward trailer per FCS mode |
 | `TxMux` | [`TxMux.*`](../src/manager/radio/TxMux.cpp) | TX scheduler: picks upstreams, builds MPDUs, paces them to the PHY airtime and `max_rate_kbps` |
 | `RxDemux` | [`RxDemux.*`](../src/manager/radio/RxDemux.cpp) | RX: validates domain, splits slots, routes each slot by its LC bus to upstreams |
 | `RadioUpstreamTable` | [`RadioUpstreamTable.*`](../src/manager/radio/RadioUpstreamTable.cpp) | Shared upstream list (`bus_tx`, `bus_rx`, upstream pointer), guarded by one mutex |
@@ -74,7 +72,7 @@ The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue 
 3. The TX thread picks a primary upstream that has data, then fills the remaining room in the MPDU from other upstreams, up to 5 slots and 1448 body bytes.
 4. Each slot payload is prefixed with the LC header (upstream `tx_bus`, per-bus sequence).
 5. The MPDU header gets the domain in Address 3, the slot lengths in Address 1–2, and a 12-bit MPDU sequence.
-6. `WifiUdp::send` sends it as one UDP datagram to radio:9000. Pacing decides when the next MPDU may go.
+6. `WifiUdp::send` sends it as one UDP datagram to the configured d-plane address. Pacing decides when the next MPDU may go.
 7. The radio transmits it unchanged.
 
 ### Data path: RX
@@ -87,15 +85,15 @@ The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue 
 
 ### Control path
 
-At startup, unless `winject.skip_console = 1`, the manager connects to the radio m-plane and:
+At startup, when `radio_device` has an `mplane` address (from config or `radio_device mplane=`), the manager connects to the radio m-plane and:
 
 1. queries `radio_caps_info` to learn the FCS trailer mode (`NOK ENOSYS` from older firmware means `ACTUAL`);
 2. programs `radio_tx` (channel, power, modulation, and CCA when `winject.cca` is set) and `rx_filter_addr3` (domain);
 3. stores it with `save <slot>`.
 
-While running, `RadioManager` periodically re-reads the PHY and filter and corrects them, pings the radio, and re-registers on radio:9210 about once a second so the radio keeps forwarding to this manager. The first registration happens when `WifiUdp` opens.
+While running, `RadioManager` periodically re-reads the PHY and filter and corrects them, pings the radio, and re-registers on the d-plane port about once a second so the radio keeps forwarding to this manager. The first registration happens when the d-plane address is applied.
 
-With `skip_console = 1`, the manager never talks to the radio m-plane: the radio must be prepared beforehand, and `winject.radio_fcs` must be set explicitly (`signal` or `actual`).
+Without an `mplane` address, the manager never talks to the radio m-plane: set `radio_device fcs` explicitly (`SIGNAL` or `ACTUAL`) or use config `winject.radio_fcs`.
 
 The manager m-plane also forwards radio commands for operators and bench tools (`radio_info`, `radio_tx`, `radio_stats`, `reset`, `radio_caps_info`); see [mplane.md](mplane.md). The bench scripts and tools reach the radios only through these.
 
@@ -108,7 +106,7 @@ The radio firmware is deliberately simple. It knows nothing about slots, buses o
 | Inject | The Ethernet RX callback takes IPv4/UDP frames to its own MAC/IP on port 9000 directly off the EMAC ring, bypassing lwIP. IP fragments are not reassembled: they fall through to lwIP, which answers with ICMP port unreachable. That's why the manager caps an MPDU at 1472 bytes |
 | TX queue | Frames go into a bounded inject queue (`tx_queue_sz`), drained by one task into `esp_wifi_80211_tx` with at most 4 in flight. The task pauses after every 8 frames. Measured sustained rate at OFDM 24M: ~1,450–1,550 frames/s; above that the queue overflows (`dropped_tx_queue`) |
 | RX | Promiscuous mode; frames whose Address 3 matches `rx_filter_addr3` are queued (`rx_queue_sz`), others are counted as `dropped_filter_mismatched` |
-| Forward | A drain task sends each queued frame + trailer to the last host that sent a datagram to 9210. The ESP32 hardware does not deliver the received FCS, so it reports `fcs=SIGNAL`: trailer `00000000` = hardware CRC passed, `FFFFFFFF` = failed |
+| Forward | A drain task sends each queued frame + trailer to the registered peer on the d-plane port. The ESP32 hardware does not deliver the received FCS, so it reports `fcs=SIGNAL`: trailer `00000000` = hardware CRC passed, `FFFFFFFF` = failed |
 | Counters | `tx_info` / `rx_info` report monotonic counters for every stage (`ether_pkt`, `air_pkt`, `dropped_*`), so a host can attribute each lost frame to a stage |
 
 The radio m-plane, d-plane and counters are specified in the winject-radio-esp32 repository.
