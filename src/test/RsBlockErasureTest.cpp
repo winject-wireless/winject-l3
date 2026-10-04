@@ -172,6 +172,28 @@ TEST(FecTest, PassthroughUnknownMagic)
     EXPECT_EQ(payloads[0], std::vector<uint8_t>(raw, raw + sizeof(raw)));
 }
 
+// A non-FEC datagram that starts with the shard magic but is not a valid
+// shard header used to be dropped.
+TEST(FecTest, PassthroughMagicWithoutValidHeader)
+{
+    RsBlockErasure dec;  // no init
+    const std::vector<std::vector<uint8_t>> raws = {
+        {RsBlockErasure::k_magic},
+        {RsBlockErasure::k_magic, 'h', 'e', 'l', 'l', 'o', '!', '!', '!'},
+        // Right version, but k=0.
+        {RsBlockErasure::k_magic, RsBlockErasure::k_version, 0, 1, 0, 0, 2, 0,
+         'x'},
+    };
+    for (const auto& raw : raws)
+    {
+        std::vector<std::vector<uint8_t>> payloads;
+        dec.push_air(raw.data(), raw.size(), &payloads);
+        ASSERT_EQ(payloads.size(), 1u);
+        EXPECT_EQ(payloads[0], raw);
+    }
+    EXPECT_EQ(dec.decode_fail(), 0u);
+}
+
 TEST(FecTest, MaxPayloadFitsWifi)
 {
     RsBlockErasure fec;

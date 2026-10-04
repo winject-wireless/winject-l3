@@ -703,12 +703,8 @@ void RsBlockErasure::push_air(const uint8_t* data, size_t len,
     }
     expire_rx();
     // RX is always FEC-aware: k/n come from the shard header. Encode still
-    // requires init(). Non-FEC datagrams pass through unchanged.
-    if (data[0] != k_magic)
-    {
-        out->emplace_back(data, data + len);
-        return;
-    }
+    // requires init(). Anything that is not a valid shard header, including a
+    // non-FEC datagram that happens to start with k_magic, passes through.
     uint16_t block_id = 0;
     int index = 0;
     int k = 0;
@@ -716,7 +712,7 @@ void RsBlockErasure::push_air(const uint8_t* data, size_t len,
     uint8_t flags = 0;
     if (!unpack_header(data, len, &block_id, &index, &k, &n, &flags))
     {
-        decode_fail_++;
+        out->emplace_back(data, data + len);
         return;
     }
     if (done.find(block_id) != done.end())

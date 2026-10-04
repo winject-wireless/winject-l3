@@ -85,7 +85,7 @@ Procedure for a new connection:
 | `update_upstream\|uu id=<u8> [fec=<NONE\|BLOCK>] [k=<n>] [n=<n>] [fec_timeout=<ms>] [quanta=<bytes>]` | Change FEC or scheduling of an existing upstream | Same as `add_upstream` |
 | `remove_upstream\|ru id=<u8>` | Remove an upstream | `OK` |
 
-`fec_timeout` accepts a number of milliseconds with an optional `ms` suffix (`50` or `50ms`). It closes a partial FEC block after that long. `quanta` is the upstream's scheduling share per TX pass, in bytes (config key `scheduler_budget`).
+`fec_timeout` accepts a number of milliseconds with an optional `ms` suffix (`50` or `50ms`). It closes a partial FEC block after that long. `quanta` is the upstream's scheduling share per TX pass, in bytes of SDU plus its 3-byte LC header (config key `scheduler_budget`). An upstream may always send its first SDU of a pass even when it is larger than `quanta`, so a small `quanta` slows an upstream but never blocks it.
 
 ### Statistics
 
