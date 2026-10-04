@@ -111,8 +111,8 @@ inline ManagerConsoleHandlers stub_console_handlers()
     h.radio_tx = [](const ManagerRadioUpdate&, ManagerConsoleReply) {};
     h.radio_reset = [](ManagerConsoleReply) {};
     h.config_slot = [](uint8_t, ManagerConsoleReply) {};
-    h.radio_device = [](const ManagerRadioDeviceUpdate&, ManagerRadioDeviceView*,
-                        std::string*) -> bool
+    h.radio_device = [](const ManagerRadioDeviceUpdate&,
+                        ManagerRadioDeviceView*, std::string*) -> bool
     {
         return true;
     };
@@ -223,9 +223,9 @@ public:
         {
             sockaddr_in from = {};
             socklen_t from_len = sizeof(from);
-            const ssize_t n = ::recvfrom(fd, buf, sizeof(buf) - 1, MSG_DONTWAIT,
-                                         reinterpret_cast<sockaddr*>(&from),
-                                         &from_len);
+            const ssize_t n =
+                ::recvfrom(fd, buf, sizeof(buf) - 1, MSG_DONTWAIT,
+                           reinterpret_cast<sockaddr*>(&from), &from_len);
             if (n > 0)
             {
                 buf[n] = '\0';

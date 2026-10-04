@@ -1,14 +1,12 @@
 #ifndef WINJECT_MANAGER_FRAMES_MPDU_H_
 #define WINJECT_MANAGER_FRAMES_MPDU_H_
 
+#include "frames/Frame.h"
 #include "radio/RadioDefs.h"
 
+#include <bfc/buffer.hpp>
 #include <stddef.h>
 #include <stdint.h>
-
-#include <bfc/buffer.hpp>
-
-#include "frames/Frame.h"
 
 namespace winject
 {
@@ -24,7 +22,6 @@ public:
     bool is_valid_winject_frame() const;
     uint16_t get_domain() const;
     void set_domain(uint16_t domain);
-
 
     void set_slot_payload(uint8_t slot_index, uint16_t slot_size);
     uint16_t slot_payload_size(uint8_t slot_index) const;
