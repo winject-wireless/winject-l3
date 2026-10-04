@@ -5,7 +5,6 @@
 
 #include <bfc/sized_buffer.hpp>
 #include <bfcext/shared_sized_buffer.hpp>
-
 #include <stddef.h>
 #include <stdint.h>
 
@@ -31,7 +30,8 @@ public:
 
     bool stamp_air(uint8_t bus, uint16_t* tx_seq, uint8_t* out, size_t max,
                    const uint8_t* data, size_t len, size_t* out_len);
-    bool accept_air(const uint8_t* data, size_t len, const uint8_t** payload, size_t* plen);
+    bool accept_air(const uint8_t* data, size_t len, const uint8_t** payload,
+                    size_t* plen);
     uint64_t collect_air_seq_loss_delta();
 
 protected:

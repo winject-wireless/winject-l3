@@ -36,7 +36,7 @@ inline uint16_t reserve_free_udp_port()
 }
 
 inline bool run_reactor_with_watchdog(IOReactor& reactor,
-                                       const std::function<void()>& unblock)
+                                      const std::function<void()>& unblock)
 {
     reactor.get_timer().wait_ms(50,
                                 [&]()
