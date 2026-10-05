@@ -166,19 +166,50 @@ public:
         return true;
     }
 
+    // Runs fn on the reactor thread and waits for it. ConsoleService state and
+    // handler-captured test state belong to the reactor thread, so tests must
+    // complete replies and read that state through here.
+    bool on_reactor(const std::function<void()>& fn, int timeout_ms = 500)
+    {
+        if (reactor_ == nullptr)
+        {
+            return false;
+        }
+        auto done = std::make_shared<std::promise<void>>();
+        std::future<void> finished = done->get_future();
+        reactor_->wake_up(
+            [fn, done]()
+            {
+                fn();
+                done->set_value();
+            });
+        return finished.wait_for(std::chrono::milliseconds(timeout_ms)) ==
+               std::future_status::ready;
+    }
+
     bool wait_for(const std::function<bool()>& cond, int timeout_ms = 500)
     {
         const auto deadline = std::chrono::steady_clock::now() +
                               std::chrono::milliseconds(timeout_ms);
+        auto check = [&]()
+        {
+            bool met = false;
+            return on_reactor(
+                       [&]()
+                       {
+                           met = cond();
+                       }) &&
+                   met;
+        };
         while (std::chrono::steady_clock::now() < deadline)
         {
-            if (cond())
+            if (check())
             {
                 return true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        return cond();
+        return check();
     }
 
     void stop()
