@@ -156,7 +156,7 @@ void UdpEndpoint::close()
     }
 }
 
-void UdpEndpoint::push_tx(bfc::sized_buffer pkt)
+void UdpEndpoint::push_tx(bfc::sized_buffer pkt, bool is_fec)
 {
     if (pkt.empty())
     {
@@ -166,13 +166,16 @@ void UdpEndpoint::push_tx(bfc::sized_buffer pkt)
     {
         txq.pop_front();
     }
-    txq.push_back(std::move(pkt));
+    TxItem item;
+    item.pkt = std::move(pkt);
+    item.is_fec = is_fec;
+    txq.push_back(std::move(item));
 }
 
 void UdpEndpoint::enqueue_air(bfc::sized_buffer pkt)
 {
     std::lock_guard<std::mutex> lock(tx_mu_);
-    push_tx(std::move(pkt));
+    push_tx(std::move(pkt), false);
 }
 
 void UdpEndpoint::on_app()
@@ -264,7 +267,17 @@ void UdpEndpoint::on_app()
     }
 }
 
-void UdpEndpoint::on_radio_rx(bfcext::shared_sized_buffer pkt)
+void UdpEndpoint::send_app(const uint8_t* data, size_t len)
+{
+    app_rx_bytes_.fetch_add(static_cast<uint64_t>(len),
+                            std::memory_order_relaxed);
+    app_rx_packets_.fetch_add(1, std::memory_order_relaxed);
+    const bfc::const_buffer_view view(reinterpret_cast<const std::byte*>(data),
+                                      len);
+    sock.send(view, 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
+}
+
+void UdpEndpoint::on_radio_rx(bfcext::shared_sized_buffer pkt, bool is_fec)
 {
     if (pkt.empty())
     {
@@ -276,24 +289,25 @@ void UdpEndpoint::on_radio_rx(bfcext::shared_sized_buffer pkt)
     }
     const uint8_t* air = reinterpret_cast<const uint8_t*>(pkt.data());
     const size_t air_len = pkt.size();
-    if (air_len > 0 && air[0] == RsBlockErasure::k_magic)
+    // The LC header says whether this is a shard; the SDU is never inspected.
+    if (!is_fec)
     {
-        fec_air_rx_bytes_.fetch_add(static_cast<uint64_t>(air_len),
-                                    std::memory_order_relaxed);
-        fec_air_rx_packets_.fetch_add(1, std::memory_order_relaxed);
+        send_app(air, air_len);
+        return;
     }
-    // Always FEC-aware on RX: shard header carries k/n. Non-FEC passes through.
+    fec_air_rx_bytes_.fetch_add(static_cast<uint64_t>(air_len),
+                                std::memory_order_relaxed);
+    fec_air_rx_packets_.fetch_add(1, std::memory_order_relaxed);
+    if (!fec.enabled())
+    {
+        fec_air_rx_unexpected_.fetch_add(1, std::memory_order_relaxed);
+    }
+    // k/n come from the shard header, so shards decode even with FEC disabled.
     std::vector<std::vector<uint8_t>> payloads;
     fec.push_air(air, air_len, &payloads);
     for (const auto& p : payloads)
     {
-        app_rx_bytes_.fetch_add(static_cast<uint64_t>(p.size()),
-                                std::memory_order_relaxed);
-        app_rx_packets_.fetch_add(1, std::memory_order_relaxed);
-        const bfc::const_buffer_view view(
-            reinterpret_cast<const std::byte*>(p.data()), p.size());
-        sock.send(view, 0, reinterpret_cast<const sockaddr*>(&dest),
-                  sizeof(dest));
+        send_app(p.data(), p.size());
     }
 }
 
@@ -359,7 +373,7 @@ void UdpEndpoint::stage_fec_shard_for_tx(size_t max)
     {
         return;
     }
-    push_tx(make_pkt(std::move(shard)));
+    push_tx(make_pkt(std::move(shard)), true);
 }
 
 void UdpEndpoint::announce_down()
@@ -375,7 +389,7 @@ void UdpEndpoint::announce_down()
     fec.drain_tx_shards(&encoded);
     for (auto& pkt : encoded)
     {
-        push_tx(make_pkt(std::move(pkt)));
+        push_tx(make_pkt(std::move(pkt)), true);
     }
 }
 
@@ -407,7 +421,7 @@ bool UdpEndpoint::set_fec(FecType type, int k, int n, std::string* error)
                                : RsBlockErasure::k_default_timeout_ms;
     if (!fec.init(k, n, timeout_ms))
     {
-        return fail("invalid fec k/n (need 1 <= k < n <= 255)");
+        return fail("invalid fec k/n (need 1 <= k < n <= 31)");
     }
 
     LOG_INF("udp fec RS_BLOCK_ERASURE k=%d n=%d timeout=%d ms (%s)", k, n,
@@ -447,7 +461,7 @@ void UdpEndpoint::tx_pending_stats(uint64_t* pkt, uint64_t* byt) const
     for (const auto& q : txq)
     {
         p++;
-        b += static_cast<uint64_t>(q.size());
+        b += static_cast<uint64_t>(q.pkt.size());
     }
     if (fec.enabled())
     {
@@ -498,7 +512,7 @@ size_t UdpEndpoint::get_tx_size()
     std::lock_guard<std::mutex> lock(tx_mu_);
     if (!txq.empty())
     {
-        return txq.front().size();
+        return txq.front().pkt.size();
     }
     if (fec.enabled())
     {
@@ -507,30 +521,35 @@ size_t UdpEndpoint::get_tx_size()
     return 0;
 }
 
-bfc::sized_buffer UdpEndpoint::pull_tx(size_t max)
+bfc::sized_buffer UdpEndpoint::pull_tx(size_t max, bool* is_fec)
 {
+    if (is_fec != nullptr)
+    {
+        *is_fec = false;
+    }
     std::lock_guard<std::mutex> lock(tx_mu_);
     stage_fec_shard_for_tx(max);
     if (txq.empty() || max == 0)
     {
         return {};
     }
-    auto& pkt = txq.front();
-    if (pkt.size() > max)
+    TxItem& item = txq.front();
+    if (item.pkt.size() > max)
     {
         return {};
     }
-    bfc::sized_buffer out = std::move(pkt);
+    bfc::sized_buffer out = std::move(item.pkt);
+    const bool shard = item.is_fec;
     txq.pop_front();
-    if (!out.empty())
+    if (shard)
     {
-        const uint8_t* data = reinterpret_cast<const uint8_t*>(out.data());
-        if (fec.enabled() && data[0] == RsBlockErasure::k_magic)
-        {
-            fec_air_tx_bytes_.fetch_add(static_cast<uint64_t>(out.size()),
-                                       std::memory_order_relaxed);
-            fec_air_tx_packets_.fetch_add(1, std::memory_order_relaxed);
-        }
+        fec_air_tx_bytes_.fetch_add(static_cast<uint64_t>(out.size()),
+                                    std::memory_order_relaxed);
+        fec_air_tx_packets_.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (is_fec != nullptr)
+    {
+        *is_fec = shard;
     }
     return out;
 }

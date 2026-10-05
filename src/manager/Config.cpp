@@ -331,13 +331,15 @@ bool Config::load(const std::string& path, std::string* error)
             radio_device.mplane = {};
             radio_device.mplane.sin_family = AF_INET;
             radio_device.mplane.sin_addr = dev_ip;
-            radio_device.mplane.sin_port = htons(static_cast<uint16_t>(console_port));
+            radio_device.mplane.sin_port =
+                htons(static_cast<uint16_t>(console_port));
         }
         radio_device.have_dplane = true;
         radio_device.dplane = {};
         radio_device.dplane.sin_family = AF_INET;
         radio_device.dplane.sin_addr = dev_ip;
-        radio_device.dplane.sin_port = htons(static_cast<uint16_t>(dplane_port));
+        radio_device.dplane.sin_port =
+            htons(static_cast<uint16_t>(dplane_port));
     }
     stats_sec = parser.as<unsigned>("winject.stats_sec").value_or(0);
     if (const char* env = std::getenv("WINJECT_STATS_SEC"))
@@ -460,10 +462,11 @@ bool Config::load(const std::string& path, std::string* error)
             }
             auto fk = parser.as<unsigned>(key_of(i, "fec.k"));
             auto fn = parser.as<unsigned>(key_of(i, "fec.n"));
-            if (!fk || !fn || *fk < 1 || *fn <= *fk || *fn > 255)
+            if (!fk || !fn || *fk < 1 || *fn <= *fk ||
+                *fn > RsBlockErasure::k_max_n)
             {
                 *error = "invalid " + key_of(i, "fec.k") + "/" +
-                         key_of(i, "fec.n") + " (need 1 <= k < n <= 255)";
+                         key_of(i, "fec.n") + " (need 1 <= k < n <= 31)";
                 return false;
             }
             u.fec_type = FecType::RsBlockErasure;

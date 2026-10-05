@@ -28,11 +28,11 @@ public:
               std::function<void()> tx_wake = nullptr);
     void close();
 
-    void on_radio_rx(bfcext::shared_sized_buffer pkt) override;
+    void on_radio_rx(bfcext::shared_sized_buffer pkt, bool is_fec) override;
     bool has_tx() override;
     size_t get_tx_size() override;
 
-    bfc::sized_buffer pull_tx(size_t max) override;
+    bfc::sized_buffer pull_tx(size_t max, bool* is_fec) override;
     void announce_down() override;
 
     bool set_fec(FecType type, int k, int n, std::string* error);
@@ -74,6 +74,12 @@ public:
     {
         return fec_air_rx_packets_.load(std::memory_order_relaxed);
     }
+    // FEC shards received while this upstream has FEC disabled. They are still
+    // decoded; a non-zero count means the two ends disagree on fec.type.
+    uint64_t fec_air_rx_unexpected() const
+    {
+        return fec_air_rx_unexpected_.load(std::memory_order_relaxed);
+    }
     uint64_t fec_air_tx_bytes() const
     {
         return fec_air_tx_bytes_.load(std::memory_order_relaxed);
@@ -88,8 +94,15 @@ public:
 
 private:
     void on_app();
-    void push_tx(bfc::sized_buffer pkt);
+    struct TxItem
+    {
+        bfc::sized_buffer pkt;
+        bool is_fec = false;
+    };
+
+    void push_tx(bfc::sized_buffer pkt, bool is_fec);
     void enqueue_air(bfc::sized_buffer pkt);
+    void send_app(const uint8_t* data, size_t len);
     void stage_fec_shard_for_tx(size_t max);
     void arm_fec_timer();
     void cancel_fec_timer();
@@ -106,7 +119,7 @@ private:
     sockaddr_in dest{};
     bool dest_valid = false;
     mutable std::mutex tx_mu_;
-    std::deque<bfc::sized_buffer> txq;
+    std::deque<TxItem> txq;
     bfc::sized_buffer rx_buf;
     RsBlockErasure fec;
     int fec_timeout_ms_ = RsBlockErasure::k_default_timeout_ms;
@@ -117,6 +130,7 @@ private:
     std::atomic<uint64_t> app_tx_packets_{0};
     std::atomic<uint64_t> fec_air_rx_bytes_{0};
     std::atomic<uint64_t> fec_air_rx_packets_{0};
+    std::atomic<uint64_t> fec_air_rx_unexpected_{0};
     std::atomic<uint64_t> fec_air_tx_bytes_{0};
     std::atomic<uint64_t> fec_air_tx_packets_{0};
     bool fec_timer_armed_ = false;

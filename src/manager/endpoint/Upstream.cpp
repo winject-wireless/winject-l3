@@ -3,17 +3,10 @@
 namespace winject
 {
 
-bool Upstream::stamp_air(uint8_t bus, uint16_t* tx_seq, uint8_t* out,
-                         size_t max, const uint8_t* data, size_t len,
-                         size_t* out_len)
-{
-    return stamp_air_payload(tx_seq, bus, out, max, data, len, out_len);
-}
-
 bool Upstream::accept_air(const uint8_t* data, size_t len,
-                          const uint8_t** payload, size_t* plen)
+                          const uint8_t** payload, size_t* plen, bool* is_fec)
 {
-    return accept_air_payload(&stats_, data, len, payload, plen);
+    return accept_air_payload(&stats_, data, len, payload, plen, is_fec);
 }
 
 uint64_t Upstream::collect_air_seq_loss_delta()

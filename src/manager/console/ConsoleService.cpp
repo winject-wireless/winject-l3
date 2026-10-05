@@ -1,11 +1,12 @@
 #include "console/ConsoleService.h"
 
+#include "WinjectBuildVersion.h"
 #include "console/ConsoleParse.h"
 #include "console/MplaneCorrelation.h"
 #include "console/MplaneErrno.h"
+#include "fec/RsBlockErasure.h"
 #include "utils/Log.h"
 #include "utils/Version.h"
-#include "WinjectBuildVersion.h"
 
 #include <chrono>
 #include <errno.h>
@@ -247,7 +248,8 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
         spec->fec_k = 0;
         spec->fec_n = 0;
     }
-    else if (spec->fec_k < 1 || spec->fec_n <= spec->fec_k || spec->fec_n > 255)
+    else if (spec->fec_k < 1 || spec->fec_n <= spec->fec_k ||
+             spec->fec_n > static_cast<int>(RsBlockErasure::k_max_n))
     {
         if (err != nullptr)
         {
@@ -420,9 +422,9 @@ void ConsoleService::respond(uint32_t l3_id, const std::string& text)
     {
         in_flight_.erase({peer_key(route.peer), route.client_id});
     }
-    std::string wire =
-        route.has_client_id ? format_correlated_reply(route.client_id, text)
-                            : text;
+    std::string wire = route.has_client_id
+                           ? format_correlated_reply(route.client_id, text)
+                           : text;
     if (!wire.empty() && wire.back() != '\n')
     {
         wire += '\n';
@@ -504,8 +506,7 @@ void ConsoleService::on_datagram()
     uint8_t client_id = 0;
     const char* body = line;
     bool malformed = false;
-    const bool tagged =
-        parse_mplane_cmd(line, &client_id, &body, &malformed);
+    const bool tagged = parse_mplane_cmd(line, &client_id, &body, &malformed);
     if (tagged && malformed)
     {
         char buf[64];
