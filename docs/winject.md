@@ -194,7 +194,7 @@ Two sequence numbers exist: the 12-bit **MPDU sequence** in the 802.11 header (p
 Configured per upstream: `upstream-N.fec.type = RS_BLOCK_ERASURE` with `fec.k`, `fec.n` and `fec.timeout_ms` (default 20), or at runtime with `add_upstream` / `update_upstream fec=BLOCK k= n= fec_timeout=` ([mplane.md](mplane.md)). [`RsBlockErasure`](../src/manager/fec/RsBlockErasure.h) groups **k** datagrams into **n** shards (`1 ≤ k < n ≤ 255`); any k received shards recover the block (Reed–Solomon erasure, ISA-L).
 
 - **TX:** datagram → `push_app` → shards queued → `pull_tx` → LC header → slot. A partial block is closed after `fec.timeout_ms`.
-- **RX:** slot payload after the LC header → `push_air` → zero or more recovered datagrams. The decoder is always active on RX and reads k/n from each shard header, so peers can use different k/n. Payloads that are not valid shards pass through unchanged. Known limitation: a non-FEC datagram whose first byte happens to be `0xF1` is mistaken for a shard.
+- **RX:** slot payload after the LC header → `push_air` → zero or more recovered datagrams. The decoder is always active on RX and reads k/n from each shard header, so peers can use different k/n. Payloads that are not valid shards pass through unchanged, including ones that start with `0xF1` but fail the header check. Known limitation: a non-FEC datagram that happens to start with a valid-looking shard header (`0xF1`, version, sane k/n/index) is still mistaken for a shard.
 
 Shard header (8 bytes, [`RsBlockErasure::pack_header`](../src/manager/fec/RsBlockErasure.cpp)):
 

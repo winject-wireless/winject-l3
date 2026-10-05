@@ -48,6 +48,7 @@ add_executable(winject-tests
     VersionTest.cpp
     MetricsRegistryTest.cpp
     SharedSizedBufferTest.cpp
+    TxMuxTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Frame.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Mpdu.cpp
@@ -62,6 +63,7 @@ add_executable(winject-tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/PhyAirtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RxDemux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioUpstreamTable.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/TxMux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiUdp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioMplaneParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/Log.cpp

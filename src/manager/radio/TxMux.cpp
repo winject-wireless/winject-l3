@@ -10,7 +10,6 @@
 
 #include <bfc/buffer.hpp>
 #include <bfc/sized_buffer.hpp>
-#include <cassert>
 #include <string.h>
 #include <utility>
 
@@ -159,6 +158,15 @@ void TxMux::init_schedule_shares(std::vector<size_t>& shares) const
     }
 }
 
+bool TxMux::note_build_fail(size_t body_bytes)
+{
+    // SDUs were already pulled from their queues; count them as lost so the
+    // drop shows up in tx_send_fail stats instead of vanishing.
+    tx_send_fail_mpdu_.fetch_add(1, std::memory_order_relaxed);
+    tx_send_fail_byt_.fetch_add(body_bytes, std::memory_order_relaxed);
+    return false;
+}
+
 bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
                       size_t* data_sent)
 {
@@ -228,19 +236,30 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         const size_t room_payload = room - k_lc_header_len;
 
         size_t max_sdu = k_stream_payload_max;
-        if (schedule_shares[i] < max_sdu)
-        {
-            max_sdu = schedule_shares[i];
-        }
         if (room_payload < max_sdu)
         {
             max_sdu = room_payload;
+        }
+        // The share counts framed bytes (SDU + LC header). An entry that has
+        // not sent yet this pass may send one SDU larger than its share, so a
+        // budget below the SDU size slows the upstream instead of blocking it.
+        if (schedule_shares[i] < s.budget)
+        {
+            const size_t share_payload =
+                schedule_shares[i] > k_lc_header_len
+                    ? schedule_shares[i] - k_lc_header_len
+                    : 0;
+            if (share_payload < max_sdu)
+            {
+                max_sdu = share_payload;
+            }
         }
         if (max_sdu == 0 || first_sdu > max_sdu)
         {
             return false;
         }
 
+        // pull_tx returns at most max_sdu bytes, so the SDU always fits here.
         bfc::sized_buffer sdu = s.up->pull_tx(max_sdu);
         if (sdu.empty())
         {
@@ -249,10 +268,6 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         }
         const size_t pulled = sdu.size();
         const size_t framed = pulled + k_lc_header_len;
-        if (framed > schedule_shares[i])
-        {
-            return false;
-        }
 
         TxMpduEntryPlan entry;
         entry.entry_index = i;
@@ -283,18 +298,19 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         const size_t pulled = entry_plan.sdu.size();
         size_t framed = 0;
         if (!stamp_air_payload(&bus_air_tx_[s.bus_tx], s.bus_tx, framed_buf[p],
-                               sizeof(framed_buf[p]), payload, pulled, &framed))
+                               sizeof(framed_buf[p]), payload, pulled,
+                               &framed) ||
+            framed != entry_plan.framed_bytes)
         {
-            return false;
+            return note_build_fail(body_total);
         }
-        assert(framed == entry_plan.framed_bytes);
         any_data = true;
     }
 
     const size_t mpdu_len = WIFI_HDR_LEN + body_total;
     if (mpdu_len > sizeof(mpdu_buf))
     {
-        return false;
+        return note_build_fail(body_total);
     }
     Mpdu mpdu(mpdu_buf, mpdu_len);
     for (size_t p = 0; p < plan.size(); p++)
@@ -302,17 +318,23 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         mpdu.set_slot_payload(static_cast<uint8_t>(p),
                               static_cast<uint16_t>(plan[p].framed_bytes));
     }
-    assert(mpdu.rescan());
+    if (!mpdu.rescan())
+    {
+        return note_build_fail(body_total);
+    }
     for (size_t p = 0; p < plan.size(); p++)
     {
         bfc::buffer_view slot = mpdu.get_slot_payload(static_cast<uint8_t>(p));
-        assert(!slot.empty() && slot.size() == plan[p].framed_bytes);
+        if (slot.empty() || slot.size() != plan[p].framed_bytes)
+        {
+            return note_build_fail(body_total);
+        }
         memcpy(slot.data(), framed_buf[p], plan[p].framed_bytes);
     }
     ieee_802_11::SeqControl* seq = mpdu.ieee().seq_ctl;
     if (seq == nullptr)
     {
-        return false;
+        return note_build_fail(body_total);
     }
     seq->set_seq_num(next_tx_sequence());
     seq->set_fragment_num(0);

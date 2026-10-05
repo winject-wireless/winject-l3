@@ -73,6 +73,7 @@ private:
     bool has_pending_tx_data() const;
     bool emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
                    size_t* data_sent);
+    bool note_build_fail(size_t body_bytes);
     bool data_burst_allows() const;
     void note_data_burst_emit();
     bool pop_event(TxEvent* out);
