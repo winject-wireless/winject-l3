@@ -22,11 +22,13 @@ class CaptureUpstream : public Upstream
 public:
     size_t rx_count = 0;
     size_t last_payload_len = 0;
+    bool last_is_fec = false;
 
-    void on_radio_rx(bfcext::shared_sized_buffer pkt) override
+    void on_radio_rx(bfcext::shared_sized_buffer pkt, bool is_fec) override
     {
         ++rx_count;
         last_payload_len = pkt.size();
+        last_is_fec = is_fec;
     }
 
     bool has_tx() override
@@ -39,7 +41,7 @@ public:
         return 0;
     }
 
-    bfc::sized_buffer pull_tx(size_t /*max*/) override
+    bfc::sized_buffer pull_tx(size_t /*max*/, bool* /*is_fec*/) override
     {
         return bfc::sized_buffer();
     }
@@ -58,7 +60,9 @@ bool assign_tx_sequence(Mpdu& mpdu)
 }
 
 bfcext::shared_sized_buffer make_slot_mpdu(uint16_t domain, uint8_t bus,
-                                           const uint8_t* payload, size_t plen)
+                                           const uint8_t* payload, size_t plen,
+                                           bool is_fec = false,
+                                           uint16_t seq = 0)
 {
     const size_t slot_len = LCHeader::k_len + plen;
     const size_t total = WIFI_HDR_LEN + slot_len;
@@ -70,7 +74,7 @@ bfcext::shared_sized_buffer make_slot_mpdu(uint16_t domain, uint8_t bus,
         return bfcext::shared_sized_buffer();
     }
     uint8_t* slot = reinterpret_cast<uint8_t*>(tx.get_slot_payload(0).data());
-    LCHeader::write(slot, bus, 0);
+    LCHeader::write(slot, bus, seq, is_fec);
     if (plen > 0)
     {
         memcpy(slot + LCHeader::k_len, payload, plen);
@@ -128,4 +132,22 @@ TEST(RxDemuxTest, DropsUnknownBus)
 
     EXPECT_EQ(up->rx_count, 0u);
     EXPECT_EQ(demux.rx_drop_bus(), 1u);
+}
+
+TEST(RxDemuxTest, DeliversLcFecFlag)
+{
+    RadioUpstreamTable table;
+    auto up = std::make_shared<CaptureUpstream>();
+    table.add(up, nullptr, 1, 1, 1);
+    RxDemux demux(table);
+    demux.set_domain(0x1234);
+
+    const uint8_t body[] = {0xF1, 0x02, 0x03};
+    demux.on_mpdu(make_slot_mpdu(0x1234, 1, body, sizeof(body), false));
+    EXPECT_EQ(up->rx_count, 1u);
+    EXPECT_FALSE(up->last_is_fec);
+
+    demux.on_mpdu(make_slot_mpdu(0x1234, 1, body, sizeof(body), true, 1));
+    EXPECT_EQ(up->rx_count, 2u);
+    EXPECT_TRUE(up->last_is_fec);
 }

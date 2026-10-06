@@ -28,8 +28,13 @@ class QueueUpstream : public Upstream
 {
 public:
     std::deque<std::vector<uint8_t>> txq;
+    // Parallel to txq: whether each SDU is an FEC shard. Missing means raw.
+    std::deque<bool> txq_fec;
 
-    void on_radio_rx(bfcext::shared_sized_buffer /*pkt*/) override {}
+    void on_radio_rx(bfcext::shared_sized_buffer /*pkt*/,
+                     bool /*is_fec*/) override
+    {
+    }
 
     bool has_tx() override
     {
@@ -41,7 +46,7 @@ public:
         return txq.empty() ? 0 : txq.front().size();
     }
 
-    bfc::sized_buffer pull_tx(size_t max) override
+    bfc::sized_buffer pull_tx(size_t max, bool* is_fec) override
     {
         if (txq.empty() || txq.front().size() > max)
         {
@@ -50,6 +55,11 @@ public:
         bfc::sized_buffer out(txq.front().size());
         memcpy(out.data(), txq.front().data(), txq.front().size());
         txq.pop_front();
+        *is_fec = !txq_fec.empty() && txq_fec.front();
+        if (!txq_fec.empty())
+        {
+            txq_fec.pop_front();
+        }
         return out;
     }
 };
@@ -124,6 +134,16 @@ public:
         return received_;
     }
 
+    // LC FEC flag and seq of every slot collected, in order.
+    const std::vector<bool>& received_fec() const
+    {
+        return received_fec_;
+    }
+    const std::vector<uint16_t>& received_seq() const
+    {
+        return received_seq_;
+    }
+
 private:
     static constexpr uint8_t k_bus = 7;
 
@@ -152,6 +172,8 @@ private:
                 const uint8_t* p =
                     reinterpret_cast<const uint8_t*>(slot.data());
                 EXPECT_EQ(p[0], k_bus);
+                received_fec_.push_back(LCHeader::read_is_fec(p));
+                received_seq_.push_back(LCHeader::read_seq(p));
                 received_.emplace_back(p + LCHeader::k_len, p + slot.size());
             }
         }
@@ -164,6 +186,8 @@ private:
     std::shared_ptr<WifiUdp> radio_;
     std::shared_ptr<QueueUpstream> up_;
     std::vector<std::vector<uint8_t>> received_;
+    std::vector<bool> received_fec_;
+    std::vector<uint16_t> received_seq_;
 };
 
 }  // namespace
@@ -208,4 +232,29 @@ TEST(TxMuxTest, SduLargerThanBudgetIsSent)
     }
     EXPECT_EQ(h.drain(), sdus);
     EXPECT_TRUE(h.up().txq.empty());
+}
+
+// The LC header FEC flag follows the upstream's per-SDU tag, whatever the SDU
+// bytes are, and one seq counter covers both kinds.
+TEST(TxMuxTest, StampsFecFlagPerSdu)
+{
+    TxMuxHarness h(4096);
+    std::vector<std::vector<uint8_t>> sdus = {
+        make_sdu(40, 0xF1), make_sdu(40, 0x10), make_sdu(40, 0xF1),
+        make_sdu(40, 0x20)};
+    const std::vector<bool> fec = {false, true, true, false};
+    for (size_t i = 0; i < sdus.size(); i++)
+    {
+        h.up().txq.push_back(sdus[i]);
+        h.up().txq_fec.push_back(fec[i]);
+    }
+    EXPECT_EQ(h.drain(), sdus);
+    EXPECT_EQ(h.received_fec(), fec);
+    const auto& seq = h.received_seq();
+    ASSERT_EQ(seq.size(), sdus.size());
+    for (size_t i = 1; i < seq.size(); i++)
+    {
+        EXPECT_EQ(seq[i], static_cast<uint16_t>((seq[i - 1] + 1) &
+                                                LCHeader::k_seq_mask));
+    }
 }

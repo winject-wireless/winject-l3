@@ -139,6 +139,7 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `rx_drop_bus` | Slots whose LC bus matches no upstream `rx_bus` |
 | `upstream_<id>_air_rx_gap_loss` | Air RX sequence gaps on upstream `<id>` |
 | `upstream_<id>_app_rx_oversize_pkt` | Application datagrams over 1445 bytes dropped on upstream `<id>` |
+| `upstream_<id>_air_rx_fec_unexpected` | FEC shards (LC header F flag) received on upstream `<id>` while its FEC is disabled; still decoded. Non-zero means the two ends disagree on `fec.type` |
 
 Example (replies arrive on the same UDP socket you send from):
 
@@ -192,7 +193,7 @@ If unset, the manager m-plane is off.
 | `upstream-N.rx_bus` | Bus whose air traffic is delivered to this upstream. At least one of `tx_bus` / `rx_bus` is required |
 | `upstream-N.scheduler_budget` | Scheduling share per TX pass, bytes (default 256; console `quanta`) |
 | `upstream-N.fec.type` | `NONE` or `RS_BLOCK_ERASURE` |
-| `upstream-N.fec.k`, `upstream-N.fec.n` | Data and total shards per block (`1 ≤ k < n ≤ 255`) |
+| `upstream-N.fec.k`, `upstream-N.fec.n` | Data and total shards per block (`1 ≤ k < n ≤ 31`; 5-bit fields in the shard header) |
 | `upstream-N.fec.timeout_ms` | Close a partial block after this long (default 20) |
 
 Server mode has `bind_address` only, client mode `connect_address` only, static mode both. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).

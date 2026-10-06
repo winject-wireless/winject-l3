@@ -26,9 +26,11 @@ void note_air_rx_seq(UpstreamStats* stats, uint16_t seq)
     {
         return;
     }
-    const uint16_t expected = static_cast<uint16_t>(stats->air_rx + 1);
-    const uint16_t ahead = static_cast<uint16_t>(seq - expected);
-    if (ahead < 0x8000)
+    const uint16_t expected =
+        static_cast<uint16_t>((stats->air_rx + 1) & LCHeader::k_seq_mask);
+    const uint16_t ahead =
+        static_cast<uint16_t>((seq - expected) & LCHeader::k_seq_mask);
+    if (ahead < LCHeader::k_seq_half)
     {
         stats->air_rx_gap_loss += ahead;
         stats->air_rx = seq;
@@ -37,8 +39,9 @@ void note_air_rx_seq(UpstreamStats* stats, uint16_t seq)
 
 }  // namespace
 
-bool stamp_air_payload(uint16_t* tx_seq, uint8_t bus, uint8_t* out, size_t max,
-                       const uint8_t* data, size_t len, size_t* out_len)
+bool stamp_air_payload(uint16_t* tx_seq, uint8_t bus, bool is_fec, uint8_t* out,
+                       size_t max, const uint8_t* data, size_t len,
+                       size_t* out_len)
 {
     if (tx_seq == nullptr || out == nullptr || out_len == nullptr)
     {
@@ -56,21 +59,21 @@ bool stamp_air_payload(uint16_t* tx_seq, uint8_t bus, uint8_t* out, size_t max,
     {
         return false;
     }
-    LCHeader::write(out, bus, *tx_seq);
+    LCHeader::write(out, bus, *tx_seq, is_fec);
     if (len > 0)
     {
         memcpy(out + LCHeader::k_len, data, len);
     }
-    *tx_seq = static_cast<uint16_t>(*tx_seq + 1);
+    *tx_seq = static_cast<uint16_t>((*tx_seq + 1) & LCHeader::k_seq_mask);
     *out_len = len + LCHeader::k_len;
     return true;
 }
 
 bool accept_air_payload(UpstreamStats* stats, const uint8_t* data, size_t len,
-                        const uint8_t** payload, size_t* plen)
+                        const uint8_t** payload, size_t* plen, bool* is_fec)
 {
     if (stats == nullptr || data == nullptr || payload == nullptr ||
-        plen == nullptr || len < LCHeader::k_len)
+        plen == nullptr || is_fec == nullptr || len < LCHeader::k_len)
     {
         return false;
     }
@@ -80,6 +83,7 @@ bool accept_air_payload(UpstreamStats* stats, const uint8_t* data, size_t len,
         return false;
     }
     note_air_rx_seq(stats, seq);
+    *is_fec = LCHeader::read_is_fec(data);
     *payload = data + LCHeader::k_len;
     *plen = len - LCHeader::k_len;
     return true;

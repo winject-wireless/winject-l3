@@ -70,7 +70,7 @@ The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue 
 1. An application sends a UDP datagram to an upstream socket (`UdpEndpoint`, reactor thread). Datagrams over 1445 bytes are dropped and counted (`app_rx_oversize_pkt`).
 2. With FEC enabled, the datagram goes into the encoder, which emits k systematic and n−k parity shards; otherwise it is queued as-is.
 3. The TX thread picks a primary upstream that has data, then fills the remaining room in the MPDU from other upstreams, up to 5 slots and 1448 body bytes.
-4. Each slot payload is prefixed with the LC header (upstream `tx_bus`, per-bus sequence).
+4. Each slot payload is prefixed with the LC header (upstream `tx_bus`, FEC flag, per-bus sequence).
 5. The MPDU header gets the domain in Address 3, the slot lengths in Address 1–2, and a 12-bit MPDU sequence.
 6. `WifiUdp::send` sends it as one UDP datagram to the configured d-plane address. Pacing decides when the next MPDU may go.
 7. The radio transmits it unchanged.
@@ -81,7 +81,7 @@ The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue 
 2. `RxDemux::on_mpdu` validates the frame (DATA, `CA:FE:BA:BE` prefix, slot sizes fill the body), and drops other domains (`rx_drop_domain`).
 3. For each slot, the LC bus selects every upstream with that `rx_bus`. An unknown bus is counted (`rx_drop_bus`), and bus 0 is ignored.
 4. `UpstreamStats` checks the LC sequence: it drops duplicates and counts gaps (`air_rx_gap_loss`).
-5. The upstream runs the FEC decoder (shards are recognised by their header; other payloads pass through) and sends the resulting datagrams to the application: the configured destination (client mode) or the last sender (server mode).
+5. If the LC header FEC flag is set, the upstream runs the FEC decoder; otherwise the payload is the datagram. It sends the resulting datagrams to the application: the configured destination (client mode) or the last sender (server mode).
 
 ### Control path
 
@@ -128,7 +128,7 @@ UDP application datagram                    (user SDU, ≤ 1445 bytes)
         v  optional RsBlockErasure          (k-of-n Reed–Solomon shards)
 air SDU (FEC shard or raw datagram)
         |
-        v  LCHeader: [bus u8][seq BE u16] + air SDU
+        v  LCHeader: [bus u8][is_fec 1b | seq 15b, BE] + air SDU
 slot payload                                (per upstream)
         |
         v  Mpdu: up to 5 slots in one 802.11 DATA frame body
@@ -138,7 +138,7 @@ slot payload                                (per upstream)
 radio (raw 802.11 TX)
 ```
 
-RX reverses the chain: demux slots → route by LC bus → check LC seq → FEC decode (if a shard) → deliver UDP.
+RX reverses the chain: demux slots → route by LC bus → check LC seq → FEC decode (if the LC header marks a shard) → deliver UDP.
 
 ### 802.11 header
 
@@ -178,43 +178,52 @@ On TX the mux puts the primary upstream first, then other upstreams with data, w
 Every slot payload starts with a 3-byte **logical-channel header** ([`LCHeader`](../src/manager/frames/LCHeader.h)):
 
 ```
-+---------+------------+------------------+
-| bus u8  | seq BE u16 | air SDU          |
-+---------+------------+------------------+
+ 0               1               2
+ 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
++---------------+-+-----------------------------+------------------+
+|    bus u8     |F|        seq (BE, 15 bit)     | air SDU          |
++---------------+-+-----------------------------+------------------+
 ```
 
 - **bus**: the sending upstream's `tx_bus`; selects receiving upstreams by `rx_bus`.
-- **seq**: per-bus air sequence, incremented per slot payload sent on that bus ([`stamp_air_payload`](../src/manager/endpoint/UpstreamStats.cpp)).
-- RX ([`accept_air_payload`](../src/manager/endpoint/UpstreamStats.cpp)) drops a payload with the same seq as the last accepted one (duplicate), counts gaps with 16-bit wrap-aware comparison (`air_rx_gap_loss`), and passes the bytes after the header on.
+- **F** (`is_fec`, MSB of the second byte): the air SDU is an FEC shard. This flag is the only thing that sends a payload to the FEC decoder; the receiver never looks inside the SDU to decide.
+- **seq**: per-bus air sequence, 15 bits, incremented per slot payload sent on that bus and wrapping at 32768 ([`stamp_air_payload`](../src/manager/endpoint/UpstreamStats.cpp)).
+- RX ([`accept_air_payload`](../src/manager/endpoint/UpstreamStats.cpp)) drops a payload with the same seq as the last accepted one (duplicate), counts gaps with 15-bit wrap-aware comparison (forward jumps below 16384; `air_rx_gap_loss`), and passes the bytes after the header on with the F flag.
 
-Two sequence numbers exist: the 12-bit **MPDU sequence** in the 802.11 header (per radio, per frame) and the 16-bit **LC sequence** (per bus, per slot). Loss accounting uses the LC sequence.
+Two sequence numbers exist: the 12-bit **MPDU sequence** in the 802.11 header (per radio, per frame) and the 15-bit **LC sequence** (per bus, per slot). Loss accounting uses the LC sequence.
 
 ### FEC (optional)
 
-Configured per upstream: `upstream-N.fec.type = RS_BLOCK_ERASURE` with `fec.k`, `fec.n` and `fec.timeout_ms` (default 20), or at runtime with `add_upstream` / `update_upstream fec=BLOCK k= n= fec_timeout=` ([mplane.md](mplane.md)). [`RsBlockErasure`](../src/manager/fec/RsBlockErasure.h) groups **k** datagrams into **n** shards (`1 ≤ k < n ≤ 255`); any k received shards recover the block (Reed–Solomon erasure, ISA-L).
+Configured per upstream: `upstream-N.fec.type = RS_BLOCK_ERASURE` with `fec.k`, `fec.n` and `fec.timeout_ms` (default 20), or at runtime with `add_upstream` / `update_upstream fec=BLOCK k= n= fec_timeout=` ([mplane.md](mplane.md)). [`RsBlockErasure`](../src/manager/fec/RsBlockErasure.h) groups **k** datagrams into **n** shards (`1 ≤ k < n ≤ 31`); any k received shards recover the block (Reed–Solomon erasure, ISA-L).
 
-- **TX:** datagram → `push_app` → shards queued → `pull_tx` → LC header → slot. A partial block is closed after `fec.timeout_ms`.
-- **RX:** slot payload after the LC header → `push_air` → zero or more recovered datagrams. The decoder is always active on RX and reads k/n from each shard header, so peers can use different k/n. Payloads that are not valid shards pass through unchanged, including ones that start with `0xF1` but fail the header check. Known limitation: a non-FEC datagram that happens to start with a valid-looking shard header (`0xF1`, version, sane k/n/index) is still mistaken for a shard.
+- **TX:** datagram → `push_app` → shards queued → `pull_tx` (tagged as FEC) → LC header with F set → slot. A partial block is closed after `fec.timeout_ms`.
+- **RX:** a slot whose LC header has F set → `push_air` → zero or more recovered datagrams. Slots without F always pass straight to the application, whatever their bytes. The decoder reads k/n from each shard header, so peers can use different k/n, and it decodes F slots even on an upstream with FEC disabled; those are counted in `upstream_<id>_air_rx_fec_unexpected` because the two ends disagree on `fec.type`. A shard whose header is invalid is dropped and counted in the decode failures.
 
-Shard header (8 bytes, [`RsBlockErasure::pack_header`](../src/manager/fec/RsBlockErasure.cpp)):
+Shard header (5 bytes, [`RsBlockErasure::pack_header`](../src/manager/fec/RsBlockErasure.cpp)); the same layout as vstreamer's FEC shard header:
 
-| Offset | Field |
-|---|---|
-| 0 | Magic `0xF1` |
-| 1 | Version `2` |
-| 2–3 | Block id (BE `uint16`) |
-| 4 | Shard index |
-| 5 | k |
-| 6 | n |
-| 7 | Flags (parity `0x01`) |
+```
+ 0               1               2               3               4
+ 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
++-------------------------------+---------+---------+---------+-+---------+-----+
+|       sdu_base (BE u16)       |    k    |    n    |   idx   |s|  sdu_n  |spare|
++-------------------------------+---------+---------+---------+-+---------+-----+
+```
 
-Shard body: 2-byte BE length + original datagram (parity shards are padded for the RS arithmetic). The largest datagram an FEC upstream carries is `k_stream_payload_max − 8 − 2` = **1435** bytes ([`max_original()`](../src/manager/fec/RsBlockErasure.cpp)).
+| Field | Bits | Meaning |
+|---|---|---|
+| `sdu_base` | 16 | Datagram sequence of data shard 0; the block id. The TX sequence starts at a random value and advances by `sdu_n` per block, so a restarted peer does not reuse recent ids |
+| `k`, `n` | 5 + 5 | Data and total shards |
+| `idx` | 5 | Shard index; `idx ≥ k` is parity |
+| `sdu_n` | 5 | Datagrams in the block (`1 ≤ sdu_n ≤ k`). A block closed by `fec.timeout_ms` has `sdu_n < k`: data slots `sdu_n … k−1` are empty pads that are not sent, and the receiver rebuilds them, so any `sdu_n` received shards recover the block |
+| `s`, spare | 1 + 3 | Zero; a non-zero spare bit makes the header invalid |
+
+Shard body: 2-byte BE length + original datagram (parity shards are padded for the RS arithmetic). The largest datagram an FEC upstream carries is `k_stream_payload_max − 5 − 2` = **1438** bytes ([`max_original()`](../src/manager/fec/RsBlockErasure.cpp)).
 
 ### Byte layout of one slot
 
 ```
-with FEC:     [ LC bus 1 B ][ LC seq 2 B ][ FEC hdr 8 B ][ len 2 B ][ datagram ... ]
-without FEC:  [ LC bus 1 B ][ LC seq 2 B ][ datagram ... ]
+with FEC:     [ LC bus 1 B ][ F=1 + LC seq 2 B ][ FEC hdr 5 B ][ len 2 B ][ datagram ... ]
+without FEC:  [ LC bus 1 B ][ F=0 + LC seq 2 B ][ datagram ... ]
 ```
 
 An MPDU is the 24-byte 802.11 header followed by up to five such slots.

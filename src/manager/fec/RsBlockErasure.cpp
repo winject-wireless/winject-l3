@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <arpa/inet.h>
+#include <random>
 #include <string.h>
 
 extern "C"
@@ -61,6 +62,12 @@ const char* RsBlockErasure::impl_name() const
 #endif
 }
 
+RsBlockErasure::RsBlockErasure()
+{
+    std::random_device rd;
+    sdu_seq_ = static_cast<uint16_t>(rd());
+}
+
 bool RsBlockErasure::init(int k, int n, int timeout_ms)
 {
     enabled_ = false;
@@ -79,7 +86,6 @@ bool RsBlockErasure::init(int k, int n, int timeout_ms)
     pending.clear();
     tx_shards_.clear();
     deadline_set = false;
-    block_id = 0;
     rx_blocks.clear();
     done_order.clear();
     done.clear();
@@ -109,55 +115,66 @@ void RsBlockErasure::disable()
     done.clear();
 }
 
-bool RsBlockErasure::pack_header(uint8_t* out, uint16_t block_id, int index,
-                                 int k, int n, uint8_t flags)
+bool RsBlockErasure::pack_header(uint8_t* out, uint16_t sdu_base, int index,
+                                 int k, int n, int sdu_n)
 {
-    if (out == nullptr)
+    if (out == nullptr || k < 1 || n <= k || n > static_cast<int>(k_max_n) ||
+        index < 0 || index >= n || sdu_n < 1 || sdu_n > k)
     {
         return false;
     }
-    out[0] = k_magic;
-    out[1] = k_version;
-    store_be16(out + 2, block_id);
-    out[4] = static_cast<uint8_t>(index);
-    out[5] = static_cast<uint8_t>(k);
-    out[6] = static_cast<uint8_t>(n);
-    out[7] = flags;
+    store_be16(out, sdu_base);
+    const uint16_t config =
+        static_cast<uint16_t>(((static_cast<uint16_t>(k) & 0x1Fu) << 11) |
+                              ((static_cast<uint16_t>(n) & 0x1Fu) << 6) |
+                              ((static_cast<uint16_t>(index) & 0x1Fu) << 1));
+    store_be16(out + 2, config);
+    out[4] = static_cast<uint8_t>((static_cast<unsigned>(sdu_n) & 0x1Fu) << 3);
     return true;
 }
 
 bool RsBlockErasure::unpack_header(const uint8_t* data, size_t len,
-                                   uint16_t* block_id, int* index, int* k,
-                                   int* n, uint8_t* flags)
+                                   uint16_t* sdu_base, int* index, int* k,
+                                   int* n, int* sdu_n)
 {
-    if (data == nullptr || len < k_header_len || data[0] != k_magic ||
-        data[1] != k_version)
+    if (data == nullptr || len < k_header_len || sdu_base == nullptr ||
+        index == nullptr || k == nullptr || n == nullptr || sdu_n == nullptr)
     {
         return false;
     }
-    const int idx = data[4];
-    const int kk = data[5];
-    const int nn = data[6];
-    if (kk < 1 || nn <= kk || nn > static_cast<int>(k_max_n) || idx >= nn)
+    const uint16_t config = load_be16(data + 2);
+    if ((config & 0x0001u) != 0 || (data[4] & 0x07u) != 0)
     {
         return false;
     }
-    *block_id = load_be16(data + 2);
+    const int kk = (config >> 11) & 0x1F;
+    const int nn = (config >> 6) & 0x1F;
+    const int idx = (config >> 1) & 0x1F;
+    const int sn = (data[4] >> 3) & 0x1F;
+    // Data slots sdu_n..k-1 are pads and are never sent.
+    if (kk < 1 || nn <= kk || idx >= nn || sn < 1 || sn > kk ||
+        (idx >= sn && idx < kk))
+    {
+        return false;
+    }
+    *sdu_base = load_be16(data);
     *index = idx;
     *k = kk;
     *n = nn;
-    *flags = data[7];
+    *sdu_n = sn;
     return true;
 }
 
 bool RsBlockErasure::encode_block(
-    const std::vector<std::vector<uint8_t>>& packets, uint16_t block_id,
+    const std::vector<std::vector<uint8_t>>& packets, uint16_t sdu_base,
     std::vector<std::vector<uint8_t>>* out) const
 {
-    if (!enabled_ || out == nullptr || packets.size() > static_cast<size_t>(k_))
+    if (!enabled_ || out == nullptr || packets.empty() ||
+        packets.size() > static_cast<size_t>(k_))
     {
         return false;
     }
+    const int sdu_n = static_cast<int>(packets.size());
     std::vector<std::vector<uint8_t>> data_shards(static_cast<size_t>(k_));
     size_t max_row = 0;
     for (int i = 0; i < k_; i++)
@@ -208,28 +225,32 @@ bool RsBlockErasure::encode_block(
                       data_ptrs.data(), coding_ptrs.data());
 
     out->clear();
-    out->resize(static_cast<size_t>(n_));
+    out->reserve(static_cast<size_t>(sdu_n + p));
     for (int i = 0; i < n_; i++)
     {
-        auto& pkt = (*out)[static_cast<size_t>(i)];
-        const uint8_t flags = i >= k_ ? k_flag_parity : 0;
+        if (i >= sdu_n && i < k_)
+        {
+            continue;  // empty pad: the receiver re-creates it from sdu_n
+        }
         size_t body_len = shard_len;
         const uint8_t* body = nullptr;
         if (i < k_)
         {
-            const size_t plen = i < static_cast<int>(packets.size())
-                                    ? packets[static_cast<size_t>(i)].size()
-                                    : 0;
-            body_len = k_len_prefix + plen;
+            body_len = k_len_prefix + packets[static_cast<size_t>(i)].size();
             body = data_shards[static_cast<size_t>(i)].data();
         }
         else
         {
             body = parity[static_cast<size_t>(i - k_)].data();
         }
-        pkt.resize(k_header_len + body_len);
-        pack_header(pkt.data(), block_id, i, k_, n_, flags);
+        std::vector<uint8_t> pkt(k_header_len + body_len);
+        if (!pack_header(pkt.data(), sdu_base, i, k_, n_, sdu_n))
+        {
+            out->clear();
+            return false;
+        }
         memcpy(pkt.data() + k_header_len, body, body_len);
+        out->push_back(std::move(pkt));
     }
     return true;
 }
@@ -316,15 +337,19 @@ bool RsBlockErasure::decode_block(
     {
         return false;
     }
-    return decode_block(k_, n_, frags, payloads, recovered);
+    return decode_block(k_, n_, k_, frags, payloads, recovered);
 }
 
 bool RsBlockErasure::decode_block(
-    int k, int n, const std::unordered_map<int, std::vector<uint8_t>>& frags,
+    int k, int n, int sdu_n,
+    const std::unordered_map<int, std::vector<uint8_t>>& frags,
     std::vector<std::vector<uint8_t>>* payloads, int* recovered) const
 {
+    // Pads (data slots sdu_n..k-1) are known all-zero rows, so the block
+    // needs only sdu_n received shards.
     if (payloads == nullptr || k < 1 || n <= k ||
-        n > static_cast<int>(k_max_n) || frags.size() < static_cast<size_t>(k))
+        n > static_cast<int>(k_max_n) || sdu_n < 1 || sdu_n > k ||
+        frags.size() < static_cast<size_t>(sdu_n))
     {
         return false;
     }
@@ -336,7 +361,8 @@ bool RsBlockErasure::decode_block(
     size_t shard_len = 0;
     for (const auto& kv : frags)
     {
-        if (kv.first < 0 || kv.first >= n)
+        if (kv.first < 0 || kv.first >= n ||
+            (kv.first >= sdu_n && kv.first < k))
         {
             return false;
         }
@@ -360,6 +386,11 @@ bool RsBlockErasure::decode_block(
             row.resize(shard_len, 0);
         }
         have[static_cast<size_t>(kv.first)] = 1;
+    }
+    for (int i = sdu_n; i < k; i++)
+    {
+        padded[static_cast<size_t>(i)].assign(shard_len, 0);
+        have[static_cast<size_t>(i)] = 1;
     }
 
     std::vector<std::vector<uint8_t>> data_copy(static_cast<size_t>(k));
@@ -501,7 +532,7 @@ void RsBlockErasure::flush(std::vector<std::vector<uint8_t>>* out)
         return;
     }
     std::vector<std::vector<uint8_t>> encoded;
-    if (!encode_block(pending, block_id, &encoded))
+    if (!encode_block(pending, sdu_seq_, &encoded))
     {
         oversized_++;
         if (out != nullptr)
@@ -512,7 +543,7 @@ void RsBlockErasure::flush(std::vector<std::vector<uint8_t>>* out)
         deadline_set = false;
         return;
     }
-    block_id = static_cast<uint16_t>(block_id + 1);
+    sdu_seq_ = static_cast<uint16_t>(sdu_seq_ + pending.size());
     pending.clear();
     deadline_set = false;
     blocks_++;
@@ -671,13 +702,13 @@ void RsBlockErasure::expire_done()
     }
 }
 
-void RsBlockErasure::mark_done(uint16_t block_id)
+void RsBlockErasure::mark_done(uint16_t sdu_base)
 {
     const auto t = now();
-    auto inserted = done.emplace(block_id, t);
+    auto inserted = done.emplace(sdu_base, t);
     if (inserted.second)
     {
-        done_order.push_back(block_id);
+        done_order.push_back(sdu_base);
     }
     else
     {
@@ -702,25 +733,23 @@ void RsBlockErasure::push_air(const uint8_t* data, size_t len,
         return;
     }
     expire_rx();
-    // RX is always FEC-aware: k/n come from the shard header. Encode still
-    // requires init(). Anything that is not a valid shard header, including a
-    // non-FEC datagram that happens to start with k_magic, passes through.
-    uint16_t block_id = 0;
+    // k/n/sdu_n come from the shard header, so decode works without init().
+    uint16_t sdu_base = 0;
     int index = 0;
     int k = 0;
     int n = 0;
-    uint8_t flags = 0;
-    if (!unpack_header(data, len, &block_id, &index, &k, &n, &flags))
+    int sdu_n = 0;
+    if (!unpack_header(data, len, &sdu_base, &index, &k, &n, &sdu_n))
     {
-        out->emplace_back(data, data + len);
+        decode_fail_++;
         return;
     }
-    if (done.find(block_id) != done.end())
+    if (done.find(sdu_base) != done.end())
     {
         return;
     }
     rx_block_s* buf = nullptr;
-    auto it = rx_blocks.find(block_id);
+    auto it = rx_blocks.find(sdu_base);
     if (it == rx_blocks.end())
     {
         while (rx_blocks.size() >= k_block_max)
@@ -739,10 +768,12 @@ void RsBlockErasure::push_air(const uint8_t* data, size_t len,
         rx_block_s nb;
         nb.k = k;
         nb.n = n;
+        nb.sdu_n = sdu_n;
         nb.first_seen = now();
-        it = rx_blocks.emplace(block_id, std::move(nb)).first;
+        it = rx_blocks.emplace(sdu_base, std::move(nb)).first;
     }
-    else if (it->second.k != k || it->second.n != n)
+    else if (it->second.k != k || it->second.n != n ||
+             it->second.sdu_n != sdu_n)
     {
         decode_fail_++;
         return;
@@ -754,14 +785,14 @@ void RsBlockErasure::push_air(const uint8_t* data, size_t len,
     }
     buf->frags.emplace(index,
                        std::vector<uint8_t>(data + k_header_len, data + len));
-    if (buf->frags.size() < static_cast<size_t>(k))
+    if (buf->frags.size() < static_cast<size_t>(sdu_n))
     {
         return;
     }
     int rec = 0;
-    const bool ok = decode_block(k, n, buf->frags, out, &rec);
-    rx_blocks.erase(block_id);
-    mark_done(block_id);
+    const bool ok = decode_block(k, n, sdu_n, buf->frags, out, &rec);
+    rx_blocks.erase(sdu_base);
+    mark_done(sdu_base);
     if (!ok)
     {
         decode_fail_++;

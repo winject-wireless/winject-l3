@@ -34,6 +34,7 @@ void RxDemux::on_mpdu(bfcext::shared_sized_buffer mpdu_owned)
     {
         std::shared_ptr<Upstream> up;
         bfcext::shared_sized_buffer view;
+        bool is_fec = false;
     };
     std::array<Delivery, WIFI_PDU_SLOTS * 8> pending{};
     size_t pending_count = 0;
@@ -70,14 +71,14 @@ void RxDemux::on_mpdu(bfcext::shared_sized_buffer mpdu_owned)
 
         for (int slot = 0; slot < WIFI_PDU_SLOTS; ++slot)
         {
-            const uint16_t pdu_len = view.slot_payload_size(
-                static_cast<uint8_t>(slot));
+            const uint16_t pdu_len =
+                view.slot_payload_size(static_cast<uint8_t>(slot));
             if (pdu_len == 0)
             {
                 continue;
             }
-            const bfc::const_buffer_view pdu = view.get_slot_payload(
-                static_cast<uint8_t>(slot));
+            const bfc::const_buffer_view pdu =
+                view.get_slot_payload(static_cast<uint8_t>(slot));
             if (pdu.empty() || pdu.size() != pdu_len ||
                 pdu.size() < LCHeader::k_len)
             {
@@ -100,9 +101,10 @@ void RxDemux::on_mpdu(bfcext::shared_sized_buffer mpdu_owned)
                 RadioUpstreamEntry& s = table_.entries()[idx];
                 const uint8_t* payload = nullptr;
                 size_t plen = 0;
+                bool is_fec = false;
                 if (!s.up->accept_air(
                         reinterpret_cast<const uint8_t*>(pdu.data()),
-                        pdu.size(), &payload, &plen))
+                        pdu.size(), &payload, &plen, &is_fec))
                 {
                     continue;
                 }
@@ -115,6 +117,7 @@ void RxDemux::on_mpdu(bfcext::shared_sized_buffer mpdu_owned)
                 pending[pending_count].up = s.up;
                 pending[pending_count].view =
                     mpdu_owned.subview(payload_off, plen);
+                pending[pending_count].is_fec = is_fec;
                 ++pending_count;
             }
         }
@@ -122,7 +125,8 @@ void RxDemux::on_mpdu(bfcext::shared_sized_buffer mpdu_owned)
 
     for (size_t i = 0; i < pending_count; ++i)
     {
-        pending[i].up->on_radio_rx(std::move(pending[i].view));
+        pending[i].up->on_radio_rx(std::move(pending[i].view),
+                                   pending[i].is_fec);
     }
 }
 

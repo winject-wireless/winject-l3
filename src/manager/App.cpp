@@ -670,6 +670,11 @@ void App::refresh_host_metrics()
                 "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
             metrics_registry_.get_metrics<MetricU64>(oversize_key)
                 ->store(udp->app_rx_oversize_pkt());
+            const std::string fec_unexpected_key = "upstream_" +
+                                                   std::to_string(view.id) +
+                                                   "_air_rx_fec_unexpected";
+            metrics_registry_.get_metrics<MetricU64>(fec_unexpected_key)
+                ->store(udp->fec_air_rx_unexpected());
         }
     }
 }

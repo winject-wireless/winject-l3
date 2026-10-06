@@ -19,6 +19,7 @@ struct TxMpduEntryPlan
 {
     size_t entry_index = 0;
     bfc::sized_buffer sdu;
+    bool is_fec = false;
     size_t framed_bytes = 0;
 };
 }  // namespace
@@ -260,7 +261,8 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         }
 
         // pull_tx returns at most max_sdu bytes, so the SDU always fits here.
-        bfc::sized_buffer sdu = s.up->pull_tx(max_sdu);
+        bool is_fec = false;
+        bfc::sized_buffer sdu = s.up->pull_tx(max_sdu, &is_fec);
         if (sdu.empty())
         {
             schedule_shares[i] = 0;
@@ -272,6 +274,7 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         TxMpduEntryPlan entry;
         entry.entry_index = i;
         entry.sdu = std::move(sdu);
+        entry.is_fec = is_fec;
         entry.framed_bytes = framed;
         plan.push_back(std::move(entry));
         body_total += framed;
@@ -297,7 +300,8 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
             reinterpret_cast<const uint8_t*>(entry_plan.sdu.data());
         const size_t pulled = entry_plan.sdu.size();
         size_t framed = 0;
-        if (!stamp_air_payload(&bus_air_tx_[s.bus_tx], s.bus_tx, framed_buf[p],
+        if (!stamp_air_payload(&bus_air_tx_[s.bus_tx], s.bus_tx,
+                               entry_plan.is_fec, framed_buf[p],
                                sizeof(framed_buf[p]), payload, pulled,
                                &framed) ||
             framed != entry_plan.framed_bytes)
