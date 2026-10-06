@@ -426,3 +426,66 @@ TEST(ConsoleClientTest, MultiLineReplyCompletesOnLastLine)
     EXPECT_EQ(result.body_lines[1], "radio_rx rssi=-30");
     close(srv);
 }
+
+// A failure callback that drops the console (as RadioManager's ping handler
+// does) re-enters cancel_pending(). Each callback must run exactly once.
+TEST(ConsoleClientTest, CancelFromCallbackRunsEachOnce)
+{
+    uint16_t port = 0;
+    const int srv = open_udp_server(&port);
+    ASSERT_GE(srv, 0);
+    ConsoleClient client;
+    std::string err;
+    ASSERT_TRUE(client_connect(client, port, &err));
+
+    int ping_calls = 0;
+    int other_calls = 0;
+    ASSERT_TRUE(client.request("ping",
+                               [&](MplaneResult r)
+                               {
+                                   EXPECT_FALSE(r.ok);
+                                   ++ping_calls;
+                                   client.cancel_pending();
+                               }));
+    ASSERT_TRUE(client.request("radio_tx_info",
+                               [&](MplaneResult r)
+                               {
+                                   EXPECT_FALSE(r.ok);
+                                   ++other_calls;
+                                   client.cancel_pending();
+                               }));
+    client.cancel_pending();
+    EXPECT_EQ(ping_calls, 1);
+    EXPECT_EQ(other_calls, 1);
+    close(srv);
+}
+
+// A timeout callback that drops the console must not leave poll_deadlines()
+// walking a cleared map; the other expired request still completes once.
+TEST(ConsoleClientTest, TimeoutCallbackMayCancelPending)
+{
+    uint16_t port = 0;
+    const int srv = open_udp_server(&port);
+    ASSERT_GE(srv, 0);
+    ConsoleClient client;
+    std::string err;
+    ASSERT_TRUE(client_connect(client, port, &err));
+
+    std::vector<std::string> errors;
+    for (const char* cmd : {"ping", "radio_tx_info", "save 0"})
+    {
+        ASSERT_TRUE(client.request(cmd, std::chrono::milliseconds(1),
+                                   [&](MplaneResult r)
+                                   {
+                                       errors.push_back(r.error);
+                                       client.cancel_pending();
+                                   }));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    client.poll_deadlines(std::chrono::steady_clock::now());
+    ASSERT_EQ(errors.size(), 3u);
+    EXPECT_EQ(errors[0], "timeout");
+    client.poll_deadlines(std::chrono::steady_clock::now());
+    EXPECT_EQ(errors.size(), 3u);
+    close(srv);
+}

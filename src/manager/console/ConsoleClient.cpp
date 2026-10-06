@@ -3,8 +3,8 @@
 #include "console/ConsoleParse.h"
 #include "console/MplaneCorrelation.h"
 #include "utils/Log.h"
-#include "utils/Version.h"
 #include "utils/NetUtil.h"
+#include "utils/Version.h"
 
 #include <errno.h>
 #include <string.h>
@@ -119,9 +119,14 @@ bool ConsoleClient::send_wire(const std::string& wire, std::string* error)
     return true;
 }
 
+// Callbacks may drop the console, which calls back into cancel_pending(), or
+// issue new requests. Take the pending set out first so each callback runs once
+// and no iterator into pending_reqs_ is live while they run.
 void ConsoleClient::cancel_pending()
 {
-    for (auto& entry : pending_reqs_)
+    std::map<uint8_t, Pending> reqs;
+    reqs.swap(pending_reqs_);
+    for (auto& entry : reqs)
     {
         if (entry.second.done)
         {
@@ -131,7 +136,6 @@ void ConsoleClient::cancel_pending()
             entry.second.done(std::move(r));
         }
     }
-    pending_reqs_.clear();
 }
 
 void ConsoleClient::complete(uint8_t id, MplaneResult result)
@@ -273,6 +277,9 @@ void ConsoleClient::handle_line(const std::string& line, bool last_for_id)
 
 void ConsoleClient::poll_deadlines(std::chrono::steady_clock::time_point now)
 {
+    // Collect first: a timeout callback may drop the console and clear
+    // pending_reqs_ (see cancel_pending).
+    std::vector<DoneFn> expired;
     for (auto it = pending_reqs_.begin(); it != pending_reqs_.end();)
     {
         if (now < it->second.deadline)
@@ -280,8 +287,11 @@ void ConsoleClient::poll_deadlines(std::chrono::steady_clock::time_point now)
             ++it;
             continue;
         }
-        DoneFn done = std::move(it->second.done);
-        pending_reqs_.erase(it++);
+        expired.push_back(std::move(it->second.done));
+        it = pending_reqs_.erase(it);
+    }
+    for (auto& done : expired)
+    {
         if (done)
         {
             MplaneResult r;
@@ -526,7 +536,8 @@ void ConsoleClient::apply_radio(const Config& cfg, uint8_t save_slot,
                                     send_save_slot(
                                         save_slot,
                                         [cfg, save_slot,
-                                         done = std::move(done)](MplaneResult r3)
+                                         done =
+                                             std::move(done)](MplaneResult r3)
                                         {
                                             if (!r3.ok)
                                             {
