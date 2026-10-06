@@ -170,6 +170,8 @@ def sample_char(
     total_dr = 0
     total_dg = 0
     idle_samples = 0
+    last_accept_t: float | None = None
+    accept_outages_ms: list[float] = []
 
     while time.monotonic() < end:
         t0 = time.monotonic()
@@ -181,9 +183,18 @@ def sample_char(
         prev_rx, prev_gap = rx, gap
         total_dr += dr
         total_dg += dg
+        if dr > 0:
+            if last_accept_t is not None:
+                gap_ms = (now - last_accept_t) * 1000.0
+                if gap_ms >= 200.0:
+                    accept_outages_ms.append(gap_ms)
+            last_accept_t = now
         slots = dr + dg
         if slots < 1:
             idle_samples += 1
+            if in_burst:
+                burst_durations_ms.append((now - burst_start) * 1000.0)
+                in_burst = False
             continue
         rate = dg / slots
         loss_rates.append(rate)
@@ -215,6 +226,7 @@ def sample_char(
         "aggregate_loss": agg,
         "total_dr": total_dr,
         "total_dg": total_dg,
+        "accept_outages_ms": accept_outages_ms,
     }
 
 
@@ -319,6 +331,19 @@ def main() -> int:
         wrapped,
         edges,
     )
+    outages = result.get("accept_outages_ms", [])
+    print(f"bus slot accept outages (>=200ms without new LC slot): n={len(outages)}")
+    if outages:
+        print(
+            "accept outage (ms): "
+            f"p50={percentile(outages, 50):.1f} "
+            f"p90={percentile(outages, 90):.1f} "
+            f"max={max(outages):.1f}"
+        )
+        print("accept outage histogram:")
+        for bucket, count in histogram_ms(outages, edges):
+            bar = "#" * min(count, 60)
+            print(f"  {bucket:>16}  {count:5d}  {bar}")
     return 0
 
 

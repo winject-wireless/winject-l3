@@ -124,6 +124,9 @@ def run_char(
         slots = dr + dg
         if slots < min_slots:
             idle_samples += 1
+            if in_burst:
+                burst_durations_ms.append((now - burst_start) * 1000.0)
+                in_burst = False
             continue
 
         rate = dg / slots if slots else 0.0
