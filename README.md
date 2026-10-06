@@ -23,6 +23,7 @@ docs/mplane.md         Manager config and m-plane (client console)
 docs/versioning.md     vX.Y.Z protocol rules and frozen `version` discovery
 docs/radio.md           Radio m-plane: commands the manager forwards vs radio-local ones
 docs/winject.md         802.11 MPDU layout, LC header, buses
+docs/fec-spreading.md   FEC block spreading: burst loss, sizing, bench results
 docs/radio-capa-support.md  radio_caps_info and FCS trailer modes (SIGNAL / ACTUAL)
 docs/no-traffic.md      Bench report: zero-traffic investigation and loss analysis
 docs/contributing.md    Code style, tests, and ./scripts/check_guidelines.sh

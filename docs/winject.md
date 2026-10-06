@@ -219,6 +219,8 @@ Shard header (5 bytes, [`RsBlockErasure::pack_header`](../src/manager/fec/RsBloc
 
 Shard body: 2-byte BE length + original datagram (parity shards are padded for the RS arithmetic). The largest datagram an FEC upstream carries is `k_stream_payload_max − 5 − 2` = **1438** bytes ([`max_original()`](../src/manager/fec/RsBlockErasure.cpp)).
 
+The encoder sends a block's shards back to back. On a link with bursty loss, spreading them over time recovers far more blocks; see [fec-spreading.md](fec-spreading.md).
+
 ### Byte layout of one slot
 
 ```
