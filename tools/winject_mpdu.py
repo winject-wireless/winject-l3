@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import struct
+import time
+from dataclasses import dataclass
 from typing import Iterator
 
 WIFI_HDR_LEN = 24
@@ -12,6 +14,12 @@ LC_LEN = 3
 SEQ_MASK = 0x7FFF
 SEQ_HALF = 0x4000
 FC_TYPE_DATA = 0x08  # Data frame, subtype 0
+
+
+@dataclass
+class LcGapEvent:
+    recovery_ms: float
+    missed_slots: int
 
 
 def domain_addr3(domain: int) -> bytes:
@@ -124,6 +132,8 @@ class LcAirRxTracker:
         self.last_seq = 0
         self.gap_loss = 0
         self.rx_slots = 0
+        self.gap_events: list[LcGapEvent] = []
+        self._last_accept_t: float | None = None
 
     def accept_slot(self, payload: bytes) -> bool:
         if len(payload) < LC_LEN:
@@ -134,17 +144,27 @@ class LcAirRxTracker:
         seq = struct.unpack(">H", payload[1:3])[0] & SEQ_MASK
         if self.have and seq == self.last_seq:
             return False
+        now = time.monotonic()
         if not self.have:
             self.have = True
             self.last_seq = seq
             self.rx_slots += 1
+            self._last_accept_t = now
             return True
         expected = (self.last_seq + 1) & SEQ_MASK
         ahead = (seq - expected) & SEQ_MASK
         if ahead < SEQ_HALF:
+            if ahead > 0:
+                recovery_ms = 0.0
+                if self._last_accept_t is not None:
+                    recovery_ms = (now - self._last_accept_t) * 1000.0
+                self.gap_events.append(
+                    LcGapEvent(recovery_ms=recovery_ms, missed_slots=ahead)
+                )
             self.gap_loss += ahead
             self.last_seq = seq
             self.rx_slots += 1
+            self._last_accept_t = now
             return True
         return False
 
