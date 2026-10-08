@@ -464,6 +464,8 @@ build_client_args() {
 start_server() {
   local tag="$1" port="$2"
   stop_server
+  # Let iperf -s release the UDP port before the next direction (avoids stray
+  # ICMP / confused client "Server Report" lines between A→B and B→A).
   sleep 0.3
   "$IPERF_BIN" -s -u -B 127.0.0.1 -p "$port" >"$LOG_DIR/iperf_srv_${tag}.log" 2>&1 &
   PID_IPERF=$!
@@ -477,7 +479,10 @@ print_server_summary() {
     return
   fi
   local line
-  line="$(grep -E '^\[[[:space:]]*[0-9]+\][[:space:]]+0\.0\.0-' "$log" | tail -1 || true)"
+  line="$(grep -E 'Mbits/sec.*Lost/Total|Lost/Total Datagrams' "$log" | tail -1 || true)"
+  if [[ -z "$line" ]]; then
+    line="$(grep -E '^\[[[:space:]]*[0-9]+\][[:space:]]+0\.[0-9]+-.*sec.*Mbits' "$log" | tail -1 || true)"
+  fi
   if [[ -n "$line" ]]; then
     echo "iperf server summary ($tag): $line"
   else
