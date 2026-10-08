@@ -205,9 +205,9 @@ void UdpEndpoint::on_app()
             }
             if (errno == ECONNREFUSED)
             {
-                // Async ICMP for a prior sendto() (uncommon without IP_RECVERR).
-                // Do not clear dest_valid — udp_client/udp_static use a fixed
-                // dest; udp_server refreshes dest on the next app datagram.
+                // Async ICMP for a prior sendto() (typically only with IP_RECVERR,
+                // which we do not enable). Likely dead on Linux today; kept as a
+                // guard — do not clear dest_valid (fixed dest in udp_client/static).
                 continue;
             }
             if (errno == EAGAIN || errno == EWOULDBLOCK)

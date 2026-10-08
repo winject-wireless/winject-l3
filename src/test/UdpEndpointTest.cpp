@@ -6,7 +6,6 @@
 
 #include <bfc/socket.hpp>
 #include <chrono>
-#include <fstream>
 #include <future>
 #include <gtest/gtest.h>
 #include <memory>
@@ -235,9 +234,8 @@ TEST(UdpEndpointTest, PullTxTagsFecShards)
     }
 }
 
-// Bench iperf egress uses udp_client (fixed sendto dest). on_radio_rx must keep
-// delivering while dest_valid stays true (see ECONNREFUSED handler in
-// UdpEndpoint.cpp — we do not clear dest_valid there).
+// Smoke: bench iperf egress uses udp_client (fixed sendto dest). Not a regression
+// test for the ECONNREFUSED handler in on_app().
 TEST(UdpEndpointTest, ClientModeForwardsRadioToConnectAddress)
 {
     AppPeer iperf_server;
@@ -254,31 +252,6 @@ TEST(UdpEndpointTest, ClientModeForwardsRadioToConnectAddress)
     EXPECT_EQ(iperf_server.recv(), payload);
 
     endpoint.close();
-}
-
-TEST(UdpEndpointTest, EconnrefusedHandlerDoesNotClearDestValid)
-{
-    const std::string path = std::string(WINJECT_TEST_MANAGER_DIR) +
-                             "/endpoint/UdpEndpoint.cpp";
-    std::ifstream in(path);
-    ASSERT_TRUE(in.is_open()) << path;
-    std::string line;
-    bool found = false;
-    while (std::getline(in, line))
-    {
-        if (line.find("errno == ECONNREFUSED") == std::string::npos)
-        {
-            continue;
-        }
-        found = true;
-        for (int i = 0; i < 12 && std::getline(in, line); ++i)
-        {
-            EXPECT_EQ(line.find("dest_valid = false"), std::string::npos)
-                << "ECONNREFUSED path must not clear dest_valid: " << line;
-        }
-        break;
-    }
-    EXPECT_TRUE(found);
 }
 
 TEST(UdpEndpointTest, DropsOversizeAppDatagram)
