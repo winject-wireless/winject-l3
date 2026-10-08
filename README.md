@@ -138,13 +138,17 @@ Run it from an interactive terminal, in the winject-l3 checkout:
 |---|---|---|
 | `esp32` (default) | Two ESP32 boards on Ethernet (`--a` / `--b`) | Nothing: the radios are already running |
 | `realtek` | Two RTL8812AU dongles on this host | Builds [winject-radio-realtek](https://github.com/winject-wireless/winject-radio-realtek) and starts one instance per dongle with `radio_a.cfg` / `radio_b.cfg` under `sudo` |
+| `realtek-cross` | Radio A on this host, radio B on a peer (`--b`) | Starts radio A locally; starts radio B on `--radio-b-ssh` (default `ubuntu@<--b>`) with `net.bind = 0.0.0.0`. Both managers run on this host; `winject.device` for B is `--b`. |
 
 ```bash
 ./scripts/manager_iperf_bw_test.sh --scenario realtek --bitrate 16M
 ./scripts/manager_iperf_bw_test.sh --scenario realtek --modulation OFDM_MCS7_SGI --bitrate 30M
+./scripts/manager_iperf_bw_test.sh --scenario realtek-cross \
+  --a 127.0.0.1 --b 192.168.253.127 --radio-b-ssh ubuntu@192.168.253.127 \
+  --channel 13 --modulation OFDM_24M --dir both --time 15 --bitrate 16M
 ```
 
-Notes for `realtek`:
+Notes for `realtek` / `realtek-cross`:
 
 - Each RTL8812AU must be bound to **`rtl88xxau_wfb`** (`modprobe 88XXau_wfb`), not stock **`rtl88XXau`**. Blacklist `88XXau` in `/etc/modprobe.d/` so replugs stay on the wfb driver; `scripts/realtek_radios.sh` rebinds any dongles still on `rtl88XXau` before starting the radios.
 - The radio repo is expected at `../winject-radio-realtek`. To use another location, set `WINJECT_RADIO_REALTEK=<checkout>`; to skip the build, set `WINJECT_RADIO_REALTEK_BIN=<binary>`. The TX power table is `configuration/txpower.csv` in that checkout.
