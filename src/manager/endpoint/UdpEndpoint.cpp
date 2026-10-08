@@ -3,7 +3,6 @@
 #include "utils/Log.h"
 
 #include <errno.h>
-#include <netinet/in.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <vector>
@@ -55,10 +54,6 @@ bool UdpEndpoint::open(IOReactor& reactor, const UpstreamConfig& cfg,
     }
     const int one = 1;
     sock.set_sock_opt(SOL_SOCKET, SO_REUSEADDR, one);
-#if defined(__linux__)
-    // Surface ICMP port-unreachable from prior sendto() on recv (see on_app).
-    sock.set_sock_opt(IPPROTO_IP, IP_RECVERR, one);
-#endif
 
     const UdpPeerEndpoint& ep = cfg.endpoint;
     peer_endpoints_ = ep;
@@ -210,10 +205,9 @@ void UdpEndpoint::on_app()
             }
             if (errno == ECONNREFUSED)
             {
-                // Linux async error (IP_RECVERR): a prior sendto() hit a closed
-                // port. Do not clear dest_valid — in udp_client/udp_static the
-                // peer address is fixed; in udp_server a new app datagram
-                // refreshes dest when one arrives.
+                // Async ICMP for a prior sendto() (uncommon without IP_RECVERR).
+                // Do not clear dest_valid — udp_client/udp_static use a fixed
+                // dest; udp_server refreshes dest on the next app datagram.
                 continue;
             }
             if (errno == EAGAIN || errno == EWOULDBLOCK)
