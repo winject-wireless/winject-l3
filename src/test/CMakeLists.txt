@@ -80,8 +80,6 @@ target_include_directories(winject-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager
     ${bfc_SOURCE_DIR}/src
 )
-target_compile_definitions(winject-tests PRIVATE
-    "WINJECT_TEST_MANAGER_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/../manager\"")
 target_compile_options(winject-tests PRIVATE
     -Wall
     -Wextra
