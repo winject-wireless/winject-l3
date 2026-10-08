@@ -167,4 +167,4 @@ Useful options:
 Output:
 
 - iperf results and, per direction, a radio drop-stage table with two residual checks. Both should print `OK`; a non-zero residual means a loss point is not counted.
-- A log directory, printed at start as `logs=/tmp/winject-iperf-<pid>`, containing the iperf client and server logs, both manager logs, and the radio counter snapshots `radio_<dir>_before.json` / `radio_<dir>_after.json`. The client's "Server Report" should match the `Lost/Total` summary in `iperf_srv_<dir>.log`. If they differ, trust the server log.
+- A log directory, printed at start as `logs=/tmp/winject-iperf-<pid>`, containing the iperf client and server logs, both manager logs, and the radio counter snapshots `radio_<dir>_before.json` / `radio_<dir>_after.json`. The script prints an **iperf server summary** line per direction. The client's "Server Report" should match `iperf_srv_<dir>.log`; if it differs (or shows nonsense like `4294966796/0`), trust the server log — UDP iperf reports return through the manager forward path (`UDP_SERVER` last-sender on the ingress side, `UDP_CLIENT` relay from `iperf -s` on the egress side).

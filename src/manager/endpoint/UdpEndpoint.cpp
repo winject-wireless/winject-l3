@@ -205,10 +205,11 @@ void UdpEndpoint::on_app()
             }
             if (errno == ECONNREFUSED)
             {
-                // Reply dest is a closed local port; ICMP is queued on this
-                // socket. Drop it and accept the next sender (nc -w1, or a
-                // new interactive nc after the previous one quit).
-                dest_valid = false;
+                // Async ICMP for a prior send (e.g. iperf -s exited while the
+                // bench client upstream still targets 127.0.0.1:9002). Do not
+                // clear dest_valid: udp_client keeps a fixed connect_address,
+                // and udp_server must keep delivering air→app for the last
+                // iperf -c peer until a new datagram arrives on the bind port.
                 continue;
             }
             if (errno == EAGAIN || errno == EWOULDBLOCK)

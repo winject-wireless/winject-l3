@@ -11,6 +11,9 @@
 # Topology (A→B):
 #   iperf -c 127.0.0.1:29000 -u  → manager A UDP_SERVER → air
 #     → manager B UDP_CLIENT → iperf -s -u -p 9002
+# iperf UDP reports return over the same path (server → client upstream → air
+# → peer manager UDP_SERVER last-sender). Trust iperf_srv_*.log if the client
+# "Server Report" line looks wrong.
 #
 # Requires: iperf (classic iperf2) on PATH — not iperf3.
 #
@@ -461,9 +464,26 @@ build_client_args() {
 start_server() {
   local tag="$1" port="$2"
   stop_server
+  sleep 0.3
   "$IPERF_BIN" -s -u -B 127.0.0.1 -p "$port" >"$LOG_DIR/iperf_srv_${tag}.log" 2>&1 &
   PID_IPERF=$!
   wait_udp_listen "$port"
+}
+
+print_server_summary() {
+  local tag="$1"
+  local log="$LOG_DIR/iperf_srv_${tag}.log"
+  if [[ ! -f "$log" ]]; then
+    return
+  fi
+  local line
+  line="$(grep -E '^\[[[:space:]]*[0-9]+\][[:space:]]+0\.0\.0-' "$log" | tail -1 || true)"
+  if [[ -n "$line" ]]; then
+    echo "iperf server summary ($tag): $line"
+  else
+    echo "iperf server summary ($tag): (see $log)"
+    tail -5 "$log" || true
+  fi
 }
 
 run_client() {
@@ -482,12 +502,14 @@ run_client() {
   set -e
   radio_snapshot "${tag}_after"
   radio_diff "$tag"
+  print_server_summary "$tag"
   if [[ "$rc" -ne 0 ]]; then
     echo "iperf client failed (rc=$rc)"
     echo "--- server ---"
     tail -30 "$LOG_DIR/iperf_srv_${tag}.log" || true
   fi
   stop_server
+  sleep 0.3
   return "$rc"
 }
 
