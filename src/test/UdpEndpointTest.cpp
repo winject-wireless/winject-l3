@@ -109,6 +109,30 @@ bfcext::shared_sized_buffer air(const std::vector<uint8_t>& bytes)
     return bfcext::shared_sized_buffer::copy_from(bytes.data(), bytes.size());
 }
 
+bool bind_loopback_udp(bfc::socket& sock, uint16_t port)
+{
+    const int one = 1;
+    sock.set_sock_opt(SOL_SOCKET, SO_REUSEADDR, one);
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+    return sock.bind(addr) == 0;
+}
+
+std::vector<uint8_t> recv_udp_once(int fd, int timeout_ms = 500)
+{
+    pollfd pfd = {fd, POLLIN, 0};
+    if (poll(&pfd, 1, timeout_ms) <= 0)
+    {
+        return {};
+    }
+    std::vector<uint8_t> buf(2048);
+    const ssize_t n = ::recv(fd, buf.data(), buf.size(), 0);
+    buf.resize(n > 0 ? static_cast<size_t>(n) : 0);
+    return buf;
+}
+
 }  // namespace
 
 // Only the LC header FEC flag selects the decoder. A raw SDU that looks like
@@ -234,23 +258,40 @@ TEST(UdpEndpointTest, PullTxTagsFecShards)
     }
 }
 
-// Bench iperf egress uses UDP_CLIENT_FORWARDING (connect_address = iperf -s).
-// on_radio_rx must keep delivering to that fixed dest even after ICMP errors
-// on the socket (e.g. iperf -s stopped between directions).
-TEST(UdpEndpointTest, ClientModeForwardsRadioToConnectAddress)
+// With IP_RECVERR (Linux), sendto to a closed port queues ECONNREFUSED on recv.
+// Clearing dest_valid there would block later on_radio_rx → send_app (fixed tx).
+TEST(UdpEndpointTest, AsyncIcmpRefusedDoesNotStopRadioDelivery)
 {
-    AppPeer iperf_server;
+    const uint16_t port = reserve_free_udp_port();
+    ASSERT_NE(port, 0u);
 
     IOReactor reactor;
     UdpEndpoint endpoint;
     UpstreamConfig cfg;
     cfg.fec_type = FecType::none;
-    cfg.endpoint.tx = iperf_server.addr();
+    cfg.endpoint.tx = "127.0.0.1:" + std::to_string(port);
     ASSERT_TRUE(endpoint.open(reactor, cfg));
 
-    const std::vector<uint8_t> payload = {0xDE, 0xAD, 0xBE, 0xEF};
-    endpoint.on_radio_rx(air(payload), false);
-    EXPECT_EQ(iperf_server.recv(), payload);
+    bfc::socket listener(bfc::create_udp4());
+    ASSERT_TRUE(bind_loopback_udp(listener, port));
+
+    const std::vector<uint8_t> first = {0x01, 0x02};
+    endpoint.on_radio_rx(air(first), false);
+    EXPECT_EQ(recv_udp_once(listener.fd()), first);
+
+    listener = bfc::socket(bfc::create_udp4());
+
+    const std::vector<uint8_t> icmp_probe = {0x03, 0x04};
+    endpoint.on_radio_rx(air(icmp_probe), false);
+    pump_reactor(reactor);
+
+    bfc::socket listener2(bfc::create_udp4());
+    ASSERT_TRUE(bind_loopback_udp(listener2, port));
+
+    const std::vector<uint8_t> after = {0x05, 0x06};
+    endpoint.on_radio_rx(air(after), false);
+    EXPECT_EQ(recv_udp_once(listener2.fd()), after);
+
     endpoint.close();
 }
 
