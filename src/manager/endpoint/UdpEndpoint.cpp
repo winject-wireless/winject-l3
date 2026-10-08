@@ -205,10 +205,9 @@ void UdpEndpoint::on_app()
             }
             if (errno == ECONNREFUSED)
             {
-                // Reply dest is a closed local port; ICMP is queued on this
-                // socket. Drop it and accept the next sender (nc -w1, or a
-                // new interactive nc after the previous one quit).
-                dest_valid = false;
+                // Async ICMP for a prior sendto() (typically only with IP_RECVERR,
+                // which we do not enable). Likely dead on Linux today; kept as a
+                // guard — do not clear dest_valid (fixed dest in udp_client/static).
                 continue;
             }
             if (errno == EAGAIN || errno == EWOULDBLOCK)

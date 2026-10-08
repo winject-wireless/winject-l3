@@ -7,10 +7,15 @@
 #   realtek  two RTL8812AU dongles on this host: starts winject-radio-realtek
 #            with radio_{a,b}.cfg first (scripts/realtek_radios.sh), then the
 #            managers with bw_{a,b}.cfg
+#   realtek-cross  radio A on this host, radio B on a peer (--b, --radio-b-ssh);
+#            managers on this host; winject.device = --a (default 127.0.0.1) and --b
 #
 # Topology (A→B):
 #   iperf -c 127.0.0.1:29000 -u  → manager A UDP_SERVER → air
 #     → manager B UDP_CLIENT → iperf -s -u -p 9002
+# iperf UDP reports return over the same path (server → client upstream → air
+# → peer manager UDP_SERVER last-sender). Trust iperf_srv_*.log if the client
+# "Server Report" line looks wrong.
 #
 # Requires: iperf (classic iperf2) on PATH — not iperf3.
 #
@@ -22,6 +27,7 @@
 #   ./scripts/manager_iperf_bw_test.sh 192.168.253.11 192.168.253.12 192.168.253.106
 #   ./scripts/manager_iperf_bw_test.sh -- -l 1400
 #   ./scripts/manager_iperf_bw_test.sh --scenario realtek --bitrate 25M
+#   ./scripts/manager_iperf_bw_test.sh --scenario realtek-cross --b 192.168.253.127
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,6 +37,8 @@ source "$ROOT/scripts/ensure_manager.sh"
 source "$ROOT/scripts/realtek_radios.sh"
 SCENARIO="esp32"
 RADIO_SET=0
+RADIO_A_SET=0
+RADIO_B_SET=0
 LOG_DIR="${TMPDIR:-/tmp}/winject-iperf-$$"
 mkdir -p "$LOG_DIR"
 
@@ -38,6 +46,7 @@ RADIO_A="192.168.253.11"
 RADIO_B="192.168.253.12"
 HOST_IP="192.168.253.106"
 HOST_SET=0
+RADIO_B_SSH="${WINJECT_RADIO_B_SSH:-}"
 # Radio PHY written into the manager configs; empty = keep the config's value
 # (CCA: keep the radio's).
 CHANNEL=""
@@ -67,15 +76,22 @@ Start both winject-managers and run iperf (v2) in UDP mode over the manager
 forward path. Extra args after -- are passed to iperf -c (not -s).
 
 Scenario:
-  --scenario S      esp32 | realtek (default: $SCENARIO); configs come from
-                    configuration/winject-tests/<S>/. realtek also starts the
-                    two local winject-radio-realtek instances (needs sudo)
+  --scenario S      esp32 | realtek | realtek-cross (default: $SCENARIO); configs
+                    from configuration/winject-tests/<S>/; realtek* starts radios
+                    via scripts/realtek_radios.sh (local sudo; cross uses ssh for B)
 
 Radio / host (esp32):
-  --a IP            radio A Ethernet IP (default: $RADIO_A)
-  --b IP            radio B Ethernet IP (default: $RADIO_B)
-  --host IP         host IP radios send upstream_tx to (auto-detect if omitted)
-  --no-cca          disable CCA on both radios (not with realtek: no CCA control)
+  --a IP            esp32: radio A Ethernet IP (default: $RADIO_A)
+  --b IP            esp32: radio B Ethernet IP (default: $RADIO_B)
+  --host IP         bench host / manager IP (auto-detect if omitted)
+
+Radio / host (realtek-cross):
+  --a IP            manager A winject.device (default: 127.0.0.1, radio A local)
+  --b IP            manager B winject.device / radio B LAN IP (default: 192.168.253.127)
+  --radio-b-ssh U@H ssh target to start/stop radio B (default: ubuntu@<--b>)
+  --host IP         where managers and iperf run (default: auto via --b)
+
+  --no-cca          disable CCA (esp32 only; not supported on Realtek)
   --cca             enable CCA on both radios (default: keep the radio's)
 
 Radio PHY:
@@ -101,6 +117,7 @@ Examples:
   $(basename "$0") -- -l 1400
   $(basename "$0") --scenario realtek --bitrate 25M
   $(basename "$0") --scenario realtek --modulation OFDM_MCS7_SGI --bitrate 30M
+  $(basename "$0") --scenario realtek-cross --b 192.168.253.127 --channel 13 --bitrate 16M
 EOF
 }
 
@@ -135,7 +152,7 @@ while [[ $# -gt 0 ]]; do
       break
       ;;
     --scenario)
-      SCENARIO="${2:?--scenario needs esp32|realtek}"
+      SCENARIO="${2:?--scenario needs esp32|realtek|realtek-cross}"
       shift 2
       ;;
     --scenario=*)
@@ -145,21 +162,33 @@ while [[ $# -gt 0 ]]; do
     --a)
       RADIO_A="${2:?--a needs an IP}"
       RADIO_SET=1
+      RADIO_A_SET=1
       shift 2
       ;;
     --a=*)
       RADIO_A="${1#--a=}"
       RADIO_SET=1
+      RADIO_A_SET=1
       shift
       ;;
     --b)
       RADIO_B="${2:?--b needs an IP}"
       RADIO_SET=1
+      RADIO_B_SET=1
       shift 2
       ;;
     --b=*)
       RADIO_B="${1#--b=}"
       RADIO_SET=1
+      RADIO_B_SET=1
+      shift
+      ;;
+    --radio-b-ssh)
+      RADIO_B_SSH="${2:?--radio-b-ssh needs user@host}"
+      shift 2
+      ;;
+    --radio-b-ssh=*)
+      RADIO_B_SSH="${1#--radio-b-ssh=}"
       shift
       ;;
     --host)
@@ -298,8 +327,23 @@ case "$SCENARIO" in
     HOST_IP=127.0.0.1
     HOST_SET=1
     ;;
+  realtek-cross)
+    if [[ "$CCA" == 0 ]]; then
+      echo "error: --no-cca is not supported by the Realtek radio" >&2
+      exit 1
+    fi
+    if [[ "$RADIO_A_SET" -eq 0 ]]; then
+      RADIO_A=127.0.0.1
+    fi
+    if [[ "$RADIO_B_SET" -eq 0 ]]; then
+      RADIO_B=192.168.253.127
+    fi
+    if [[ -z "$RADIO_B_SSH" ]]; then
+      RADIO_B_SSH="ubuntu@${RADIO_B}"
+    fi
+    ;;
   *)
-    echo "error: --scenario must be esp32 or realtek (got: $SCENARIO)" >&2
+    echo "error: --scenario must be esp32, realtek, or realtek-cross (got: $SCENARIO)" >&2
     exit 1
     ;;
 esac
@@ -332,7 +376,11 @@ if command -v iperf3 >/dev/null 2>&1 && [[ "$IPERF_BIN" == iperf ]]; then
 fi
 
 if [[ "$HOST_SET" -eq 0 ]]; then
-  HOST_IP="$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('$RADIO_A', 22)); print(s.getsockname()[0]); s.close()")"
+  host_probe="$RADIO_A"
+  if [[ "$SCENARIO" == "realtek-cross" ]]; then
+    host_probe="$RADIO_B"
+  fi
+  HOST_IP="$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('$host_probe', 22)); print(s.getsockname()[0]); s.close()")"
 fi
 
 ensure_winject_manager "$ROOT"
@@ -409,11 +457,21 @@ for p in "$PORT_RECV_AB" "$PORT_RECV_BA" "$PORT_SEND_AB" "$PORT_SEND_BA"; do
 done
 sleep 1
 
+if [[ "$SCENARIO" == realtek || "$SCENARIO" == realtek-cross ]]; then
+  sudo pkill -TERM -x winject-radio-r 2>/dev/null || true
+  sleep 1
+fi
+
 if [[ "$SCENARIO" == realtek ]]; then
   realtek_radios_start "$ROOT" "$LOG_DIR"
+elif [[ "$SCENARIO" == realtek-cross ]]; then
+  realtek_cross_radios_start "$ROOT" "$LOG_DIR" "$RADIO_B" "$RADIO_B_SSH"
 fi
 
 echo "managers [$SCENARIO]: A=$RADIO_A B=$RADIO_B host=$HOST_IP logs=$LOG_DIR"
+if [[ "$SCENARIO" == realtek-cross ]]; then
+  echo "realtek-cross: radio B ssh=$RADIO_B_SSH"
+fi
 "$MANAGER" "$CONF_A_RUN" >"$LOG_DIR/manager_a.log" 2>&1 &
 PID_A=$!
 "$MANAGER" "$CONF_B_RUN" >"$LOG_DIR/manager_b.log" 2>&1 &
@@ -461,9 +519,31 @@ build_client_args() {
 start_server() {
   local tag="$1" port="$2"
   stop_server
+  # Let iperf -s release the UDP port before the next direction (avoids stray
+  # ICMP / confused client "Server Report" lines between A→B and B→A).
+  sleep 0.3
   "$IPERF_BIN" -s -u -B 127.0.0.1 -p "$port" >"$LOG_DIR/iperf_srv_${tag}.log" 2>&1 &
   PID_IPERF=$!
   wait_udp_listen "$port"
+}
+
+print_server_summary() {
+  local tag="$1"
+  local log="$LOG_DIR/iperf_srv_${tag}.log"
+  if [[ ! -f "$log" ]]; then
+    return
+  fi
+  local line
+  line="$(grep -E 'Mbits/sec.*Lost/Total|Lost/Total Datagrams' "$log" | tail -1 || true)"
+  if [[ -z "$line" ]]; then
+    line="$(grep -E '^\[[[:space:]]*[0-9]+\][[:space:]]+0\.[0-9]+-.*sec.*Mbits' "$log" | tail -1 || true)"
+  fi
+  if [[ -n "$line" ]]; then
+    echo "iperf server summary ($tag): $line"
+  else
+    echo "iperf server summary ($tag): (see $log)"
+    tail -5 "$log" || true
+  fi
 }
 
 run_client() {
@@ -482,12 +562,14 @@ run_client() {
   set -e
   radio_snapshot "${tag}_after"
   radio_diff "$tag"
+  print_server_summary "$tag"
   if [[ "$rc" -ne 0 ]]; then
     echo "iperf client failed (rc=$rc)"
     echo "--- server ---"
     tail -30 "$LOG_DIR/iperf_srv_${tag}.log" || true
   fi
   stop_server
+  sleep 0.3
   return "$rc"
 }
 

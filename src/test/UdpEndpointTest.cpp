@@ -234,6 +234,26 @@ TEST(UdpEndpointTest, PullTxTagsFecShards)
     }
 }
 
+// Smoke: bench iperf egress uses udp_client (fixed sendto dest). Not a regression
+// test for the ECONNREFUSED handler in on_app().
+TEST(UdpEndpointTest, ClientModeForwardsRadioToConnectAddress)
+{
+    AppPeer iperf_server;
+
+    IOReactor reactor;
+    UdpEndpoint endpoint;
+    UpstreamConfig cfg;
+    cfg.fec_type = FecType::none;
+    cfg.endpoint.tx = iperf_server.addr();
+    ASSERT_TRUE(endpoint.open(reactor, cfg));
+
+    const std::vector<uint8_t> payload = {0xDE, 0xAD, 0xBE, 0xEF};
+    endpoint.on_radio_rx(air(payload), false);
+    EXPECT_EQ(iperf_server.recv(), payload);
+
+    endpoint.close();
+}
+
 TEST(UdpEndpointTest, DropsOversizeAppDatagram)
 {
     const uint16_t port = reserve_free_udp_port();
