@@ -2,7 +2,7 @@
 """Characterize air-RX LC gap loss on ESP32 without winject-manager.
 
 Configures radios over m-plane (channel, domain filter only), injects MPDUs on
-the TX radio UDP :9000, listens on the RX radio forward path UDP :9210, and
+the TX radio UDP :9000, registers on and listens on the RX radio's single d-plane UDP :9000, and
 decodes slots locally (same LC sequence rules as the manager).
 
 Reports **one row per LC gap event** (sequence jump on accept), not windowed
@@ -34,7 +34,7 @@ from winject_mpdu import (  # noqa: E402
 
 MPLANE_PORT = 22
 INJECT_PORT = 9000
-FORWARD_PORT = 9210
+FORWARD_PORT = INJECT_PORT  # one d-plane port: inject, registration and forward
 
 
 def mplane(ip: str, cmd: str, timeout: float = 2.0) -> str:
@@ -155,7 +155,7 @@ class Injector:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--tx", default="", help="TX radio IP (inject :9000); omit with --listen-only")
-    p.add_argument("--rx", required=True, help="RX radio IP (forward :9210)")
+    p.add_argument("--rx", required=True, help="RX radio IP (forward on d-plane :9000)")
     p.add_argument(
         "--listen-only",
         action="store_true",
