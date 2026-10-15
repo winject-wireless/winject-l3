@@ -15,6 +15,7 @@
 #include <netinet/in.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/socket.h>
 #include <thread>
 #include <vector>
 
@@ -22,6 +23,9 @@ namespace winject
 {
 
 inline constexpr uint32_t k_tx_tick_interval_us = 250;
+#if defined(ESP_PLATFORM)
+inline constexpr size_t k_tx_thread_stack_bytes = 8192;
+#endif
 inline constexpr size_t k_pacing_full_psdu_bytes = 1504;
 
 class WifiUdp;

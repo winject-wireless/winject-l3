@@ -10,11 +10,9 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
     enable_language(ASM)
 endif()
 
-function(winject_add_isal_ec)
-    if(TARGET isal_ec)
-        return()
-    endif()
-
+# Fetches ISA-L (one pin for the Linux and ESP-IDF builds). Callers read
+# isa-l_SOURCE_DIR after FetchContent_GetProperties(isa-l).
+function(winject_fetch_isal)
     FetchContent_Declare(isa-l
         GIT_REPOSITORY https://github.com/intel/isa-l.git
         GIT_TAG v2.31.1
@@ -24,6 +22,15 @@ function(winject_add_isal_ec)
     if(NOT isa-l_POPULATED)
         FetchContent_Populate(isa-l)
     endif()
+endfunction()
+
+function(winject_add_isal_ec)
+    if(TARGET isal_ec)
+        return()
+    endif()
+
+    winject_fetch_isal()
+    FetchContent_GetProperties(isa-l)
 
     set(ISAL_ROOT "${isa-l_SOURCE_DIR}")
     set(ISAL_EC_SOURCES "${ISAL_ROOT}/erasure_code/ec_base.c")

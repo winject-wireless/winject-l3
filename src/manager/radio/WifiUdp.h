@@ -11,6 +11,7 @@
 #include <functional>
 #include <netinet/in.h>
 #include <stdint.h>
+#include <sys/socket.h>
 
 namespace winject
 {

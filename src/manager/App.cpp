@@ -14,6 +14,7 @@
 #include "utils/Version.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <errno.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -152,11 +153,7 @@ bool App::set_upstream_fec(size_t index, FecType type, int k, int n,
     {
         return fail("invalid upstream index");
     }
-    auto* udp = dynamic_cast<UdpEndpoint*>(upstreams[index].get());
-    if (udp == nullptr)
-    {
-        return fail("fec only valid for UDP upstreams");
-    }
+    UdpEndpoint* udp = upstreams[index].get();
     if (!udp->set_fec(type, k, n, error))
     {
         return false;
@@ -185,11 +182,7 @@ bool App::get_upstream_fec(size_t index, FecType* type, int* k, int* n,
     {
         return fail("invalid upstream index");
     }
-    auto* udp = dynamic_cast<UdpEndpoint*>(upstreams[index].get());
-    if (udp == nullptr)
-    {
-        return fail("fec only valid for UDP upstreams");
-    }
+    UdpEndpoint* udp = upstreams[index].get();
     udp->get_fec(type, k, n);
     return true;
 }
@@ -229,7 +222,7 @@ bool App::fill_upstream_view(size_t index, ManagerUpstreamView* out) const
         return false;
     }
     const UpstreamConfig& uc = cfg.upstreams[index];
-    const auto* udp = dynamic_cast<const UdpEndpoint*>(upstreams[index].get());
+    const auto* udp = upstreams[index].get();
     out->id = static_cast<uint8_t>(uc.index);
     out->bus_tx = uc.bus_tx;
     out->bus_rx = uc.bus_rx;
@@ -355,7 +348,7 @@ bool App::console_remove_upstream(uint8_t id, std::string* error)
     }
     if (upstreams[index])
     {
-        auto* udp = dynamic_cast<UdpEndpoint*>(upstreams[index].get());
+        auto* udp = upstreams[index].get();
         if (udp != nullptr)
         {
             udp->close();
@@ -455,7 +448,7 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
         return fail(error != nullptr && !error->empty() ? error->c_str()
                                                         : k_einval);
     }
-    auto* udp = dynamic_cast<UdpEndpoint*>(upstreams[index].get());
+    auto* udp = upstreams[index].get();
     if (patch.have_fec_timeout)
     {
         if (udp == nullptr ||
@@ -544,8 +537,7 @@ bool App::console_list_upstream_rx_stat(
             }
             return false;
         }
-        const auto* udp =
-            dynamic_cast<const UdpEndpoint*>(upstreams[index].get());
+        const auto* udp = upstreams[index].get();
         ManagerUpstreamRxStatView row;
         row.id = id;
         fill_upstream_fec_fields(udp, &row.fec, &row.fec_k, &row.fec_n);
@@ -594,8 +586,7 @@ bool App::console_list_upstream_tx_stat(
             }
             return false;
         }
-        const auto* udp =
-            dynamic_cast<const UdpEndpoint*>(upstreams[index].get());
+        const auto* udp = upstreams[index].get();
         ManagerUpstreamTxStatView row;
         row.id = id;
         fill_upstream_fec_fields(udp, &row.fec, &row.fec_k, &row.fec_n);
@@ -649,7 +640,7 @@ void App::refresh_host_metrics()
         ->store(radio_proto_ok_ ? 1u : 0u);
     for (size_t i = 0; i < upstreams.size(); ++i)
     {
-        const Upstream* up = upstreams[i].get();
+        const UdpEndpoint* up = upstreams[i].get();
         if (up == nullptr)
         {
             continue;
@@ -663,19 +654,14 @@ void App::refresh_host_metrics()
             "upstream_" + std::to_string(view.id) + "_air_rx_gap_loss";
         metrics_registry_.get_metrics<MetricU64>(gap_key)->store(
             up->stats().air_rx_gap_loss);
-        const auto* udp = dynamic_cast<const UdpEndpoint*>(up);
-        if (udp != nullptr)
-        {
-            const std::string oversize_key =
-                "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
-            metrics_registry_.get_metrics<MetricU64>(oversize_key)
-                ->store(udp->app_rx_oversize_pkt());
-            const std::string fec_unexpected_key = "upstream_" +
-                                                   std::to_string(view.id) +
-                                                   "_air_rx_fec_unexpected";
-            metrics_registry_.get_metrics<MetricU64>(fec_unexpected_key)
-                ->store(udp->fec_air_rx_unexpected());
-        }
+        const std::string oversize_key =
+            "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
+        metrics_registry_.get_metrics<MetricU64>(oversize_key)
+            ->store(up->app_rx_oversize_pkt());
+        const std::string fec_unexpected_key =
+            "upstream_" + std::to_string(view.id) + "_air_rx_fec_unexpected";
+        metrics_registry_.get_metrics<MetricU64>(fec_unexpected_key)
+            ->store(up->fec_air_rx_unexpected());
     }
 }
 
@@ -1405,9 +1391,14 @@ void App::reconnect_tick()
 
 void App::arm_tick()
 {
-    reactor.get_timer().wait_us(250,
+    reactor.get_timer().wait_us(k_tick_us,
                                 [this]()
                                 {
+                                    if (stop_requested_.load())
+                                    {
+                                        reactor.stop();
+                                        return;
+                                    }
                                     reconnect_tick();
                                     stats_tick();
                                     arm_tick();
@@ -1439,6 +1430,7 @@ void App::stats_tick()
 
 void App::stop()
 {
+    stop_requested_.store(true);
     reactor.stop();
 }
 
@@ -1577,7 +1569,8 @@ int App::run()
     ManagerRadioDeviceView rd_view;
     rd_view.id = 0;
     rd_view.device = cfg.radio_device;
-    LOG_INF("manager running %s max_rate %u kbps burst=%zu burst_us=%u (%s)",
+    LOG_INF("manager running %s max_rate %" PRIu32
+            " kbps burst=%zu burst_us=%" PRIu32 " (%s)",
             console_format_radio_device(rd_view).c_str(), cfg.max_rate_kbps,
             cfg.tx_burst_size, cfg.tx_burst_interval_us,
             cfg.modulation.c_str());

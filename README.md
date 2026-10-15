@@ -49,6 +49,37 @@ cmake --build build_manager_host -j"$(nproc)"
 ./build_manager_host/winject-manager configuration/host_x86/config.cfg
 ```
 
+The manager is built as a static library, `winject-l3`, with one entry point, plus a thin `winject-manager` binary that calls it ([`Main.cpp`](src/manager/Main.cpp)):
+
+```cpp
+#include "WinjectL3.h"
+
+int winject_l3::main(int argc, char* argv[]);  // argv[1] = config path; blocks until stop()
+void winject_l3::stop();                       // any thread; main() then returns
+```
+
+The library builds without RTTI (`-fno-rtti`), as it does on ESP-IDF.
+
+### ESP-IDF (ESP32-P4)
+
+[`idf/winject_l3`](idf/winject_l3) is an ESP-IDF component with the same sources (listed once in [`WinjectL3Sources.cmake`](src/manager/WinjectL3Sources.cmake)). Add it to a project's `EXTRA_COMPONENT_DIRS`, `#include "WinjectL3.h"` and run `winject_l3::main` on a pthread (it blocks in its reactor). [`idf/example`](idf/example) does exactly that:
+
+```bash
+cd idf/example && idf.py set-target esp32p4 build
+```
+
+Differences from Linux:
+
+| Topic | ESP-IDF |
+|---|---|
+| Reactor | BFC `poll_reactor` instead of the epoll reactor: timers wait in whole milliseconds (FreeRTOS tick), not microseconds, so the manager ticks every 1 ms instead of 250 µs |
+| TX thread | Started with an 8 KB stack (`esp_pthread_set_cfg`); its pacing waits round up to the FreeRTOS tick |
+| Sockets | 3 + one per upstream + 2 for the wake pipe; raise `CONFIG_LWIP_MAX_SOCKETS` (the example sets 16) |
+| `pipe()` | Missing in ESP-IDF; [`port/pipe.c`](idf/winject_l3/port/pipe.c) provides it as two connected loopback UDP sockets (BFC's reactor wakes itself through a pipe) |
+| Exceptions | The component compiles with `-fexceptions` because BFC throws on fatal errors; with the project's C++ exceptions off, such a throw aborts |
+| Signals | None: stop the manager with `winject_l3::stop()` (any task, also before `main` has started its loop) |
+| Config file | Read with `fopen`, so it must be on a mounted filesystem (e.g. LittleFS) |
+
 Configuration keys and the manager console are described in [docs/mplane.md](docs/mplane.md).
 
 Cross-build for Allwinner H3 / Orange Pi PC (32-bit armhf; needs the `arm-linux-gnueabihf` toolchain):

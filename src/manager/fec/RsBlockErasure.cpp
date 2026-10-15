@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <random>
 #include <string.h>
+#include <sys/socket.h>
 
 extern "C"
 {

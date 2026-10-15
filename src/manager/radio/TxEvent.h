@@ -4,6 +4,7 @@
 #include <deque>
 #include <memory>
 #include <netinet/in.h>
+#include <sys/socket.h>
 #include <variant>
 
 namespace winject

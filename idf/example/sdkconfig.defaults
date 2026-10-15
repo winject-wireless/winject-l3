@@ -1,0 +1,8 @@
+CONFIG_IDF_TARGET="esp32p4"
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
+CONFIG_SPIRAM=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# winject-l3 needs console client + service, radio, one per upstream and two
+# for the reactor's wake pipe; the default 10 leaves nothing for the app.
+CONFIG_LWIP_MAX_SOCKETS=16

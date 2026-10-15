@@ -10,6 +10,7 @@
 #include <string.h>
 #include <string>
 #include <strings.h>
+#include <sys/socket.h>
 
 namespace winject
 {
