@@ -14,6 +14,10 @@
 #include <string.h>
 #include <utility>
 
+#if defined(ESP_PLATFORM)
+#include "esp_pthread.h"
+#endif
+
 namespace
 {
 struct TxMpduEntryPlan
@@ -506,11 +510,32 @@ void TxMux::start()
         std::lock_guard<std::mutex> lock(wake_mu_);
         apply_queued_socket_changes();
     }
+#if defined(ESP_PLATFORM)
+    // std::thread gets CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT (3 KB by
+    // default), too small for the TX path; restore the caller's config after.
+    esp_pthread_cfg_t prev_cfg;
+    const bool had_cfg = esp_pthread_get_cfg(&prev_cfg) == ESP_OK;
+    esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
+    cfg.stack_size = k_tx_thread_stack_bytes;
+    cfg.thread_name = "winject_tx";
+    esp_pthread_set_cfg(&cfg);
+#endif
     tx_thread_ = std::thread(
         [this]()
         {
             tx_thread_main();
         });
+#if defined(ESP_PLATFORM)
+    if (had_cfg)
+    {
+        esp_pthread_set_cfg(&prev_cfg);
+    }
+    else
+    {
+        const esp_pthread_cfg_t def = esp_pthread_get_default_config();
+        esp_pthread_set_cfg(&def);
+    }
+#endif
 }
 
 void TxMux::stop()

@@ -72,10 +72,12 @@ Differences from Linux:
 
 | Topic | ESP-IDF |
 |---|---|
-| Reactor | BFC `poll_reactor` instead of the epoll reactor: timers wait in whole milliseconds (FreeRTOS tick), not microseconds |
+| Reactor | BFC `poll_reactor` instead of the epoll reactor: timers wait in whole milliseconds (FreeRTOS tick), not microseconds, so the manager ticks every 1 ms instead of 250 µs |
+| TX thread | Started with an 8 KB stack (`esp_pthread_set_cfg`); its pacing waits round up to the FreeRTOS tick |
+| Sockets | 3 + one per upstream + 2 for the wake pipe; raise `CONFIG_LWIP_MAX_SOCKETS` (the example sets 16) |
 | `pipe()` | Missing in ESP-IDF; [`port/pipe.c`](idf/winject_l3/port/pipe.c) provides it as two connected loopback UDP sockets (BFC's reactor wakes itself through a pipe) |
 | Exceptions | The component compiles with `-fexceptions` because BFC throws on fatal errors; with the project's C++ exceptions off, such a throw aborts |
-| Signals | None: stop the manager with `winject_l3::stop()` |
+| Signals | None: stop the manager with `winject_l3::stop()` (any task, also before `main` has started its loop) |
 | Config file | Read with `fopen`, so it must be on a mounted filesystem (e.g. LittleFS) |
 
 Configuration keys and the manager console are described in [docs/mplane.md](docs/mplane.md).

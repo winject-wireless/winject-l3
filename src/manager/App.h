@@ -15,6 +15,7 @@
 #include "utils/MetricsRegistry.h"
 #include "utils/Version.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -89,7 +90,14 @@ private:
     void on_radio_version(bool known, const WinjectVersion& v);
     void log_proto_mismatch_once(const WinjectVersion& radio_ver);
 
-    static constexpr int k_reconnect_ticks = 4000;
+#if defined(ESP_PLATFORM)
+    // poll_reactor waits in whole milliseconds; a shorter tick busy-spins.
+    static constexpr uint32_t k_tick_us = 1000;
+#else
+    static constexpr uint32_t k_tick_us = 250;
+#endif
+    // Console retry every second.
+    static constexpr int k_reconnect_ticks = 1000000 / k_tick_us;
 
     Config cfg;
     IOReactor reactor;
@@ -102,6 +110,9 @@ private:
     std::shared_ptr<WifiUdp> radio;
     std::vector<std::shared_ptr<UdpEndpoint>> upstreams;
     int reconnect_ticks = 0;
+    // Set by stop(); the tick re-stops the reactor if stop() came before
+    // reactor.run() set it running.
+    std::atomic<bool> stop_requested_{false};
     bool console_ok = false;
     bool radio_version_known_ = false;
     WinjectVersion radio_version_{};

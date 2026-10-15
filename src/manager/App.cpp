@@ -1391,9 +1391,14 @@ void App::reconnect_tick()
 
 void App::arm_tick()
 {
-    reactor.get_timer().wait_us(250,
+    reactor.get_timer().wait_us(k_tick_us,
                                 [this]()
                                 {
+                                    if (stop_requested_.load())
+                                    {
+                                        reactor.stop();
+                                        return;
+                                    }
                                     reconnect_tick();
                                     stats_tick();
                                     arm_tick();
@@ -1425,6 +1430,7 @@ void App::stats_tick()
 
 void App::stop()
 {
+    stop_requested_.store(true);
     reactor.stop();
 }
 
