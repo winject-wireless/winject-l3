@@ -2,6 +2,7 @@
 #define WINJECT_MANAGER_RADIO_RX_EVENT_H_
 
 #include <netinet/in.h>
+#include <sys/socket.h>
 #include <variant>
 
 namespace winject

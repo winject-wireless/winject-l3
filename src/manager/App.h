@@ -5,7 +5,7 @@
 #include "console/ConsoleClient.h"
 #include "console/ConsoleService.h"
 #include "console/ManagerConsoleTypes.h"
-#include "endpoint/Upstream.h"
+#include "endpoint/UdpEndpoint.h"
 #include "radio/RadioManager.h"
 #include "radio/RadioUpstreamTable.h"
 #include "radio/RxDemux.h"
@@ -100,7 +100,7 @@ private:
     RadioManager radio_manager_;
     RxDemux rx_demux_{radio_upstream_table_};
     std::shared_ptr<WifiUdp> radio;
-    std::vector<std::shared_ptr<Upstream>> upstreams;
+    std::vector<std::shared_ptr<UdpEndpoint>> upstreams;
     int reconnect_ticks = 0;
     bool console_ok = false;
     bool radio_version_known_ = false;

@@ -9,6 +9,7 @@
 #include "utils/Version.h"
 
 #include <chrono>
+#include <cinttypes>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -413,7 +414,8 @@ void ConsoleService::respond(uint32_t l3_id, const std::string& text)
     const auto it = routes_.find(l3_id);
     if (it == routes_.end())
     {
-        LOG_WRN("manager console: reply for closed or unknown l3_id %u", l3_id);
+        LOG_WRN("manager console: reply for closed or unknown l3_id %" PRIu32,
+                l3_id);
         return;
     }
     const Route route = it->second;

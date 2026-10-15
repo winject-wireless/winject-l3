@@ -16,46 +16,30 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../BfcFetch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/fec/IsalEc.cmake)
 winject_add_isal_ec()
 
-add_executable(winject-manager
-    Main.cpp
-    App.cpp
-    Config.cpp
-    utils/Log.cpp
-    utils/MetricsRegistry.cpp
-    utils/Version.cpp
-    console/ConsoleClient.cpp
-    console/MplaneCorrelation.cpp
-    console/ConsoleService.cpp
-    console/ConsoleParse.cpp
-    frames/Frame.cpp
-    frames/Mpdu.cpp
-    fec/RsBlockErasure.cpp
-    utils/NetUtil.cpp
-    radio/WifiUdp.cpp
-    radio/WifiFcs.cpp
-    radio/RadioUpstreamTable.cpp
-    radio/RadioMplaneParse.cpp
-    radio/RadioManager.cpp
-    radio/PhyAirtime.cpp
-    radio/TxMux.cpp
-    radio/RxDemux.cpp
-    endpoint/Upstream.cpp
-    endpoint/UpstreamStats.cpp
-    endpoint/UdpEndpoint.cpp
-)
+include(${CMAKE_CURRENT_SOURCE_DIR}/WinjectL3Sources.cmake)
 
-target_include_directories(winject-manager PRIVATE
+# Library: everything but main(); entry point winject_l3::main (WinjectL3.h).
+add_library(winject-l3 STATIC ${WINJECT_L3_SOURCES})
+
+target_include_directories(winject-l3 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${bfc_SOURCE_DIR}/src
 )
 
-target_compile_options(winject-manager PRIVATE
+# No RTTI: the ESP-IDF build has it off too.
+target_compile_options(winject-l3 PRIVATE
     -Wall
     -Wextra
     -Werror=return-type
     -Wno-missing-field-initializers
+    -fno-rtti
 )
 
-target_link_libraries(winject-manager PRIVATE pthread isal_ec)
+target_link_libraries(winject-l3 PUBLIC pthread isal_ec)
+
+# Binary: a thin main() that calls winject_l3::main.
+add_executable(winject-manager Main.cpp)
+target_compile_options(winject-manager PRIVATE -Wall -Wextra -fno-rtti)
+target_link_libraries(winject-manager PRIVATE winject-l3)

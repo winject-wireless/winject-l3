@@ -1,0 +1,29 @@
+# winject-l3 library sources (everything but Main.cpp), relative to this
+# directory. Shared by CMakeLists.txt (Linux) and the ESP-IDF component.
+set(WINJECT_L3_SOURCES
+    WinjectL3.cpp
+    App.cpp
+    Config.cpp
+    utils/Log.cpp
+    utils/MetricsRegistry.cpp
+    utils/Version.cpp
+    console/ConsoleClient.cpp
+    console/MplaneCorrelation.cpp
+    console/ConsoleService.cpp
+    console/ConsoleParse.cpp
+    frames/Frame.cpp
+    frames/Mpdu.cpp
+    fec/RsBlockErasure.cpp
+    utils/NetUtil.cpp
+    radio/WifiUdp.cpp
+    radio/WifiFcs.cpp
+    radio/RadioUpstreamTable.cpp
+    radio/RadioMplaneParse.cpp
+    radio/RadioManager.cpp
+    radio/PhyAirtime.cpp
+    radio/TxMux.cpp
+    radio/RxDemux.cpp
+    endpoint/Upstream.cpp
+    endpoint/UpstreamStats.cpp
+    endpoint/UdpEndpoint.cpp
+)

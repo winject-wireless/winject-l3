@@ -10,6 +10,7 @@
 
 #include <bfc/buffer.hpp>
 #include <bfc/sized_buffer.hpp>
+#include <cinttypes>
 #include <string.h>
 #include <utility>
 
@@ -65,7 +66,8 @@ void TxMux::set_phy_mode(const PhyMode& mode, uint32_t gap_us,
         phy_txtime_us(phy_, k_pacing_full_psdu_bytes) + gap_us_;
     pacing_credit_us_ = full_iv * 2;
     next_tx_at_ = std::chrono::steady_clock::now();
-    LOG_INF("tx pacing: %uus+%uus per full frame (cap=%u kbps)",
+    LOG_INF("tx pacing: %" PRIu32 "us+%" PRIu32
+            "us per full frame (cap=%" PRIu32 " kbps)",
             phy_txtime_us(phy_, k_pacing_full_psdu_bytes), gap_us_,
             rate_cap_kbps_);
 }

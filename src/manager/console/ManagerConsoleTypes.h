@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string>
+#include <sys/socket.h>
 #include <vector>
 
 namespace winject
