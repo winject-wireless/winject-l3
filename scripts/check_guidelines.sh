@@ -13,10 +13,9 @@ fi
 collect_sources() {
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git ls-files 'src/manager/*.[ch]' 'src/manager/**/*.[ch]' \
-            'src/test/*.[ch]' 'src/test/**/*.[ch]' \
-            'src/bfcext/*.[ch]' 'src/bfcext/**/*.[ch]' 2>/dev/null || true
+            'src/test/*.[ch]' 'src/test/**/*.[ch]' 2>/dev/null || true
     else
-        find src/manager src/test src/bfcext \
+        find src/manager src/test \
             \( -name '*.cpp' -o -name '*.c' -o -name '*.h' -o -name '*.hpp' \) \
             2>/dev/null | sort
     fi

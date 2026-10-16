@@ -3,8 +3,8 @@
 
 #include "endpoint/UpstreamStats.h"
 
+#include <bfc/shared_sized_buffer.hpp>
 #include <bfc/sized_buffer.hpp>
-#include <bfcext/shared_sized_buffer.hpp>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -16,7 +16,7 @@ class Upstream
 public:
     virtual ~Upstream() = default;
     // is_fec comes from the slot's LC header: the SDU is an FEC shard.
-    virtual void on_radio_rx(bfcext::shared_sized_buffer pkt, bool is_fec) = 0;
+    virtual void on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec) = 0;
     virtual bool has_tx() = 0;
 
     virtual size_t get_tx_size() = 0;

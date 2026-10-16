@@ -42,7 +42,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 |---|---|---|
 | `App` | [`App.*`](../src/manager/App.cpp) | Owns everything below; startup, radio programming sequence, metrics, console handlers |
 | `Config` | [`Config.*`](../src/manager/Config.cpp) | Parses the `winject.*`, `upstream-N.*` and `manager.*` keys |
-| `IOReactor` | [`IOReactor.h`](../src/manager/utils/IOReactor.h) | epoll reactor (`bfcext::epoll_reactor`); runs all socket I/O and timers on one thread |
+| `IOReactor` | [`IOReactor.h`](../src/manager/utils/IOReactor.h) | epoll reactor (`bfc::epoll_reactor`); runs all socket I/O and timers on one thread |
 | `ConsoleClient` | [`ConsoleClient.*`](../src/manager/console/ConsoleClient.cpp) | Radio m-plane client: correlated requests (`cmd:<u8>`), timeouts, `apply_radio`, `radio_caps_info` query |
 | `ConsoleService` | [`ConsoleService.*`](../src/manager/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender) |
 | `RadioManager` | [`RadioManager.*`](../src/manager/radio/RadioManager.cpp) | Keeps the radio in the configured state: PHY reconcile, filter reconcile, heartbeat, forward re-registration, TX pacing per modulation |

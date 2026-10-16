@@ -7,7 +7,7 @@
 #include "utils/NetUtil.h"
 
 #include <atomic>
-#include <bfcext/shared_sized_buffer.hpp>
+#include <bfc/shared_sized_buffer.hpp>
 #include <functional>
 #include <netinet/in.h>
 #include <stdint.h>
@@ -20,7 +20,7 @@ namespace winject
 class WifiUdp
 {
 public:
-    using rx = std::function<void(bfcext::shared_sized_buffer mpdu)>;
+    using rx = std::function<void(bfc::shared_sized_buffer mpdu)>;
     using idle = std::function<void()>;
 
     static constexpr size_t k_tx_mpdu_max = WIFI_RADIO_INJECT_MAX;
@@ -92,7 +92,7 @@ private:
     std::atomic<uint64_t> fcs_error_pkt_{0};
     std::atomic<uint64_t> fcs_unknown_pkt_{0};
     static constexpr size_t k_recv_capacity = 2048;
-    bfcext::shared_sized_buffer rx_buf_;
+    bfc::shared_sized_buffer rx_buf_;
 };
 
 }  // namespace winject

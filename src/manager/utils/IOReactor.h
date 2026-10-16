@@ -8,7 +8,7 @@
 // (epoll_pwait2 gives microseconds on Linux).
 #include <bfc/poll_reactor.hpp>
 #else
-#include <bfcext/epoll_reactor.hpp>
+#include <bfc/epoll_reactor.hpp>
 #endif
 
 namespace winject
@@ -17,7 +17,7 @@ namespace winject
 #if defined(ESP_PLATFORM)
 using IOReactor = bfc::poll_reactor<std::function<void()>>;
 #else
-using IOReactor = bfcext::epoll_reactor<std::function<void()>>;
+using IOReactor = bfc::epoll_reactor<std::function<void()>>;
 #endif
 
 }  // namespace winject
