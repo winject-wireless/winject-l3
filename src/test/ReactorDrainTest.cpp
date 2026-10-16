@@ -171,7 +171,7 @@ TEST(ReactorDrainTest, WifiUdpDrainDoesNotBlock)
     dplane.sin_port = htons(fwd_port);
 
     int rx_calls = 0;
-    const auto on_rx = [&](bfcext::shared_sized_buffer)
+    const auto on_rx = [&](bfc::shared_sized_buffer)
     {
         ++rx_calls;
     };

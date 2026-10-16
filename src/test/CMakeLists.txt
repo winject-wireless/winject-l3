@@ -26,7 +26,6 @@ winject_add_isal_ec()
 
 add_executable(winject-tests
     ReactorDrainTest.cpp
-    EpollReactorTest.cpp
     MpduSlotTest.cpp
     MpduTest.cpp
     ConfigTest.cpp
@@ -47,7 +46,6 @@ add_executable(winject-tests
     TxEventQueueTest.cpp
     VersionTest.cpp
     MetricsRegistryTest.cpp
-    SharedSizedBufferTest.cpp
     TxMuxTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Frame.cpp

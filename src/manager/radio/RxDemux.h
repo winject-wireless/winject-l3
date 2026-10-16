@@ -4,7 +4,7 @@
 #include "radio/RadioUpstreamTable.h"
 
 #include <atomic>
-#include <bfcext/shared_sized_buffer.hpp>
+#include <bfc/shared_sized_buffer.hpp>
 #include <stdint.h>
 #include <vector>
 
@@ -20,7 +20,7 @@ public:
     uint64_t rx_drop_domain() const;
     uint64_t rx_drop_bus() const;
 
-    void on_mpdu(bfcext::shared_sized_buffer mpdu);
+    void on_mpdu(bfc::shared_sized_buffer mpdu);
 
 private:
     RadioUpstreamTable& table_;

@@ -31,7 +31,7 @@ public:
     // Parallel to txq: whether each SDU is an FEC shard. Missing means raw.
     std::deque<bool> txq_fec;
 
-    void on_radio_rx(bfcext::shared_sized_buffer /*pkt*/,
+    void on_radio_rx(bfc::shared_sized_buffer /*pkt*/,
                      bool /*is_fec*/) override
     {
     }
@@ -92,7 +92,7 @@ public:
                     &len);
 
         radio_ = std::make_shared<WifiUdp>();
-        EXPECT_TRUE(radio_->open(reactor_, [](bfcext::shared_sized_buffer) {}));
+        EXPECT_TRUE(radio_->open(reactor_, [](bfc::shared_sized_buffer) {}));
         radio_->set_tx_dplane(bind_addr);
 
         up_ = std::make_shared<QueueUpstream>();

@@ -29,7 +29,7 @@ public:
               std::function<void()> tx_wake = nullptr);
     void close();
 
-    void on_radio_rx(bfcext::shared_sized_buffer pkt, bool is_fec) override;
+    void on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec) override;
     bool has_tx() override;
     size_t get_tx_size() override;
 

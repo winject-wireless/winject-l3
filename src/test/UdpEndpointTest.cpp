@@ -104,9 +104,9 @@ private:
     uint16_t port_ = 0;
 };
 
-bfcext::shared_sized_buffer air(const std::vector<uint8_t>& bytes)
+bfc::shared_sized_buffer air(const std::vector<uint8_t>& bytes)
 {
-    return bfcext::shared_sized_buffer::copy_from(bytes.data(), bytes.size());
+    return bfc::shared_sized_buffer::copy_from(bytes.data(), bytes.size());
 }
 
 }  // namespace

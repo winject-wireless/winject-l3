@@ -106,7 +106,7 @@ TEST(WifiUdpTest, SignalModeAcceptsZeroTrailer)
 
     int rx_calls = 0;
     ASSERT_TRUE(wifi.open(reactor,
-                          [&](bfcext::shared_sized_buffer)
+                          [&](bfc::shared_sized_buffer)
                           {
                               ++rx_calls;
                           }));
@@ -152,7 +152,7 @@ TEST(WifiUdpTest, SignalModeRejectsNonZeroTrailer)
 
     int rx_calls = 0;
     ASSERT_TRUE(wifi.open(reactor,
-                          [&](bfcext::shared_sized_buffer)
+                          [&](bfc::shared_sized_buffer)
                           {
                               ++rx_calls;
                           }));

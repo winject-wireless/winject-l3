@@ -276,7 +276,7 @@ void UdpEndpoint::send_app(const uint8_t* data, size_t len)
     sock.send(view, 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
 }
 
-void UdpEndpoint::on_radio_rx(bfcext::shared_sized_buffer pkt, bool is_fec)
+void UdpEndpoint::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
 {
     if (pkt.empty())
     {

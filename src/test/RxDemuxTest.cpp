@@ -5,7 +5,7 @@
 #include "radio/RadioUpstreamTable.h"
 #include "radio/RxDemux.h"
 
-#include <bfcext/shared_sized_buffer.hpp>
+#include <bfc/shared_sized_buffer.hpp>
 #include <gtest/gtest.h>
 #include <string.h>
 
@@ -24,7 +24,7 @@ public:
     size_t last_payload_len = 0;
     bool last_is_fec = false;
 
-    void on_radio_rx(bfcext::shared_sized_buffer pkt, bool is_fec) override
+    void on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec) override
     {
         ++rx_count;
         last_payload_len = pkt.size();
@@ -59,7 +59,7 @@ bool assign_tx_sequence(Mpdu& mpdu)
     return true;
 }
 
-bfcext::shared_sized_buffer make_slot_mpdu(uint16_t domain, uint8_t bus,
+bfc::shared_sized_buffer make_slot_mpdu(uint16_t domain, uint8_t bus,
                                            const uint8_t* payload, size_t plen,
                                            bool is_fec = false,
                                            uint16_t seq = 0)
@@ -71,7 +71,7 @@ bfcext::shared_sized_buffer make_slot_mpdu(uint16_t domain, uint8_t bus,
     tx.set_slot_payload(0, static_cast<uint16_t>(slot_len));
     if (!tx.rescan())
     {
-        return bfcext::shared_sized_buffer();
+        return bfc::shared_sized_buffer();
     }
     uint8_t* slot = reinterpret_cast<uint8_t*>(tx.get_slot_payload(0).data());
     LCHeader::write(slot, bus, seq, is_fec);
@@ -81,10 +81,10 @@ bfcext::shared_sized_buffer make_slot_mpdu(uint16_t domain, uint8_t bus,
     }
     if (!assign_tx_sequence(tx))
     {
-        return bfcext::shared_sized_buffer();
+        return bfc::shared_sized_buffer();
     }
     tx.set_domain(domain);
-    return bfcext::shared_sized_buffer::copy_from(buf, total);
+    return bfc::shared_sized_buffer::copy_from(buf, total);
 }
 }  // namespace
 

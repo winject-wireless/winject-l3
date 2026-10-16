@@ -28,12 +28,12 @@ uint64_t RxDemux::rx_drop_bus() const
     return rx_drop_bus_.load(std::memory_order_relaxed);
 }
 
-void RxDemux::on_mpdu(bfcext::shared_sized_buffer mpdu_owned)
+void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
 {
     struct Delivery
     {
         std::shared_ptr<Upstream> up;
-        bfcext::shared_sized_buffer view;
+        bfc::shared_sized_buffer view;
         bool is_fec = false;
     };
     std::array<Delivery, WIFI_PDU_SLOTS * 8> pending{};

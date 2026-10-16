@@ -64,7 +64,7 @@ bool App::setup_radio()
     radio = std::make_shared<WifiUdp>();
     if (!radio->open(
             reactor,
-            [this](bfcext::shared_sized_buffer mpdu)
+            [this](bfc::shared_sized_buffer mpdu)
             {
                 rx_demux_.on_mpdu(std::move(mpdu));
             },
