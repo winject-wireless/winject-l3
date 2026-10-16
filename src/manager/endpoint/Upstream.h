@@ -3,8 +3,8 @@
 
 #include "endpoint/UpstreamStats.h"
 
-#include <bfc/sized_buffer.hpp>
 #include <bfc/shared_sized_buffer.hpp>
+#include <bfc/sized_buffer.hpp>
 #include <stddef.h>
 #include <stdint.h>
 
