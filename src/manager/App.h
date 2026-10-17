@@ -13,6 +13,7 @@
 #include "radio/WifiUdp.h"
 #include "utils/IOReactor.h"
 #include "utils/MetricsRegistry.h"
+#include "utils/OneShotTimer.h"
 #include "utils/Version.h"
 
 #include <atomic>
@@ -44,9 +45,11 @@ private:
     void begin_console();
     void drop_console();
     void on_console();
-    void reconnect_tick();
-    void arm_tick();
-    void stats_tick();
+    void schedule_reconnect(std::chrono::milliseconds after);
+    void on_console_request_deadline(
+        std::chrono::steady_clock::time_point deadline);
+    void arm_console_deadline();
+    void arm_stats();
     void flush_shutdown();
     void refresh_host_metrics();
 
@@ -90,14 +93,7 @@ private:
     void on_radio_version(bool known, const WinjectVersion& v);
     void log_proto_mismatch_once(const WinjectVersion& radio_ver);
 
-#if defined(ESP_PLATFORM)
-    // poll_reactor waits in whole milliseconds; a shorter tick busy-spins.
-    static constexpr uint32_t k_tick_us = 1000;
-#else
-    static constexpr uint32_t k_tick_us = 250;
-#endif
-    // Console retry every second.
-    static constexpr int k_reconnect_ticks = 1000000 / k_tick_us;
+    static constexpr std::chrono::milliseconds k_reconnect_interval{1000};
 
     Config cfg;
     IOReactor reactor;
@@ -109,9 +105,13 @@ private:
     RxDemux rx_demux_{radio_upstream_table_};
     std::shared_ptr<WifiUdp> radio;
     std::vector<std::shared_ptr<UdpEndpoint>> upstreams;
-    int reconnect_ticks = 0;
-    // Set by stop(); the tick re-stops the reactor if stop() came before
-    // reactor.run() set it running.
+    OneShotTimer reconnect_timer_;
+    // Runs ConsoleClient::poll_deadlines() at the earliest request deadline.
+    OneShotTimer console_deadline_timer_;
+    std::chrono::steady_clock::time_point console_deadline_at_{};
+    OneShotTimer stats_timer_;
+    // Set by stop(); checked once the reactor runs, in case stop() came
+    // before reactor.run() set it running.
     std::atomic<bool> stop_requested_{false};
     bool console_ok = false;
     bool radio_version_known_ = false;

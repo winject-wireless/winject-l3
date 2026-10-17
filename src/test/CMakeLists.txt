@@ -47,6 +47,7 @@ add_executable(winject-tests
     VersionTest.cpp
     MetricsRegistryTest.cpp
     TxMuxTest.cpp
+    OneShotTimerTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Frame.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Mpdu.cpp

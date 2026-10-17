@@ -13,6 +13,7 @@
 #include <deque>
 #include <gtest/gtest.h>
 #include <memory>
+#include <mutex>
 #include <netinet/in.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -79,7 +80,7 @@ std::vector<uint8_t> make_sdu(size_t len, uint8_t tag)
 class TxMuxHarness
 {
 public:
-    explicit TxMuxHarness(size_t budget)
+    explicit TxMuxHarness(size_t budget, const char* modulation = "OFDM_54M")
         : radio_sock_(bfc::create_udp4()), mux_(table_)
     {
         sockaddr_in bind_addr = {};
@@ -97,10 +98,10 @@ public:
 
         up_ = std::make_shared<QueueUpstream>();
         table_.add(up_, radio_, k_bus, k_bus, budget);
-        mux_.configure(1, 32);
+        mux_.configure(1);
         PhyMode mode;
-        EXPECT_TRUE(phy_mode_from_name("OFDM_54M", 1, &mode));
-        mux_.set_phy_mode(mode, 0, 0);
+        EXPECT_TRUE(phy_mode_from_name(modulation, 1, &mode));
+        mux_.set_phy_mode(mode);
     }
 
     ~TxMuxHarness()
@@ -111,6 +112,44 @@ public:
     QueueUpstream& up()
     {
         return *up_;
+    }
+
+    TxMux& mux()
+    {
+        return mux_;
+    }
+
+    RadioUpstreamTable& table()
+    {
+        return table_;
+    }
+
+    // Collects until `count` SDUs arrived or `timeout` passed, without
+    // ticking (the TX thread, if started, does that).
+    size_t wait_received(size_t count, std::chrono::milliseconds timeout)
+    {
+        const auto end = std::chrono::steady_clock::now() + timeout;
+        while (received_.size() < count &&
+               std::chrono::steady_clock::now() < end)
+        {
+            collect();
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        return received_.size();
+    }
+
+    // Ticks every 100 us for `window`; returns the SDUs received.
+    size_t run_for(std::chrono::microseconds window)
+    {
+        const auto end = std::chrono::steady_clock::now() + window;
+        while (std::chrono::steady_clock::now() < end)
+        {
+            mux_.sync_tick();
+            collect();
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+        collect();
+        return received_.size();
     }
 
     // Ticks until the upstream queue is empty (or a deadline passes), then
@@ -257,4 +296,85 @@ TEST(TxMuxTest, StampsFecFlagPerSdu)
         EXPECT_EQ(seq[i], static_cast<uint16_t>((seq[i - 1] + 1) &
                                                 LCHeader::k_seq_mask));
     }
+}
+
+// Full frame at OFDM 24M: 530 us airtime + 96 us gap, at 90 % = 696 us.
+TEST(TxMuxTest, PacingIntervalIsAirtimePlusGapOverNinetyPercent)
+{
+    TxMuxHarness h(4096, "OFDM_24M");
+    EXPECT_EQ(h.mux().pacing_txtime_full_us(), 530u);
+    EXPECT_EQ(h.mux().pacing_gap_us(), 96u);
+    EXPECT_EQ(h.mux().pacing_interval_full_us(), 696u);
+}
+
+// Each MPDU is spaced by its whole on-air size (802.11 header + slots + FCS),
+// so a backlog drains at the paced rate, not faster.
+TEST(TxMuxTest, BacklogDrainsAtPacedRate)
+{
+    const auto start = std::chrono::steady_clock::now();
+    TxMuxHarness h(4096, "OFDM_24M");
+    constexpr size_t k_sdu = 1400;
+    for (int i = 0; i < 200; i++)
+    {
+        h.up().txq.push_back(make_sdu(k_sdu, static_cast<uint8_t>(i)));
+    }
+    PhyMode mode;
+    ASSERT_TRUE(phy_mode_from_name("OFDM_24M", 1, &mode));
+    const size_t mpdu_len = WIFI_HDR_LEN + LCHeader::k_len + k_sdu;
+    const uint32_t iv_us =
+        ((phy_txtime_us(mode, mpdu_len + 4) + 96) * 100 + 89) / 90;
+
+    const size_t sent = h.run_for(std::chrono::milliseconds(60));
+    const auto elapsed_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count();
+    const size_t expected = static_cast<size_t>(elapsed_us / iv_us) + 1;
+    // Never faster than paced. A slow test loop (e.g. under TSAN) can lose
+    // slots beyond the two-interval catch-up, so the lower bound is loose.
+    EXPECT_LE(sent, expected + 1) << "iv_us=" << iv_us;
+    EXPECT_GE(sent * 4, expected * 3) << "iv_us=" << iv_us;
+}
+
+// Data queued without a wake is still sent: the TX thread sleeps at most
+// k_tx_max_sleep.
+TEST(TxMuxTest, ThreadSendsUnwokenDataWithinMaxSleep)
+{
+    TxMuxHarness h(4096, "OFDM_24M");
+    h.mux().start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    {
+        std::lock_guard<std::mutex> lock(h.table().mutex());
+        h.up().txq.push_back(make_sdu(100, 1));
+    }
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_EQ(h.wait_received(1, std::chrono::milliseconds(100)), 1u);
+    const auto waited = std::chrono::steady_clock::now() - start;
+    EXPECT_LT(waited, k_tx_max_sleep + std::chrono::milliseconds(5));
+    h.mux().stop();
+}
+
+// A scheduler budget below the SDU size (default 256) weights upstreams; it
+// must not cap the rate. One 1400 B SDU spends the share, and the next round
+// refills it while pacing is open, instead of the TX thread sleeping 5 ms.
+TEST(TxMuxTest, SmallBudgetDoesNotCapRate)
+{
+    TxMuxHarness h(256, "OFDM_24M");
+    constexpr size_t k_frames = 40;
+    {
+        std::lock_guard<std::mutex> lock(h.table().mutex());
+        for (size_t i = 0; i < k_frames; i++)
+        {
+            h.up().txq.push_back(make_sdu(1400, static_cast<uint8_t>(i)));
+        }
+    }
+    // Start behind schedule, as after any stall: pacing credit is open.
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    h.mux().start();
+    h.mux().request_tick();
+    // ~669 us per frame: ~27 ms paced; 40 x 5 ms = 200 ms if the share capped
+    // each wake to one frame.
+    EXPECT_EQ(h.wait_received(k_frames, std::chrono::milliseconds(80)),
+              k_frames);
+    h.mux().stop();
 }

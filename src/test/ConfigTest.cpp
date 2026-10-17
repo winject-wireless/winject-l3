@@ -35,7 +35,6 @@ winject.channel       = 1
 winject.modulation    = OFDM_24M
 winject.power         = 20
 winject.domain        = 1234
-winject.max_rate_kbps = 10000
 upstream.size = 1
 upstream-0.mode             = UDP_STATIC_FORWARDING
 upstream-0.tx_bus           = b2
@@ -92,30 +91,9 @@ upstream-0.tx               = 127.0.0.1:21082
     std::remove(path.c_str());
 }
 
-TEST(ConfigTest, DefaultMaxRateWhenOmitted)
+TEST(ConfigTest, PhyRateKbps)
 {
     EXPECT_EQ(Config::phy_rate_kbps("OFDM_24M"), 24000u);
-    const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
-winject.domain        = 1234
-upstream.size = 1
-upstream-0.mode             = UDP_STATIC_FORWARDING
-upstream-0.tx_bus           = b2
-upstream-0.rx_bus           = a1
-upstream-0.scheduler_budget = 100
-upstream-0.rx               = 0.0.0.0:22081
-upstream-0.tx               = 127.0.0.1:21082
-)");
-    Config cfg;
-    std::string err;
-    ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_EQ(cfg.max_rate_kbps, 0u);
-    EXPECT_FALSE(cfg.max_rate_kbps_explicit);
-    std::remove(path.c_str());
 }
 
 TEST(ConfigTest, RejectsMixedEndpointKeys)
@@ -151,7 +129,6 @@ winject.channel       = 1
 winject.modulation    = OFDM_24M
 winject.power         = 20
 winject.domain        = 1234
-winject.max_rate_kbps = 10000
 upstream.size = 1
 upstream-0.mode             = UDP_CLIENT_FORWARDING
 upstream-0.tx_bus           = b2
@@ -182,7 +159,9 @@ upstream.size = 0
     std::remove(path.c_str());
 }
 
-TEST(ConfigTest, RejectsInvalidMaxDataPerTick)
+// TX pacing follows the modulation; the old pacing keys only log a warning,
+// so existing configs still load.
+TEST(ConfigTest, IgnoresRemovedPacingKeys)
 {
     const std::string path = write_conf(R"(
 winject.device        = 192.168.32.1
@@ -191,12 +170,22 @@ winject.channel       = 1
 winject.modulation    = OFDM_24M
 winject.power         = 20
 winject.domain        = 1234
+winject.max_rate_kbps = 10000
+winject.tx_gap_us     = 99999
 winject.max_data_per_tick = 99
-upstream.size = 0
+winject.tx_burst_size = 0
+winject.tx_burst_interval_us = 5
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
 )");
     Config cfg;
     std::string err;
-    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_TRUE(cfg.load(path, &err)) << err;
     std::remove(path.c_str());
 }
 

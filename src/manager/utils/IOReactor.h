@@ -19,6 +19,7 @@ using IOReactor = bfc::poll_reactor<std::function<void()>>;
 #else
 using IOReactor = bfc::epoll_reactor<std::function<void()>>;
 #endif
+using IOTimerId = bfc::timer<std::function<void()>>::timer_id_t;
 
 }  // namespace winject
 

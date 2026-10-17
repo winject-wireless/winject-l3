@@ -71,13 +71,6 @@ struct UpstreamConfig
     int fec_timeout_ms = 20;
 };
 
-// Matches firmware WIFI_RADIO_TX_QUEUE (manager has no shared header).
-static constexpr size_t k_radio_tx_queue_depth = 20;
-// Burst gate: optional micro-batch cap per scheduler pass. interval_us=0
-// disables the post-burst cooldown (token bucket + max_data_per_tick remain).
-static constexpr size_t k_default_tx_burst_size = k_radio_tx_queue_depth;
-static constexpr uint32_t k_default_tx_burst_interval_us = 0;
-
 // One radio the manager drives (docs/mplane.md § radio_device). Each address
 // starts unset; once set it can change but not be cleared.
 struct RadioDeviceConfig
@@ -102,18 +95,6 @@ struct Config
     uint16_t domain = 0;
     // Radio config slot for save/load (0 = scratch pad until config slot=).
     uint8_t config_slot = 0;
-    // Optional cap on top of PHY airtime pacing (0 = no cap unless explicit).
-    uint32_t max_rate_kbps = 0;
-    // Set when winject.max_rate_kbps is present in config.
-    bool max_rate_kbps_explicit = false;
-    // Inter-frame gap override (µs); 0 = auto from modulation/band.
-    uint32_t tx_gap_us = 0;
-    // Max DATA MPDUs emitted per 250 us scheduler tick (1–32).
-    size_t max_data_per_tick = 4;
-    // DATA MPDUs per inject burst (~half radio tx queue); gap before next
-    // burst.
-    size_t tx_burst_size = k_default_tx_burst_size;
-    uint32_t tx_burst_interval_us = k_default_tx_burst_interval_us;
     // Local UDP management console. Empty = disabled.
     // console_in = bind address for m-plane commands; replies go to the sender.
     std::string manager_console_in;

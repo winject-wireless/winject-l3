@@ -2,8 +2,11 @@
 #define WINJECT_MANAGER_RADIO_RADIO_MANAGER_H_
 
 #include "console/ManagerConsoleTypes.h"
+#include "utils/IOReactor.h"
+#include "utils/OneShotTimer.h"
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <string>
 
@@ -26,17 +29,19 @@ public:
     using DropConsoleFn = std::function<void()>;
     using ReconcileFilterFn = std::function<void(std::function<void(bool ok)>)>;
 
-    void bind(Config* cfg, TxMux* tx_mux, WifiUdp* wifi);
+    void bind(Config* cfg, TxMux* tx_mux, WifiUdp* wifi, IOReactor* reactor);
     void set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reapply,
                          PingFn ping, DropConsoleFn drop_console);
     void set_reconcile_filter(ReconcileFilterFn reconcile);
 
     void configure_tx_mux();
-    void sync_pacing_for_modulation(const std::string& modulation,
-                                    bool runtime_change);
+    void sync_pacing_for_modulation(const std::string& modulation);
     void on_phy_programmed();
-    void periodic_tick(bool console_ok);
-    void heartbeat_tick(bool console_ok);
+    // Console up: start the heartbeat, forward re-registration and PHY/filter
+    // checks on the reactor timer. Console down: cancel them; replies still
+    // in flight are ignored.
+    void on_console_up();
+    void on_console_down();
 
     const ManagerRadioView& actual_phy() const
     {
@@ -47,9 +52,12 @@ public:
         actual_ = view;
     }
 
-    static constexpr int k_radio_info_interval_ticks = 20000;
-
 private:
+    void on_ping_due();
+    void on_pong_timeout();
+    void on_register_due();
+    void on_info_due();
+
     Config* cfg_ = nullptr;
     TxMux* tx_mux_ = nullptr;
     WifiUdp* wifi_ = nullptr;
@@ -59,14 +67,20 @@ private:
     DropConsoleFn drop_console_;
     ReconcileFilterFn reconcile_filter_;
     ManagerRadioView actual_{};
-    int info_ticks_ = 0;
-    int heartbeat_ticks_ = 0;
-    int register_ticks_ = 0;
-    bool ping_outstanding_ = false;
-    // Forward-peer re-registration (~1 s); every tick floods the radio.
-    static constexpr int k_register_interval_ticks = 4000;
-    static constexpr int k_ping_interval_ticks = 1000;
-    static constexpr int k_pong_timeout_ticks = 2000;
+    // Bumped on console up and down; a reply from an older console session
+    // does nothing.
+    uint32_t gen_ = 0;
+    OneShotTimer ping_timer_;
+    OneShotTimer pong_timer_;
+    OneShotTimer register_timer_;
+    OneShotTimer info_timer_;
+    // Next ping this long after the previous pong.
+    static constexpr std::chrono::milliseconds k_ping_interval{250};
+    static constexpr std::chrono::milliseconds k_pong_timeout{500};
+    // Forward-peer re-registration keeps the radio forwarding to this host.
+    static constexpr std::chrono::milliseconds k_register_interval{1000};
+    // radio_info PHY drift check and rx_filter reconcile.
+    static constexpr std::chrono::milliseconds k_radio_info_interval{5000};
 };
 
 }  // namespace winject

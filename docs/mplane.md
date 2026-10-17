@@ -134,7 +134,7 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `radio_proto_ok` | `1` when the connected radio's protocol `X.Y` matches the manager; `0` while unknown or mismatched |
 | `radio_version` | Radio `vX.Y.Z` from `version`, or `-` while unknown |
 | `tx_send_fail_mpdu`, `tx_send_fail_byt` | MPDUs the manager could not send to the radio (for example over 1472 bytes, or a socket error) |
-| `tx_pacing_txtime_us`, `tx_pacing_gap_us` | TX pacing in use: modelled airtime of a full frame, and the gap between frames |
+| `tx_pacing_txtime_us`, `tx_pacing_gap_us`, `tx_pacing_interval_us` | TX pacing in use for a full frame: modelled airtime, inter-frame gap, and the resulting spacing ((airtime + gap) / 90 %) |
 | `rx_drop_domain` | Forwarded frames that are not winject frames of this domain |
 | `rx_drop_bus` | Slots whose LC bus matches no upstream `rx_bus` |
 | `upstream_<id>_air_rx_gap_loss` | Air RX sequence gaps on upstream `<id>` |
@@ -165,12 +165,9 @@ Run the manager with `winject-manager <config file>`. The file holds `key = valu
 | `winject.domain` | required | 16-bit hex domain, non-zero; carried in Address 3 (see [winject.md](winject.md)) |
 | `winject.skip_console` | `0` | `1`: do not set `radio_device mplane` from the config |
 | `winject.radio_fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
-| `winject.max_rate_kbps` | `0` | Cap on the TX rate on top of airtime pacing; `0` = no cap |
-| `winject.tx_gap_us` | `0` | Gap between frames in µs; `0` = derived from the modulation |
-| `winject.max_data_per_tick` | `4` | Data MPDUs per 250 µs scheduler tick (1–32) |
-| `winject.tx_burst_size` | `20` | MPDUs per burst (the radio's inject queue holds 20) |
-| `winject.tx_burst_interval_us` | `0` | Pause after a burst; `0` = no pause |
 | `winject.stats_sec` | `0` | Log stream stats every N seconds; `0` = off. Overridden by the `WINJECT_STATS_SEC` environment variable |
+
+TX pacing is not configurable: it follows `winject.modulation` at 90 % of its airtime (see [winject.md](winject.md)). The old keys `winject.max_rate_kbps`, `tx_gap_us`, `max_data_per_tick`, `tx_burst_size` and `tx_burst_interval_us` are ignored with a warning.
 
 ### Manager console (`manager.*`)
 

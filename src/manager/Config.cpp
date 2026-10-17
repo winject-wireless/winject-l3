@@ -182,25 +182,16 @@ bool Config::load(const std::string& path, std::string* error)
         return false;
     }
 
-    auto rate = parser.as<unsigned>("winject.max_rate_kbps");
-    if (rate && *rate > 0)
+    // TX pacing is fixed by the modulation (see TxMux).
+    for (const char* key :
+         {"winject.max_rate_kbps", "winject.tx_gap_us",
+          "winject.max_data_per_tick", "winject.tx_burst_size",
+          "winject.tx_burst_interval_us"})
     {
-        max_rate_kbps = *rate;
-        max_rate_kbps_explicit = true;
-    }
-    else
-    {
-        max_rate_kbps = 0;
-        max_rate_kbps_explicit = false;
-    }
-    if (auto gap = parser.as<unsigned>("winject.tx_gap_us"))
-    {
-        if (*gap > 10000u)
+        if (parser.arg(key).has_value())
         {
-            *error = "invalid winject.tx_gap_us";
-            return false;
+            LOG_WRN("%s is ignored; TX pacing follows the modulation", key);
         }
-        tx_gap_us = static_cast<uint32_t>(*gap);
     }
     if (parser.arg("winject.local_ip").has_value())
     {
@@ -248,33 +239,6 @@ bool Config::load(const std::string& path, std::string* error)
             *error = "invalid winject.radio_fcs";
             return false;
         }
-    }
-    if (auto mpt = parser.as<unsigned>("winject.max_data_per_tick"))
-    {
-        if (*mpt < 1 || *mpt > 32)
-        {
-            *error = "invalid winject.max_data_per_tick";
-            return false;
-        }
-        max_data_per_tick = *mpt;
-    }
-    if (auto bs = parser.as<unsigned>("winject.tx_burst_size"))
-    {
-        if (*bs < 1 || *bs > k_radio_tx_queue_depth)
-        {
-            *error = "invalid winject.tx_burst_size";
-            return false;
-        }
-        tx_burst_size = *bs;
-    }
-    if (auto bi = parser.as<unsigned>("winject.tx_burst_interval_us"))
-    {
-        if (*bi > 1000000u)
-        {
-            *error = "invalid winject.tx_burst_interval_us";
-            return false;
-        }
-        tx_burst_interval_us = static_cast<uint32_t>(*bi);
     }
     manager_console_in = parser.arg("manager.console_in").value_or("");
     if (!manager_console_in.empty())

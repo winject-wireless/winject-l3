@@ -135,9 +135,9 @@ Measured throughput on the bench (two RTL8812AU, channel 13, 1400-byte payload, 
 | `OFDM_MCS7_SGI` | 28.7 | 29.5 |
 | `OFDM_MCS7_SGI`, 40 Mbit/s offered | 36.7 | |
 
-The radios dropped no frames themselves on these runs, and the 4–10 % loss was all on air. The ESP32 bench configs cap the manager at `winject.max_rate_kbps = 20000`; the Realtek ones use 80000, so they can run faster modulations than `OFDM_24M`. `OFDM_24M` itself tops out near 18 Mbit/s of payload.
+The radios dropped no frames themselves on these runs, and the 4–10 % loss was all on air. These runs capped the manager with `winject.max_rate_kbps` (20000 on the ESP32 bench, 80000 on the Realtek one); that key has since been removed, and TX pacing is now fixed at 90 % of the modulation's airtime. `OFDM_24M` itself tops out near 18 Mbit/s of payload.
 
-`configuration/winject-tests/realtek/` holds the Realtek bench scenario. `bw_a.cfg` / `bw_b.cfg` are the manager configs, with the ports and FCS setting above and `max_rate_kbps = 80000`. `radio_a.cfg` / `radio_b.cfg` are the radio configs, one per dongle, selected by interface name. Run it with `manager_iperf_bw_test.sh --scenario realtek` (see below). `manager_bw_test.sh` and `manager_lat_test.sh` only cover the ESP32 scenario for now.
+`configuration/winject-tests/realtek/` holds the Realtek bench scenario. `bw_a.cfg` / `bw_b.cfg` are the manager configs, with the ports and FCS setting above. `radio_a.cfg` / `radio_b.cfg` are the radio configs, one per dongle, selected by interface name. Run it with `manager_iperf_bw_test.sh --scenario realtek` (see below). `manager_bw_test.sh` and `manager_lat_test.sh` only cover the ESP32 scenario for now.
 
 ## Bandwidth test (two radios)
 

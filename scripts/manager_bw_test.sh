@@ -41,9 +41,6 @@ CFG_CCA=""
 MODULATION_SET=0
 CHANNEL_SET=0
 ALL_MODULATIONS=0
-MGR_MAX_DATA_PER_TICK=""
-MGR_MAX_RATE_KBPS=""
-BENCH_PROFILE=""
 if [[ "${1:-}" == "--" ]]; then
   shift
 fi
@@ -163,30 +160,6 @@ while [[ $# -gt 0 ]]; do
       CFG_POWER="${1#--power=}"
       shift
       ;;
-    --max-data-per-tick)
-      MGR_MAX_DATA_PER_TICK="${2:?--max-data-per-tick needs a value}"
-      shift 2
-      ;;
-    --max-data-per-tick=*)
-      MGR_MAX_DATA_PER_TICK="${1#--max-data-per-tick=}"
-      shift
-      ;;
-    --max-rate-kbps)
-      MGR_MAX_RATE_KBPS="${2:?--max-rate-kbps needs a value}"
-      shift 2
-      ;;
-    --max-rate-kbps=*)
-      MGR_MAX_RATE_KBPS="${1#--max-rate-kbps=}"
-      shift
-      ;;
-    --profile)
-      BENCH_PROFILE="${2:?--profile needs a value}"
-      shift 2
-      ;;
-    --profile=*)
-      BENCH_PROFILE="${1#--profile=}"
-      shift
-      ;;
     *)
       BW_ARGS+=("$1")
       shift
@@ -257,36 +230,6 @@ CONF_A_RUN="$LOG_DIR/winject_a.conf"
 CONF_B_RUN="$LOG_DIR/winject_b.conf"
 patch_conf "$CONF_A" "$RADIO_A" 2400 >"$CONF_A_RUN"
 patch_conf "$CONF_B" "$RADIO_B" 2410 >"$CONF_B_RUN"
-# 10 Mbps profile sweep: manager tick cap 4 on A side (default in tree).
-if [[ "$BENCH_PROFILE" == "10mbps" && -z "$MGR_MAX_DATA_PER_TICK" ]]; then
-  if grep -q '^winject\.max_data_per_tick' "$CONF_A_RUN"; then
-    sed -i 's/^winject\.max_data_per_tick.*/winject.max_data_per_tick = 4/' "$CONF_A_RUN"
-  else
-    printf 'winject.max_data_per_tick = 4\n' >>"$CONF_A_RUN"
-  fi
-fi
-if [[ "$BENCH_PROFILE" == "15mbps" ]]; then
-  if [[ -z "$MGR_MAX_RATE_KBPS" ]]; then
-    sed -i 's/^winject\.max_rate_kbps.*/winject.max_rate_kbps = 15000/' "$CONF_A_RUN"
-  fi
-  if [[ -z "$MGR_MAX_DATA_PER_TICK" ]]; then
-    if grep -q '^winject\.max_data_per_tick' "$CONF_A_RUN"; then
-      sed -i 's/^winject\.max_data_per_tick.*/winject.max_data_per_tick = 4/' "$CONF_A_RUN"
-    else
-      printf 'winject.max_data_per_tick = 4\n' >>"$CONF_A_RUN"
-    fi
-  fi
-fi
-if [[ -n "$MGR_MAX_RATE_KBPS" ]]; then
-  sed -i "s/^winject\.max_rate_kbps.*/winject.max_rate_kbps = ${MGR_MAX_RATE_KBPS}/" "$CONF_A_RUN"
-fi
-if [[ -n "$MGR_MAX_DATA_PER_TICK" ]]; then
-  if grep -q '^winject\.max_data_per_tick' "$CONF_A_RUN"; then
-    sed -i "s/^winject\.max_data_per_tick.*/winject.max_data_per_tick = ${MGR_MAX_DATA_PER_TICK}/" "$CONF_A_RUN"
-  else
-    printf 'winject.max_data_per_tick = %s\n' "$MGR_MAX_DATA_PER_TICK" >>"$CONF_A_RUN"
-  fi
-fi
 
 cleanup() {
   if [[ -n "${PID_A:-}" ]]; then kill "$PID_A" 2>/dev/null || true

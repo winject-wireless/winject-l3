@@ -174,8 +174,11 @@ void UdpEndpoint::push_tx(bfc::sized_buffer pkt, bool is_fec)
 
 void UdpEndpoint::enqueue_air(bfc::sized_buffer pkt)
 {
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    push_tx(std::move(pkt), false);
+    queue_tx(
+        [&]()
+        {
+            push_tx(std::move(pkt), false);
+        });
 }
 
 void UdpEndpoint::on_app()
@@ -235,18 +238,14 @@ void UdpEndpoint::on_app()
         }
         if (fec.enabled())
         {
-            bool wake_tx = false;
-            {
-                std::lock_guard<std::mutex> lock(tx_mu_);
-                fec.push_app(reinterpret_cast<const uint8_t*>(rx_buf.data()),
-                             rx_buf.size(), nullptr);
-                sync_fec_timer_after_push();
-                wake_tx = fec.has_tx_shards();
-            }
-            if (wake_tx && tx_wake_)
-            {
-                tx_wake_();
-            }
+            queue_tx(
+                [&]()
+                {
+                    fec.push_app(
+                        reinterpret_cast<const uint8_t*>(rx_buf.data()),
+                        rx_buf.size(), nullptr);
+                    sync_fec_timer_after_push();
+                });
             continue;
         }
         if (static_cast<size_t>(n) > k_stream_payload_max)
@@ -338,17 +337,12 @@ void UdpEndpoint::cancel_fec_timer()
 void UdpEndpoint::on_fec_timer()
 {
     fec_timer_armed_ = false;
-    bool wake_tx = false;
-    {
-        std::lock_guard<std::mutex> lock(tx_mu_);
-        fec.flush_if_deadline();
-        sync_fec_timer_after_push();
-        wake_tx = fec.has_tx_shards();
-    }
-    if (wake_tx && tx_wake_)
-    {
-        tx_wake_();
-    }
+    queue_tx(
+        [&]()
+        {
+            fec.flush_if_deadline();
+            sync_fec_timer_after_push();
+        });
 }
 
 void UdpEndpoint::sync_fec_timer_after_push()
@@ -381,15 +375,18 @@ void UdpEndpoint::announce_down()
     {
         return;
     }
-    std::vector<std::vector<uint8_t>> encoded;
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    cancel_fec_timer();
-    fec.flush(&encoded);
-    fec.drain_tx_shards(&encoded);
-    for (auto& pkt : encoded)
-    {
-        push_tx(make_pkt(std::move(pkt)), true);
-    }
+    queue_tx(
+        [&]()
+        {
+            std::vector<std::vector<uint8_t>> encoded;
+            cancel_fec_timer();
+            fec.flush(&encoded);
+            fec.drain_tx_shards(&encoded);
+            for (auto& pkt : encoded)
+            {
+                push_tx(make_pkt(std::move(pkt)), true);
+            }
+        });
 }
 
 bool UdpEndpoint::set_fec(FecType type, int k, int n, std::string* error)
@@ -499,6 +496,11 @@ void UdpEndpoint::get_fec(FecType* type, int* k, int* n) const
 bool UdpEndpoint::has_tx()
 {
     std::lock_guard<std::mutex> lock(tx_mu_);
+    return has_tx_locked();
+}
+
+bool UdpEndpoint::has_tx_locked() const
+{
     if (!txq.empty())
     {
         return true;

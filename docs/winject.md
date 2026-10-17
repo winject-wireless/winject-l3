@@ -47,7 +47,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | `ConsoleService` | [`ConsoleService.*`](../src/manager/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender) |
 | `RadioManager` | [`RadioManager.*`](../src/manager/radio/RadioManager.cpp) | Keeps the radio in the configured state: PHY reconcile, filter reconcile, heartbeat, forward re-registration, TX pacing per modulation |
 | `WifiUdp` | [`WifiUdp.*`](../src/manager/radio/WifiUdp.cpp) | d-plane socket: MPDUs and 1-byte registration to `radio_device dplane`; checks the forward trailer per FCS mode |
-| `TxMux` | [`TxMux.*`](../src/manager/radio/TxMux.cpp) | TX scheduler: picks upstreams, builds MPDUs, paces them to the PHY airtime and `max_rate_kbps` |
+| `TxMux` | [`TxMux.*`](../src/manager/radio/TxMux.cpp) | TX scheduler: picks upstreams, builds MPDUs, paces them at 90 % of the modulation's airtime |
 | `RxDemux` | [`RxDemux.*`](../src/manager/radio/RxDemux.cpp) | RX: validates domain, splits slots, routes each slot by its LC bus to upstreams |
 | `RadioUpstreamTable` | [`RadioUpstreamTable.*`](../src/manager/radio/RadioUpstreamTable.cpp) | Shared upstream list (`bus_tx`, `bus_rx`, upstream pointer), guarded by one mutex |
 | `Upstream` / `UdpEndpoint` | [`endpoint/`](../src/manager/endpoint/UdpEndpoint.cpp) | One application flow: UDP socket in `UDP_SERVER_FORWARDING`, `UDP_CLIENT_FORWARDING` or static mode; TX queue; optional FEC |
@@ -61,7 +61,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | Thread | Runs |
 |---|---|
 | Reactor (main) | All sockets: application UDP, radio m-plane, d-plane forward, manager console. The full RX path (`WifiUdp` → `RxDemux` → `Upstream::on_radio_rx` → FEC decode → UDP send), application RX into upstream TX queues, timers and stats |
-| `TxMux` TX thread | Wakes every 250 µs (`k_tx_tick_interval_us`) or on request, builds MPDUs from upstream TX queues and sends them through `WifiUdp`, spacing frames by the modelled airtime (`PhyAirtime`) plus `tx_gap_us`, capped at `max_rate_kbps` |
+| `TxMux` TX thread | While data is queued, wakes at each pacing slot and takes the next frame. When idle it sleeps; an upstream whose queue goes from empty to non-empty wakes it, and it never sleeps longer than 5 ms (`k_tx_max_sleep`). Builds MPDUs from upstream TX queues and sends them through `WifiUdp`. Each frame is followed by (airtime of the whole frame, MPDU + FCS, from `PhyAirtime` + the modulation's inter-frame gap) / 90 %, so the link uses at most 90 % of the modulation's capacity. Up to two full-frame intervals lost to a late wakeup are made up |
 
 The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue (per-upstream mutex).
 
@@ -91,7 +91,7 @@ At startup, when `radio_device` has an `mplane` address (from config or `radio_d
 2. programs `radio_tx` (channel, power, modulation, and CCA when `winject.cca` is set) and `rx_filter_addr3` (domain);
 3. stores it with `save <slot>`.
 
-While running, `RadioManager` periodically re-reads the PHY and filter and corrects them, pings the radio, and re-registers on the d-plane port about once a second so the radio keeps forwarding to this manager. The first registration happens when the d-plane address is applied.
+While the m-plane is up, `RadioManager` runs these on reactor timers: it re-reads the PHY and filter every 5 s and corrects them, pings the radio 250 ms after each pong (no pong within 500 ms drops the m-plane, which is retried every second), and re-registers on the d-plane port every second so the radio keeps forwarding to this manager. The first registration happens when the d-plane address is applied.
 
 Without an `mplane` address, the manager never talks to the radio m-plane: set `radio_device fcs` explicitly (`SIGNAL` or `ACTUAL`) or use config `winject.radio_fcs`.
 
