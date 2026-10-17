@@ -184,6 +184,43 @@ TEST(ConsoleClientTest, DeadlineCompletesWithTimeout)
     close(srv);
 }
 
+TEST(ConsoleClientTest, ReportsRequestDeadlines)
+{
+    uint16_t port = 0;
+    const int srv = open_udp_server(&port);
+    ASSERT_GE(srv, 0);
+
+    ConsoleClient client;
+    std::string err;
+    ASSERT_TRUE(client_connect(client, port, &err));
+
+    std::vector<std::chrono::steady_clock::time_point> reported;
+    client.set_on_deadline(
+        [&](std::chrono::steady_clock::time_point deadline)
+        {
+            reported.push_back(deadline);
+        });
+    EXPECT_FALSE(client.next_deadline().has_value());
+
+    const auto before = std::chrono::steady_clock::now();
+    ASSERT_TRUE(client.request("ping", std::chrono::milliseconds(500),
+                               [](MplaneResult) {}));
+    ASSERT_TRUE(client.request("ping", std::chrono::milliseconds(5),
+                               [](MplaneResult) {}));
+    ASSERT_EQ(reported.size(), 2u);
+    EXPECT_GE(reported[0], before + std::chrono::milliseconds(500));
+    EXPECT_LT(reported[1], reported[0]);
+    ASSERT_TRUE(client.next_deadline().has_value());
+    EXPECT_EQ(*client.next_deadline(), reported[1]);
+
+    client.poll_deadlines(reported[1]);
+    ASSERT_TRUE(client.next_deadline().has_value());
+    EXPECT_EQ(*client.next_deadline(), reported[0]);
+    client.cancel_pending();
+    EXPECT_FALSE(client.next_deadline().has_value());
+    close(srv);
+}
+
 TEST(ConsoleClientTest, ApplyRadioQueriesCapsFirst)
 {
     uint16_t port = 0;

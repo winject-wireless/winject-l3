@@ -10,11 +10,16 @@
 namespace winject
 {
 
-void RadioManager::bind(Config* cfg, TxMux* tx_mux, WifiUdp* wifi)
+void RadioManager::bind(Config* cfg, TxMux* tx_mux, WifiUdp* wifi,
+                        IOReactor* reactor)
 {
     cfg_ = cfg;
     tx_mux_ = tx_mux;
     wifi_ = wifi;
+    ping_timer_.bind(reactor);
+    pong_timer_.bind(reactor);
+    register_timer_.bind(reactor);
+    info_timer_.bind(reactor);
 }
 
 void RadioManager::set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reapply,
@@ -86,19 +91,99 @@ void RadioManager::on_phy_programmed()
     sync_pacing_for_modulation(cfg_->modulation, false);
 }
 
-void RadioManager::periodic_tick(bool console_ok)
+void RadioManager::on_console_up()
 {
-    if (!console_ok || cfg_ == nullptr || !query_info_ || !reapply_)
+    on_console_down();
+    ping_timer_.arm(k_ping_interval,
+                    [this]()
+                    {
+                        on_ping_due();
+                    });
+    register_timer_.arm(k_register_interval,
+                        [this]()
+                        {
+                            on_register_due();
+                        });
+    info_timer_.arm(k_radio_info_interval,
+                    [this]()
+                    {
+                        on_info_due();
+                    });
+}
+
+void RadioManager::on_console_down()
+{
+    gen_++;
+    ping_timer_.cancel();
+    pong_timer_.cancel();
+    register_timer_.cancel();
+    info_timer_.cancel();
+}
+
+void RadioManager::on_ping_due()
+{
+    if (!ping_ || !drop_console_)
     {
-        info_ticks_ = 0;
         return;
     }
-    info_ticks_++;
-    if (info_ticks_ < k_radio_info_interval_ticks)
+    pong_timer_.arm(k_pong_timeout,
+                    [this]()
+                    {
+                        on_pong_timeout();
+                    });
+    const uint32_t gen = gen_;
+    ping_(
+        [this, gen](bool ok)
+        {
+            if (gen != gen_)
+            {
+                return;
+            }
+            pong_timer_.cancel();
+            if (!ok)
+            {
+                LOG_WRN("console ping failed");
+                drop_console_();
+                return;
+            }
+            ping_timer_.arm(k_ping_interval,
+                            [this]()
+                            {
+                                on_ping_due();
+                            });
+        });
+}
+
+void RadioManager::on_pong_timeout()
+{
+    LOG_WRN("console ping timeout");
+    drop_console_();
+}
+
+void RadioManager::on_register_due()
+{
+    if (wifi_ != nullptr)
+    {
+        wifi_->register_forward();
+    }
+    register_timer_.arm(k_register_interval,
+                        [this]()
+                        {
+                            on_register_due();
+                        });
+}
+
+void RadioManager::on_info_due()
+{
+    info_timer_.arm(k_radio_info_interval,
+                    [this]()
+                    {
+                        on_info_due();
+                    });
+    if (cfg_ == nullptr || !query_info_ || !reapply_)
     {
         return;
     }
-    info_ticks_ = 0;
 
     if (reconcile_filter_)
     {
@@ -141,54 +226,6 @@ void RadioManager::periodic_tick(bool console_ok)
                         LOG_ERR("radio reapply failed");
                     }
                 });
-        });
-}
-
-void RadioManager::heartbeat_tick(bool console_ok)
-{
-    if (!console_ok || !ping_ || !drop_console_)
-    {
-        heartbeat_ticks_ = 0;
-        register_ticks_ = 0;
-        ping_outstanding_ = false;
-        return;
-    }
-    if (wifi_ != nullptr && ++register_ticks_ >= k_register_interval_ticks)
-    {
-        register_ticks_ = 0;
-        wifi_->register_forward();
-    }
-    heartbeat_ticks_++;
-    if (ping_outstanding_)
-    {
-        if (heartbeat_ticks_ >= k_pong_timeout_ticks)
-        {
-            LOG_WRN("console ping timeout");
-            ping_outstanding_ = false;
-            heartbeat_ticks_ = 0;
-            drop_console_();
-        }
-        return;
-    }
-    if (heartbeat_ticks_ < k_ping_interval_ticks)
-    {
-        return;
-    }
-    heartbeat_ticks_ = 0;
-    ping_outstanding_ = true;
-    ping_(
-        [this](bool ok)
-        {
-            ping_outstanding_ = false;
-            heartbeat_ticks_ = 0;
-            if (!ok)
-            {
-                LOG_WRN("console ping failed");
-                if (drop_console_)
-                {
-                    drop_console_();
-                }
-            }
         });
 }
 

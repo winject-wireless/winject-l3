@@ -91,7 +91,7 @@ At startup, when `radio_device` has an `mplane` address (from config or `radio_d
 2. programs `radio_tx` (channel, power, modulation, and CCA when `winject.cca` is set) and `rx_filter_addr3` (domain);
 3. stores it with `save <slot>`.
 
-While running, `RadioManager` periodically re-reads the PHY and filter and corrects them, pings the radio, and re-registers on the d-plane port about once a second so the radio keeps forwarding to this manager. The first registration happens when the d-plane address is applied.
+While the m-plane is up, `RadioManager` runs these on reactor timers: it re-reads the PHY and filter every 5 s and corrects them, pings the radio 250 ms after each pong (no pong within 500 ms drops the m-plane, which is retried every second), and re-registers on the d-plane port every second so the radio keeps forwarding to this manager. The first registration happens when the d-plane address is applied.
 
 Without an `mplane` address, the manager never talks to the radio m-plane: set `radio_device fcs` explicitly (`SIGNAL` or `ACTUAL`) or use config `winject.radio_fcs`.
 

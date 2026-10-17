@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <netinet/in.h>
+#include <optional>
 #include <stdint.h>
 #include <string>
 #include <sys/socket.h>
@@ -58,6 +59,15 @@ public:
     // its id, so multi-line replies (radio_tx_info) arrive whole.
     void on_lines(const std::vector<std::string>& lines);
     void poll_deadlines(std::chrono::steady_clock::time_point now);
+    std::optional<std::chrono::steady_clock::time_point> next_deadline() const;
+    // Called with each new request's deadline, so the owner can arm a timer
+    // that runs poll_deadlines().
+    using DeadlineFn =
+        std::function<void(std::chrono::steady_clock::time_point deadline)>;
+    void set_on_deadline(DeadlineFn fn)
+    {
+        on_deadline_ = std::move(fn);
+    }
     void cancel_pending();
 
     void program(const Config& cfg, DoneFn done);
@@ -101,6 +111,7 @@ private:
     uint8_t next_req_id_ = 1;
     std::map<uint8_t, Pending> pending_reqs_;
     std::chrono::milliseconds default_timeout_{3000};
+    DeadlineFn on_deadline_;
 };
 
 }  // namespace winject

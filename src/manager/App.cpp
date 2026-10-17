@@ -125,7 +125,7 @@ bool App::setup_upstreams()
     {
         return false;
     }
-    radio_manager_.bind(&cfg, &tx_mux_, radio.get());
+    radio_manager_.bind(&cfg, &tx_mux_, radio.get(), &reactor);
     radio_manager_.configure_tx_mux();
     rx_demux_.set_domain(cfg.domain);
     for (const auto& uc : cfg.upstreams)
@@ -873,7 +873,10 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
         radio_version_known_ = false;
         radio_proto_ok_ = false;
         apply_configured_fcs();
-        reconnect_ticks = k_reconnect_ticks;
+        if (cfg.radio_device.have_mplane)
+        {
+            schedule_reconnect(std::chrono::milliseconds(0));
+        }
     }
     else if (fcs_changed)
     {
@@ -1291,6 +1294,8 @@ bool App::hold_console()
         LOG_ERR("console epoll add failed");
         return false;
     }
+    reconnect_timer_.cancel();
+    radio_manager_.on_console_up();
     return true;
 }
 
@@ -1302,9 +1307,61 @@ void App::drop_console()
         reactor.rem_read_rdy(fd);
         reactor.rem_write_rdy(fd);
     }
+    radio_manager_.on_console_down();
     console.cancel_pending();
     console.close();
+    console_deadline_timer_.cancel();
     console_ok = false;
+    if (cfg.radio_device.have_mplane && !reconnect_timer_.armed())
+    {
+        schedule_reconnect(k_reconnect_interval);
+    }
+}
+
+void App::schedule_reconnect(std::chrono::milliseconds after)
+{
+    reconnect_timer_.arm(after,
+                         [this]()
+                         {
+                             if (!cfg.radio_device.have_mplane || console_ok)
+                             {
+                                 return;
+                             }
+                             LOG_INF("retrying console");
+                             begin_console();
+                         });
+}
+
+void App::on_console_request_deadline(
+    std::chrono::steady_clock::time_point deadline)
+{
+    if (console_deadline_timer_.armed() && console_deadline_at_ <= deadline)
+    {
+        return;
+    }
+    console_deadline_at_ = deadline;
+    const auto after = std::chrono::duration_cast<std::chrono::microseconds>(
+        deadline - std::chrono::steady_clock::now());
+    console_deadline_timer_.arm(
+        after,
+        [this]()
+        {
+            console.poll_deadlines(std::chrono::steady_clock::now());
+            arm_console_deadline();
+        });
+}
+
+// After deadlines were polled: arm for the earliest one still pending.
+void App::arm_console_deadline()
+{
+    if (console_deadline_timer_.armed())
+    {
+        return;
+    }
+    if (const auto next = console.next_deadline())
+    {
+        on_console_request_deadline(*next);
+    }
 }
 
 void App::begin_console()
@@ -1321,7 +1378,6 @@ void App::begin_console()
         drop_console();
         return;
     }
-    reconnect_ticks = 0;
     LOG_INF("console ready %s",
             console_format_ipv4_port(cfg.radio_device.mplane).c_str());
     if (!apply_console())
@@ -1365,67 +1421,25 @@ void App::on_console()
     console.on_lines(lines);
 }
 
-void App::reconnect_tick()
-{
-    if (!cfg.radio_device.have_mplane)
-    {
-        return;
-    }
-    if (console_ok)
-    {
-        reconnect_ticks = 0;
-        console.poll_deadlines(std::chrono::steady_clock::now());
-        radio_manager_.periodic_tick(console_ok);
-        radio_manager_.heartbeat_tick(console_ok);
-        return;
-    }
-    reconnect_ticks++;
-    if (reconnect_ticks < k_reconnect_ticks)
-    {
-        return;
-    }
-    reconnect_ticks = 0;
-    LOG_INF("retrying console");
-    begin_console();
-}
-
-void App::arm_tick()
-{
-    reactor.get_timer().wait_us(k_tick_us,
-                                [this]()
-                                {
-                                    if (stop_requested_.load())
-                                    {
-                                        reactor.stop();
-                                        return;
-                                    }
-                                    reconnect_tick();
-                                    stats_tick();
-                                    arm_tick();
-                                });
-}
-
-void App::stats_tick()
+void App::arm_stats()
 {
     if (cfg.stats_sec == 0)
     {
         return;
     }
-    const auto now = std::chrono::steady_clock::now();
-    if (last_stats.time_since_epoch().count() == 0)
-    {
-        last_stats = now;
-        return;
-    }
-    const auto elapsed_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - last_stats)
-            .count();
-    if (elapsed_ms < static_cast<long>(cfg.stats_sec) * 1000)
-    {
-        return;
-    }
-    last_stats = now;
-    tx_mux_.log_stats(elapsed_ms / 1000.0);
+    stats_timer_.arm(
+        std::chrono::seconds(cfg.stats_sec),
+        [this]()
+        {
+            const auto now = std::chrono::steady_clock::now();
+            const auto elapsed_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - last_stats)
+                    .count();
+            last_stats = now;
+            tx_mux_.log_stats(elapsed_ms / 1000.0);
+            arm_stats();
+        });
 }
 
 void App::stop()
@@ -1478,6 +1492,14 @@ int App::run()
     {
         return 1;
     }
+    reconnect_timer_.bind(&reactor);
+    console_deadline_timer_.bind(&reactor);
+    stats_timer_.bind(&reactor);
+    console.set_on_deadline(
+        [this](std::chrono::steady_clock::time_point deadline)
+        {
+            on_console_request_deadline(deadline);
+        });
     radio_manager_.set_console_ops(
         [this](std::function<void(bool, const ManagerRadioView&)> done)
         {
@@ -1582,7 +1604,17 @@ int App::run()
             cfg.stats_sec);
     }
     tx_mux_.start();
-    arm_tick();
+    arm_stats();
+    // stop() before reactor.run() set it running would be lost; the first
+    // loop pass runs this and stops then.
+    reactor.get_timer().wait_us(0,
+                                [this]()
+                                {
+                                    if (stop_requested_.load())
+                                    {
+                                        reactor.stop();
+                                    }
+                                });
     reactor.run();
     tx_mux_.stop();
     flush_shutdown();

@@ -191,7 +191,12 @@ bool ConsoleClient::request(const std::string& mplane_line,
     p.cmd = mplane_line;
     p.deadline = std::chrono::steady_clock::now() + timeout;
     p.done = std::move(done);
+    const auto deadline = p.deadline;
     pending_reqs_[id] = std::move(p);
+    if (on_deadline_)
+    {
+        on_deadline_(deadline);
+    }
     return true;
 }
 
@@ -300,6 +305,20 @@ void ConsoleClient::poll_deadlines(std::chrono::steady_clock::time_point now)
             done(std::move(r));
         }
     }
+}
+
+std::optional<std::chrono::steady_clock::time_point>
+ConsoleClient::next_deadline() const
+{
+    std::optional<std::chrono::steady_clock::time_point> next;
+    for (const auto& entry : pending_reqs_)
+    {
+        if (!next || entry.second.deadline < *next)
+        {
+            next = entry.second.deadline;
+        }
+    }
+    return next;
 }
 
 void ConsoleClient::append_recv(const char* data, size_t n)
