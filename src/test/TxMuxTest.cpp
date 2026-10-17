@@ -13,6 +13,7 @@
 #include <deque>
 #include <gtest/gtest.h>
 #include <memory>
+#include <mutex>
 #include <netinet/in.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -116,6 +117,25 @@ public:
     TxMux& mux()
     {
         return mux_;
+    }
+
+    RadioUpstreamTable& table()
+    {
+        return table_;
+    }
+
+    // Collects until `count` SDUs arrived or `timeout` passed, without
+    // ticking (the TX thread, if started, does that).
+    size_t wait_received(size_t count, std::chrono::milliseconds timeout)
+    {
+        const auto end = std::chrono::steady_clock::now() + timeout;
+        while (received_.size() < count &&
+               std::chrono::steady_clock::now() < end)
+        {
+            collect();
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        return received_.size();
     }
 
     // Ticks every 100 us for `window`; returns the SDUs received.
@@ -312,4 +332,22 @@ TEST(TxMuxTest, BacklogDrainsAtPacedRate)
     const size_t expected = static_cast<size_t>(elapsed_us / iv_us) + 1;
     EXPECT_GE(sent + 2, expected) << "iv_us=" << iv_us;
     EXPECT_LE(sent, expected + 1) << "iv_us=" << iv_us;
+}
+
+// Data queued without a wake is still sent: the TX thread sleeps at most
+// k_tx_max_sleep.
+TEST(TxMuxTest, ThreadSendsUnwokenDataWithinMaxSleep)
+{
+    TxMuxHarness h(4096, "OFDM_24M");
+    h.mux().start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    {
+        std::lock_guard<std::mutex> lock(h.table().mutex());
+        h.up().txq.push_back(make_sdu(100, 1));
+    }
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_EQ(h.wait_received(1, std::chrono::milliseconds(100)), 1u);
+    const auto waited = std::chrono::steady_clock::now() - start;
+    EXPECT_LT(waited, k_tx_max_sleep + std::chrono::milliseconds(5));
+    h.mux().stop();
 }

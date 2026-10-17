@@ -102,6 +102,9 @@ private:
     };
 
     void push_tx(bfc::sized_buffer pkt, bool is_fec);
+    // Caller holds tx_mu_. Producers wake the TX thread only when this goes
+    // from false to true; while data is queued the TX pacing timer drains it.
+    bool has_tx_locked() const;
     void enqueue_air(bfc::sized_buffer pkt);
     void send_app(const uint8_t* data, size_t len);
     void stage_fec_shard_for_tx(size_t max);

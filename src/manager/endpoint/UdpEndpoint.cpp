@@ -174,12 +174,14 @@ void UdpEndpoint::push_tx(bfc::sized_buffer pkt, bool is_fec)
 
 void UdpEndpoint::enqueue_air(bfc::sized_buffer pkt)
 {
+    bool wake_tx = false;
     {
         std::lock_guard<std::mutex> lock(tx_mu_);
+        const bool had_tx = has_tx_locked();
         push_tx(std::move(pkt), false);
+        wake_tx = !had_tx;
     }
-    // The TX thread sleeps until woken; it does not poll the queues.
-    if (tx_wake_)
+    if (wake_tx && tx_wake_)
     {
         tx_wake_();
     }
@@ -245,10 +247,11 @@ void UdpEndpoint::on_app()
             bool wake_tx = false;
             {
                 std::lock_guard<std::mutex> lock(tx_mu_);
+                const bool had_tx = has_tx_locked();
                 fec.push_app(reinterpret_cast<const uint8_t*>(rx_buf.data()),
                              rx_buf.size(), nullptr);
                 sync_fec_timer_after_push();
-                wake_tx = fec.has_tx_shards();
+                wake_tx = !had_tx && has_tx_locked();
             }
             if (wake_tx && tx_wake_)
             {
@@ -348,9 +351,10 @@ void UdpEndpoint::on_fec_timer()
     bool wake_tx = false;
     {
         std::lock_guard<std::mutex> lock(tx_mu_);
+        const bool had_tx = has_tx_locked();
         fec.flush_if_deadline();
         sync_fec_timer_after_push();
-        wake_tx = fec.has_tx_shards();
+        wake_tx = !had_tx && has_tx_locked();
     }
     if (wake_tx && tx_wake_)
     {
@@ -389,8 +393,10 @@ void UdpEndpoint::announce_down()
         return;
     }
     std::vector<std::vector<uint8_t>> encoded;
+    bool wake_tx = false;
     {
         std::lock_guard<std::mutex> lock(tx_mu_);
+        const bool had_tx = has_tx_locked();
         cancel_fec_timer();
         fec.flush(&encoded);
         fec.drain_tx_shards(&encoded);
@@ -398,8 +404,9 @@ void UdpEndpoint::announce_down()
         {
             push_tx(make_pkt(std::move(pkt)), true);
         }
+        wake_tx = !had_tx && has_tx_locked();
     }
-    if (!encoded.empty() && tx_wake_)
+    if (wake_tx && tx_wake_)
     {
         tx_wake_();
     }
@@ -512,6 +519,11 @@ void UdpEndpoint::get_fec(FecType* type, int* k, int* n) const
 bool UdpEndpoint::has_tx()
 {
     std::lock_guard<std::mutex> lock(tx_mu_);
+    return has_tx_locked();
+}
+
+bool UdpEndpoint::has_tx_locked() const
+{
     if (!txq.empty())
     {
         return true;

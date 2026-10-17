@@ -62,16 +62,11 @@ bool App::add_upstream(const UpstreamConfig& uc)
 bool App::setup_radio()
 {
     radio = std::make_shared<WifiUdp>();
-    if (!radio->open(
-            reactor,
-            [this](bfc::shared_sized_buffer mpdu)
-            {
-                rx_demux_.on_mpdu(std::move(mpdu));
-            },
-            [this]()
-            {
-                tx_mux_.request_tick();
-            }))
+    if (!radio->open(reactor,
+                     [this](bfc::shared_sized_buffer mpdu)
+                     {
+                         rx_demux_.on_mpdu(std::move(mpdu));
+                     }))
     {
         return false;
     }

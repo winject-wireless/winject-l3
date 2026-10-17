@@ -61,7 +61,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | Thread | Runs |
 |---|---|
 | Reactor (main) | All sockets: application UDP, radio m-plane, d-plane forward, manager console. The full RX path (`WifiUdp` → `RxDemux` → `Upstream::on_radio_rx` → FEC decode → UDP send), application RX into upstream TX queues, timers and stats |
-| `TxMux` TX thread | Sleeps until new data is queued or, while data waits on pacing, until the next frame may go out. Builds MPDUs from upstream TX queues and sends them through `WifiUdp`. Each frame is followed by (airtime of the whole frame, MPDU + FCS, from `PhyAirtime` + the modulation's inter-frame gap) / 90 %, so the link uses at most 90 % of the modulation's capacity. Up to two full-frame intervals lost to a late wakeup are made up |
+| `TxMux` TX thread | While data is queued, wakes at each pacing slot and takes the next frame. When idle it sleeps; an upstream whose queue goes from empty to non-empty wakes it, and it never sleeps longer than 5 ms (`k_tx_max_sleep`). Builds MPDUs from upstream TX queues and sends them through `WifiUdp`. Each frame is followed by (airtime of the whole frame, MPDU + FCS, from `PhyAirtime` + the modulation's inter-frame gap) / 90 %, so the link uses at most 90 % of the modulation's capacity. Up to two full-frame intervals lost to a late wakeup are made up |
 
 The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue (per-upstream mutex).
 

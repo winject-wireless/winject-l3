@@ -294,8 +294,8 @@ TEST(UdpEndpointTest, DropsOversizeAppDatagram)
     endpoint.close();
 }
 
-// The TX thread only sends when woken, so queuing a raw (non-FEC) datagram
-// must wake it.
+// Queuing a raw (non-FEC) datagram on an idle upstream wakes the TX thread,
+// once.
 TEST(UdpEndpointTest, RawAppDatagramWakesTx)
 {
     const uint16_t port = reserve_free_udp_port();
@@ -321,12 +321,17 @@ TEST(UdpEndpointTest, RawAppDatagramWakesTx)
     std::vector<uint8_t> data(100, 0xAB);
     const bfc::const_buffer_view view(
         reinterpret_cast<const std::byte*>(data.data()), data.size());
-    ASSERT_EQ(client.send(view, 0, reinterpret_cast<const sockaddr*>(&dest),
-                          sizeof(dest)),
-              static_cast<ssize_t>(data.size()));
+    for (int i = 0; i < 3; i++)
+    {
+        ASSERT_EQ(client.send(view, 0, reinterpret_cast<const sockaddr*>(&dest),
+                              sizeof(dest)),
+                  static_cast<ssize_t>(data.size()));
+    }
 
     pump_reactor(reactor);
     EXPECT_TRUE(endpoint.has_tx());
+    // Only the first datagram finds the queue empty; the rest wait for the
+    // TX pacing timer.
     EXPECT_EQ(wakes, 1);
 
     endpoint.close();

@@ -11,7 +11,6 @@
 #include <bfc/buffer.hpp>
 #include <bfc/sized_buffer.hpp>
 #include <cinttypes>
-#include <optional>
 #include <string.h>
 #include <utility>
 
@@ -493,26 +492,20 @@ void TxMux::sync_tick()
     tick_impl();
 }
 
-// Sleeps until an event (new data, d-plane change, stop) or, while data waits
-// on pacing, until the next frame may go out. No periodic wakeup.
+// Sleeps until an event (data queued on an idle upstream, d-plane change,
+// stop), until the next frame may go out while data waits on pacing, or for
+// at most k_tx_max_sleep.
 void TxMux::tx_thread_main()
 {
     auto woken = [this]()
     {
         return !tx_events_.empty() || tx_stop_.load();
     };
-    std::optional<std::chrono::steady_clock::time_point> wake_at;
+    auto wake_at = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> wlock(wake_mu_);
     while (!tx_stop_)
     {
-        if (wake_at)
-        {
-            wake_cv_.wait_until(wlock, *wake_at, woken);
-        }
-        else
-        {
-            wake_cv_.wait(wlock, woken);
-        }
+        wake_cv_.wait_until(wlock, wake_at, woken);
         if (tx_stop_)
         {
             break;
@@ -534,10 +527,11 @@ void TxMux::tx_thread_main()
             pacing_until = next_tx_at_;
         }
         wlock.lock();
-        // Data left after a tick is held back by pacing, unless no upstream
-        // can send it now; then only an event can change that.
-        wake_at.reset();
-        if (pending && std::chrono::steady_clock::now() < pacing_until)
+        // Queued data that pacing already allows but no upstream could send
+        // (e.g. no d-plane yet) waits for the next wake, not a spin.
+        const auto now = std::chrono::steady_clock::now();
+        wake_at = now + k_tx_max_sleep;
+        if (pending && pacing_until > now && pacing_until < wake_at)
         {
             wake_at = pacing_until;
         }

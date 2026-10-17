@@ -29,6 +29,9 @@ inline constexpr size_t k_pacing_full_psdu_bytes = 1504;
 // Share of the modulation's airtime (frame airtime + inter-frame gap) that
 // TX pacing uses.
 inline constexpr uint32_t k_tx_airtime_share_pct = 90;
+// Longest the TX thread sleeps without a wake: producers wake it only when a
+// queue goes from empty to non-empty, so this bounds any missed wake.
+inline constexpr std::chrono::milliseconds k_tx_max_sleep{5};
 
 class WifiUdp;
 
