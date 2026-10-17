@@ -11,6 +11,7 @@
 #include <bfc/buffer.hpp>
 #include <bfc/sized_buffer.hpp>
 #include <cinttypes>
+#include <optional>
 #include <string.h>
 #include <utility>
 
@@ -39,41 +40,31 @@ TxMux::~TxMux()
     stop();
 }
 
-void TxMux::configure(uint16_t domain, size_t max_data_per_tick,
-                      size_t tx_burst_size, uint32_t tx_burst_interval_us)
+void TxMux::configure(uint16_t domain)
 {
     domain_ = domain;
-    max_data_per_tick_ = max_data_per_tick < 1 ? 1 : max_data_per_tick;
-    if (max_data_per_tick_ > 32)
-    {
-        max_data_per_tick_ = 32;
-    }
-    tx_burst_size_ = tx_burst_size < 1 ? 1 : tx_burst_size;
-    if (tx_burst_size_ > k_radio_tx_queue_depth)
-    {
-        tx_burst_size_ = k_radio_tx_queue_depth;
-    }
-    tx_burst_interval_us_ = tx_burst_interval_us;
-    burst_data_sent_ = 0;
-    burst_cooldown_until_ = {};
     next_tx_at_ = std::chrono::steady_clock::now();
 }
 
-void TxMux::set_phy_mode(const PhyMode& mode, uint32_t gap_us,
-                         uint32_t rate_cap_kbps)
+void TxMux::set_phy_mode(const PhyMode& mode)
 {
     std::lock_guard<std::mutex> lock(table_.mutex());
     phy_ = mode;
-    gap_us_ = gap_us == 0 ? phy_default_gap_us(mode) : gap_us;
-    rate_cap_kbps_ = rate_cap_kbps;
-    const uint32_t full_iv =
-        phy_txtime_us(phy_, k_pacing_full_psdu_bytes) + gap_us_;
-    pacing_credit_us_ = full_iv * 2;
+    gap_us_ = phy_default_gap_us(mode);
+    pacing_credit_us_ = frame_interval_us(k_pacing_full_psdu_bytes) * 2;
     next_tx_at_ = std::chrono::steady_clock::now();
-    LOG_INF("tx pacing: %" PRIu32 "us+%" PRIu32
-            "us per full frame (cap=%" PRIu32 " kbps)",
+    LOG_INF("tx pacing: (%" PRIu32 "us+%" PRIu32 "us)/%" PRIu32 "%% = %" PRIu32
+            "us per full frame",
             phy_txtime_us(phy_, k_pacing_full_psdu_bytes), gap_us_,
-            rate_cap_kbps_);
+            k_tx_airtime_share_pct,
+            frame_interval_us(k_pacing_full_psdu_bytes));
+}
+
+uint32_t TxMux::frame_interval_us(size_t psdu_bytes) const
+{
+    const uint64_t air_us = phy_txtime_us(phy_, psdu_bytes) + gap_us_;
+    return static_cast<uint32_t>((air_us * 100 + k_tx_airtime_share_pct - 1) /
+                                 k_tx_airtime_share_pct);
 }
 
 uint32_t TxMux::pacing_txtime_full_us() const
@@ -88,52 +79,10 @@ uint32_t TxMux::pacing_gap_us() const
     return gap_us_;
 }
 
-bool TxMux::set_max_data_per_tick(size_t max_data_per_tick)
+uint32_t TxMux::pacing_interval_full_us() const
 {
     std::lock_guard<std::mutex> lock(table_.mutex());
-    max_data_per_tick_ = max_data_per_tick < 1 ? 1 : max_data_per_tick;
-    if (max_data_per_tick_ > 32)
-    {
-        max_data_per_tick_ = 32;
-    }
-    return true;
-}
-
-bool TxMux::set_tx_burst_pacing(size_t tx_burst_size,
-                                uint32_t tx_burst_interval_us)
-{
-    std::lock_guard<std::mutex> lock(table_.mutex());
-    tx_burst_size_ = tx_burst_size < 1 ? 1 : tx_burst_size;
-    if (tx_burst_size_ > k_radio_tx_queue_depth)
-    {
-        tx_burst_size_ = k_radio_tx_queue_depth;
-    }
-    tx_burst_interval_us_ = tx_burst_interval_us;
-    burst_data_sent_ = 0;
-    burst_cooldown_until_ = {};
-    return true;
-}
-
-bool TxMux::data_burst_allows() const
-{
-    const auto now = std::chrono::steady_clock::now();
-    if (now < burst_cooldown_until_)
-    {
-        return false;
-    }
-    return burst_data_sent_ < tx_burst_size_;
-}
-
-void TxMux::note_data_burst_emit()
-{
-    burst_data_sent_++;
-    if (burst_data_sent_ < tx_burst_size_)
-    {
-        return;
-    }
-    burst_cooldown_until_ = std::chrono::steady_clock::now() +
-                            std::chrono::microseconds(tx_burst_interval_us_);
-    burst_data_sent_ = 0;
+    return frame_interval_us(k_pacing_full_psdu_bytes);
 }
 
 bool TxMux::has_pending_tx_data() const
@@ -174,11 +123,10 @@ bool TxMux::note_build_fail(size_t body_bytes)
     return false;
 }
 
-bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
-                      size_t* data_sent)
+bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
 {
     auto& entries = table_.entries();
-    if (primary >= entries.size() || data_sent == nullptr || domain_ == 0)
+    if (primary >= entries.size() || domain_ == 0)
     {
         return false;
     }
@@ -187,12 +135,8 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
     {
         return false;
     }
-    if (!data_burst_allows())
-    {
-        return false;
-    }
     const auto now = std::chrono::steady_clock::now();
-    if (now < next_tx_at_ || *data_sent >= max_data_per_tick_)
+    if (now < next_tx_at_)
     {
         return false;
     }
@@ -208,7 +152,6 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
 
     size_t body_total = 0;
     uint8_t n = 0;
-    bool any_data = false;
 
     std::vector<TxMpduEntryPlan> plan;
 
@@ -314,7 +257,6 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         {
             return note_build_fail(body_total);
         }
-        any_data = true;
     }
 
     const size_t mpdu_len = WIFI_HDR_LEN + body_total;
@@ -355,17 +297,9 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         tx_send_fail_byt_.fetch_add(mpdu_len, std::memory_order_relaxed);
         return false;
     }
-    const size_t psdu_bytes = mpdu_len + 4;
-    uint32_t interval_us = phy_txtime_us(phy_, psdu_bytes) + gap_us_;
-    if (rate_cap_kbps_ > 0)
-    {
-        const uint32_t cap_us = static_cast<uint32_t>(
-            (psdu_bytes * 8000ULL + rate_cap_kbps_ - 1) / rate_cap_kbps_);
-        if (cap_us > interval_us)
-        {
-            interval_us = cap_us;
-        }
-    }
+    // Whole frame on air: MPDU + 4-byte FCS.
+    const uint32_t interval_us = frame_interval_us(mpdu_len + 4);
+    // Up to two full-frame intervals missed by a late wakeup are made up.
     const auto floor_time = now - std::chrono::microseconds(pacing_credit_us_);
     next_tx_at_ = std::max(next_tx_at_, floor_time) +
                   std::chrono::microseconds(interval_us);
@@ -386,11 +320,6 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
         }
     }
     air_bytes_interval += body_total;
-    if (any_data)
-    {
-        (*data_sent)++;
-        note_data_burst_emit();
-    }
     return true;
 }
 
@@ -404,17 +333,14 @@ void TxMux::tick_impl()
     std::vector<size_t> schedule_shares;
     init_schedule_shares(schedule_shares);
 
-    size_t data_sent = 0;
-
     bool progress = true;
-    while (progress && data_sent < max_data_per_tick_)
+    while (progress)
     {
         progress = false;
-        for (size_t n = 0; n < entries.size() && data_sent < max_data_per_tick_;
-             n++)
+        for (size_t n = 0; n < entries.size(); n++)
         {
             const size_t i = (next + n) % entries.size();
-            if (emit_mpdu(i, schedule_shares, &data_sent))
+            if (emit_mpdu(i, schedule_shares))
             {
                 progress = true;
                 next = (i + 1) % entries.size();
@@ -567,74 +493,53 @@ void TxMux::sync_tick()
     tick_impl();
 }
 
+// Sleeps until an event (new data, d-plane change, stop) or, while data waits
+// on pacing, until the next frame may go out. No periodic wakeup.
 void TxMux::tx_thread_main()
 {
-    auto drain = [this](std::unique_lock<std::mutex>& wlock) -> bool
+    auto woken = [this]()
     {
-        bool any = false;
+        return !tx_events_.empty() || tx_stop_.load();
+    };
+    std::optional<std::chrono::steady_clock::time_point> wake_at;
+    std::unique_lock<std::mutex> wlock(wake_mu_);
+    while (!tx_stop_)
+    {
+        if (wake_at)
+        {
+            wake_cv_.wait_until(wlock, *wake_at, woken);
+        }
+        else
+        {
+            wake_cv_.wait(wlock, woken);
+        }
+        if (tx_stop_)
+        {
+            break;
+        }
         TxEvent ev;
         while (pop_event(&ev))
         {
             wlock.unlock();
             handle_event(ev);
             wlock.lock();
-            any = true;
         }
-        return any;
-    };
-    while (!tx_stop_)
-    {
+        wlock.unlock();
+        bool pending = false;
+        std::chrono::steady_clock::time_point pacing_until;
         {
-            std::unique_lock<std::mutex> lock(wake_mu_);
-            wake_cv_.wait_for(lock,
-                              std::chrono::microseconds(k_tx_tick_interval_us),
-                              [this]()
-                              {
-                                  return !tx_events_.empty() || tx_stop_.load();
-                              });
-            if (tx_stop_)
-            {
-                break;
-            }
-            drain(lock);
+            std::lock_guard<std::mutex> lock(table_.mutex());
+            tick_impl();
+            pending = has_pending_tx_data();
+            pacing_until = next_tx_at_;
         }
-        for (;;)
+        wlock.lock();
+        // Data left after a tick is held back by pacing, unless no upstream
+        // can send it now; then only an event can change that.
+        wake_at.reset();
+        if (pending && std::chrono::steady_clock::now() < pacing_until)
         {
-            bool pending = false;
-            std::chrono::steady_clock::time_point pacing_until;
-            {
-                std::lock_guard<std::mutex> lock(table_.mutex());
-                tick_impl();
-                pending = has_pending_tx_data();
-                pacing_until = next_tx_at_;
-            }
-            std::unique_lock<std::mutex> wlock(wake_mu_);
-            if (drain(wlock))
-            {
-                break;
-            }
-            if (!pending || std::chrono::steady_clock::now() >= pacing_until)
-            {
-                break;
-            }
-            const auto now = std::chrono::steady_clock::now();
-            const auto until = std::min(
-                pacing_until,
-                now + std::chrono::microseconds(k_tx_tick_interval_us));
-            wake_cv_.wait_until(wlock, until,
-                                [this]()
-                                {
-                                    return !tx_events_.empty() ||
-                                           tx_stop_.load();
-                                });
-            if (tx_stop_)
-            {
-                break;
-            }
-            if (drain(wlock))
-            {
-                break;
-            }
+            wake_at = pacing_until;
         }
     }
 }

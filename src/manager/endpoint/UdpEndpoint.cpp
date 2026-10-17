@@ -174,8 +174,15 @@ void UdpEndpoint::push_tx(bfc::sized_buffer pkt, bool is_fec)
 
 void UdpEndpoint::enqueue_air(bfc::sized_buffer pkt)
 {
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    push_tx(std::move(pkt), false);
+    {
+        std::lock_guard<std::mutex> lock(tx_mu_);
+        push_tx(std::move(pkt), false);
+    }
+    // The TX thread sleeps until woken; it does not poll the queues.
+    if (tx_wake_)
+    {
+        tx_wake_();
+    }
 }
 
 void UdpEndpoint::on_app()
@@ -382,13 +389,19 @@ void UdpEndpoint::announce_down()
         return;
     }
     std::vector<std::vector<uint8_t>> encoded;
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    cancel_fec_timer();
-    fec.flush(&encoded);
-    fec.drain_tx_shards(&encoded);
-    for (auto& pkt : encoded)
     {
-        push_tx(make_pkt(std::move(pkt)), true);
+        std::lock_guard<std::mutex> lock(tx_mu_);
+        cancel_fec_timer();
+        fec.flush(&encoded);
+        fec.drain_tx_shards(&encoded);
+        for (auto& pkt : encoded)
+        {
+            push_tx(make_pkt(std::move(pkt)), true);
+        }
+    }
+    if (!encoded.empty() && tx_wake_)
+    {
+        tx_wake_();
     }
 }
 

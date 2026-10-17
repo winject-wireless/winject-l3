@@ -42,13 +42,11 @@ void RadioManager::configure_tx_mux()
     {
         return;
     }
-    tx_mux_->configure(cfg_->domain, cfg_->max_data_per_tick, cfg_->tx_burst_size,
-                       cfg_->tx_burst_interval_us);
-    sync_pacing_for_modulation(cfg_->modulation, false);
+    tx_mux_->configure(cfg_->domain);
+    sync_pacing_for_modulation(cfg_->modulation);
 }
 
-void RadioManager::sync_pacing_for_modulation(const std::string& modulation,
-                                              bool runtime_change)
+void RadioManager::sync_pacing_for_modulation(const std::string& modulation)
 {
     if (cfg_ == nullptr || tx_mux_ == nullptr)
     {
@@ -64,16 +62,7 @@ void RadioManager::sync_pacing_for_modulation(const std::string& modulation,
     {
         return;
     }
-    uint32_t cap = 0;
-    if (cfg_->max_rate_kbps_explicit)
-    {
-        cap = cfg_->max_rate_kbps;
-    }
-    else if (!runtime_change)
-    {
-        cap = 0;
-    }
-    tx_mux_->set_phy_mode(mode, cfg_->tx_gap_us, cap);
+    tx_mux_->set_phy_mode(mode);
     LOG_INF("tx pacing for %s (ch=%u)", canonical.c_str(),
             static_cast<unsigned>(cfg_->channel));
 }
@@ -88,7 +77,7 @@ void RadioManager::on_phy_programmed()
     {
         wifi_->register_forward();
     }
-    sync_pacing_for_modulation(cfg_->modulation, false);
+    sync_pacing_for_modulation(cfg_->modulation);
 }
 
 void RadioManager::on_console_up()

@@ -35,8 +35,7 @@ public:
     void set_reconcile_filter(ReconcileFilterFn reconcile);
 
     void configure_tx_mux();
-    void sync_pacing_for_modulation(const std::string& modulation,
-                                    bool runtime_change);
+    void sync_pacing_for_modulation(const std::string& modulation);
     void on_phy_programmed();
     // Console up: start the heartbeat, forward re-registration and PHY/filter
     // checks on the reactor timer. Console down: cancel them; replies still

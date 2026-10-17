@@ -79,7 +79,7 @@ std::vector<uint8_t> make_sdu(size_t len, uint8_t tag)
 class TxMuxHarness
 {
 public:
-    explicit TxMuxHarness(size_t budget)
+    explicit TxMuxHarness(size_t budget, const char* modulation = "OFDM_54M")
         : radio_sock_(bfc::create_udp4()), mux_(table_)
     {
         sockaddr_in bind_addr = {};
@@ -97,10 +97,10 @@ public:
 
         up_ = std::make_shared<QueueUpstream>();
         table_.add(up_, radio_, k_bus, k_bus, budget);
-        mux_.configure(1, 32);
+        mux_.configure(1);
         PhyMode mode;
-        EXPECT_TRUE(phy_mode_from_name("OFDM_54M", 1, &mode));
-        mux_.set_phy_mode(mode, 0, 0);
+        EXPECT_TRUE(phy_mode_from_name(modulation, 1, &mode));
+        mux_.set_phy_mode(mode);
     }
 
     ~TxMuxHarness()
@@ -111,6 +111,25 @@ public:
     QueueUpstream& up()
     {
         return *up_;
+    }
+
+    TxMux& mux()
+    {
+        return mux_;
+    }
+
+    // Ticks every 100 us for `window`; returns the SDUs received.
+    size_t run_for(std::chrono::microseconds window)
+    {
+        const auto end = std::chrono::steady_clock::now() + window;
+        while (std::chrono::steady_clock::now() < end)
+        {
+            mux_.sync_tick();
+            collect();
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+        collect();
+        return received_.size();
     }
 
     // Ticks until the upstream queue is empty (or a deadline passes), then
@@ -257,4 +276,40 @@ TEST(TxMuxTest, StampsFecFlagPerSdu)
         EXPECT_EQ(seq[i], static_cast<uint16_t>((seq[i - 1] + 1) &
                                                 LCHeader::k_seq_mask));
     }
+}
+
+// Full frame at OFDM 24M: 530 us airtime + 96 us gap, at 90 % = 696 us.
+TEST(TxMuxTest, PacingIntervalIsAirtimePlusGapOverNinetyPercent)
+{
+    TxMuxHarness h(4096, "OFDM_24M");
+    EXPECT_EQ(h.mux().pacing_txtime_full_us(), 530u);
+    EXPECT_EQ(h.mux().pacing_gap_us(), 96u);
+    EXPECT_EQ(h.mux().pacing_interval_full_us(), 696u);
+}
+
+// Each MPDU is spaced by its whole on-air size (802.11 header + slots + FCS),
+// so a backlog drains at the paced rate, not faster.
+TEST(TxMuxTest, BacklogDrainsAtPacedRate)
+{
+    const auto start = std::chrono::steady_clock::now();
+    TxMuxHarness h(4096, "OFDM_24M");
+    constexpr size_t k_sdu = 1400;
+    for (int i = 0; i < 200; i++)
+    {
+        h.up().txq.push_back(make_sdu(k_sdu, static_cast<uint8_t>(i)));
+    }
+    PhyMode mode;
+    ASSERT_TRUE(phy_mode_from_name("OFDM_24M", 1, &mode));
+    const size_t mpdu_len = WIFI_HDR_LEN + LCHeader::k_len + k_sdu;
+    const uint32_t iv_us =
+        ((phy_txtime_us(mode, mpdu_len + 4) + 96) * 100 + 89) / 90;
+
+    const size_t sent = h.run_for(std::chrono::milliseconds(60));
+    const auto elapsed_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count();
+    const size_t expected = static_cast<size_t>(elapsed_us / iv_us) + 1;
+    EXPECT_GE(sent + 2, expected) << "iv_us=" << iv_us;
+    EXPECT_LE(sent, expected + 1) << "iv_us=" << iv_us;
 }

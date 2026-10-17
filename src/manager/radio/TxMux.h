@@ -22,11 +22,13 @@
 namespace winject
 {
 
-inline constexpr uint32_t k_tx_tick_interval_us = 250;
 #if defined(ESP_PLATFORM)
 inline constexpr size_t k_tx_thread_stack_bytes = 8192;
 #endif
 inline constexpr size_t k_pacing_full_psdu_bytes = 1504;
+// Share of the modulation's airtime (frame airtime + inter-frame gap) that
+// TX pacing uses.
+inline constexpr uint32_t k_tx_airtime_share_pct = 90;
 
 class WifiUdp;
 
@@ -36,29 +38,12 @@ public:
     explicit TxMux(RadioUpstreamTable& table);
     ~TxMux();
 
-    void configure(
-        uint16_t domain, size_t max_data_per_tick = 4,
-        size_t tx_burst_size = k_default_tx_burst_size,
-        uint32_t tx_burst_interval_us = k_default_tx_burst_interval_us);
-    void set_phy_mode(const PhyMode& mode, uint32_t gap_us,
-                      uint32_t rate_cap_kbps);
-    bool set_max_data_per_tick(size_t max_data_per_tick);
-    bool set_tx_burst_pacing(size_t tx_burst_size,
-                             uint32_t tx_burst_interval_us);
-    size_t max_data_per_tick() const
-    {
-        return max_data_per_tick_;
-    }
-    size_t tx_burst_size() const
-    {
-        return tx_burst_size_;
-    }
-    uint32_t tx_burst_interval_us() const
-    {
-        return tx_burst_interval_us_;
-    }
+    void configure(uint16_t domain);
+    void set_phy_mode(const PhyMode& mode);
     uint32_t pacing_txtime_full_us() const;
     uint32_t pacing_gap_us() const;
+    // Spacing between full-size frames: (airtime + gap) / 90 %.
+    uint32_t pacing_interval_full_us() const;
     void start();
     void stop();
     void request_tick();
@@ -75,11 +60,9 @@ private:
     void tx_thread_main();
     void init_schedule_shares(std::vector<size_t>& shares) const;
     bool has_pending_tx_data() const;
-    bool emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares,
-                   size_t* data_sent);
+    bool emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares);
     bool note_build_fail(size_t body_bytes);
-    bool data_burst_allows() const;
-    void note_data_burst_emit();
+    uint32_t frame_interval_us(size_t psdu_bytes) const;
     bool pop_event(TxEvent* out);
     void handle_event(TxEvent& ev);
     void apply_queued_socket_changes();
@@ -87,14 +70,8 @@ private:
     RadioUpstreamTable& table_;
     PhyMode phy_{};
     uint32_t gap_us_ = 96;
-    uint32_t rate_cap_kbps_ = 0;
     uint32_t pacing_credit_us_ = 0;
     uint16_t domain_ = 0;
-    size_t max_data_per_tick_ = 4;
-    size_t tx_burst_size_ = k_default_tx_burst_size;
-    uint32_t tx_burst_interval_us_ = k_default_tx_burst_interval_us;
-    size_t burst_data_sent_ = 0;
-    std::chrono::steady_clock::time_point burst_cooldown_until_{};
     std::chrono::steady_clock::time_point next_tx_at_{};
     size_t next = 0;
     uint8_t framed_buf[5][2048]{};

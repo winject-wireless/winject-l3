@@ -617,6 +617,8 @@ void App::refresh_host_metrics()
         ->store(tx_mux_.pacing_txtime_full_us());
     metrics_registry_.get_metrics<MetricU64>("tx_pacing_gap_us")
         ->store(tx_mux_.pacing_gap_us());
+    metrics_registry_.get_metrics<MetricU64>("tx_pacing_interval_us")
+        ->store(tx_mux_.pacing_interval_full_us());
     if (radio != nullptr)
     {
         const WifiUdp::counters_s rc = radio->peek_counters();
@@ -1051,7 +1053,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
             if (patch.have_modulation)
             {
                 cfg.modulation = Config::canonical_modulation(patch.modulation);
-                radio_manager_.sync_pacing_for_modulation(cfg.modulation, true);
+                radio_manager_.sync_pacing_for_modulation(cfg.modulation);
             }
             if (patch.have_cca)
             {
@@ -1591,10 +1593,8 @@ int App::run()
     ManagerRadioDeviceView rd_view;
     rd_view.id = 0;
     rd_view.device = cfg.radio_device;
-    LOG_INF("manager running %s max_rate %" PRIu32
-            " kbps burst=%zu burst_us=%" PRIu32 " (%s)",
-            console_format_radio_device(rd_view).c_str(), cfg.max_rate_kbps,
-            cfg.tx_burst_size, cfg.tx_burst_interval_us,
+    LOG_INF("manager running %s (%s)",
+            console_format_radio_device(rd_view).c_str(),
             cfg.modulation.c_str());
     last_stats = std::chrono::steady_clock::now();
     if (cfg.stats_sec > 0)

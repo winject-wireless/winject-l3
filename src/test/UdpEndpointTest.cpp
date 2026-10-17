@@ -294,6 +294,44 @@ TEST(UdpEndpointTest, DropsOversizeAppDatagram)
     endpoint.close();
 }
 
+// The TX thread only sends when woken, so queuing a raw (non-FEC) datagram
+// must wake it.
+TEST(UdpEndpointTest, RawAppDatagramWakesTx)
+{
+    const uint16_t port = reserve_free_udp_port();
+    ASSERT_NE(port, 0u);
+
+    IOReactor reactor;
+    UdpEndpoint endpoint;
+    UpstreamConfig cfg;
+    cfg.fec_type = FecType::none;
+    cfg.endpoint.rx = "127.0.0.1:" + std::to_string(port);
+    int wakes = 0;
+    ASSERT_TRUE(endpoint.open(reactor, cfg,
+                              [&]()
+                              {
+                                  wakes++;
+                              }));
+
+    bfc::socket client(bfc::create_udp4());
+    sockaddr_in dest = {};
+    dest.sin_family = AF_INET;
+    dest.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    dest.sin_port = htons(port);
+    std::vector<uint8_t> data(100, 0xAB);
+    const bfc::const_buffer_view view(
+        reinterpret_cast<const std::byte*>(data.data()), data.size());
+    ASSERT_EQ(client.send(view, 0, reinterpret_cast<const sockaddr*>(&dest),
+                          sizeof(dest)),
+              static_cast<ssize_t>(data.size()));
+
+    pump_reactor(reactor);
+    EXPECT_TRUE(endpoint.has_tx());
+    EXPECT_EQ(wakes, 1);
+
+    endpoint.close();
+}
+
 // Mirrors App::console_remove_upstream: the endpoint is destroyed from another
 // reactor callback while its own read event is pending in the same epoll
 // batch. Its callback must not run on the freed object.
