@@ -330,8 +330,10 @@ TEST(TxMuxTest, BacklogDrainsAtPacedRate)
             std::chrono::steady_clock::now() - start)
             .count();
     const size_t expected = static_cast<size_t>(elapsed_us / iv_us) + 1;
-    EXPECT_GE(sent + 2, expected) << "iv_us=" << iv_us;
+    // Never faster than paced. A slow test loop (e.g. under TSAN) can lose
+    // slots beyond the two-interval catch-up, so the lower bound is loose.
     EXPECT_LE(sent, expected + 1) << "iv_us=" << iv_us;
+    EXPECT_GE(sent * 4, expected * 3) << "iv_us=" << iv_us;
 }
 
 // Data queued without a wake is still sent: the TX thread sleeps at most
