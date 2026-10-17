@@ -174,17 +174,11 @@ void UdpEndpoint::push_tx(bfc::sized_buffer pkt, bool is_fec)
 
 void UdpEndpoint::enqueue_air(bfc::sized_buffer pkt)
 {
-    bool wake_tx = false;
-    {
-        std::lock_guard<std::mutex> lock(tx_mu_);
-        const bool had_tx = has_tx_locked();
-        push_tx(std::move(pkt), false);
-        wake_tx = !had_tx;
-    }
-    if (wake_tx && tx_wake_)
-    {
-        tx_wake_();
-    }
+    queue_tx(
+        [&]()
+        {
+            push_tx(std::move(pkt), false);
+        });
 }
 
 void UdpEndpoint::on_app()
@@ -244,19 +238,14 @@ void UdpEndpoint::on_app()
         }
         if (fec.enabled())
         {
-            bool wake_tx = false;
-            {
-                std::lock_guard<std::mutex> lock(tx_mu_);
-                const bool had_tx = has_tx_locked();
-                fec.push_app(reinterpret_cast<const uint8_t*>(rx_buf.data()),
-                             rx_buf.size(), nullptr);
-                sync_fec_timer_after_push();
-                wake_tx = !had_tx && has_tx_locked();
-            }
-            if (wake_tx && tx_wake_)
-            {
-                tx_wake_();
-            }
+            queue_tx(
+                [&]()
+                {
+                    fec.push_app(
+                        reinterpret_cast<const uint8_t*>(rx_buf.data()),
+                        rx_buf.size(), nullptr);
+                    sync_fec_timer_after_push();
+                });
             continue;
         }
         if (static_cast<size_t>(n) > k_stream_payload_max)
@@ -348,18 +337,12 @@ void UdpEndpoint::cancel_fec_timer()
 void UdpEndpoint::on_fec_timer()
 {
     fec_timer_armed_ = false;
-    bool wake_tx = false;
-    {
-        std::lock_guard<std::mutex> lock(tx_mu_);
-        const bool had_tx = has_tx_locked();
-        fec.flush_if_deadline();
-        sync_fec_timer_after_push();
-        wake_tx = !had_tx && has_tx_locked();
-    }
-    if (wake_tx && tx_wake_)
-    {
-        tx_wake_();
-    }
+    queue_tx(
+        [&]()
+        {
+            fec.flush_if_deadline();
+            sync_fec_timer_after_push();
+        });
 }
 
 void UdpEndpoint::sync_fec_timer_after_push()
@@ -392,24 +375,18 @@ void UdpEndpoint::announce_down()
     {
         return;
     }
-    std::vector<std::vector<uint8_t>> encoded;
-    bool wake_tx = false;
-    {
-        std::lock_guard<std::mutex> lock(tx_mu_);
-        const bool had_tx = has_tx_locked();
-        cancel_fec_timer();
-        fec.flush(&encoded);
-        fec.drain_tx_shards(&encoded);
-        for (auto& pkt : encoded)
+    queue_tx(
+        [&]()
         {
-            push_tx(make_pkt(std::move(pkt)), true);
-        }
-        wake_tx = !had_tx && has_tx_locked();
-    }
-    if (wake_tx && tx_wake_)
-    {
-        tx_wake_();
-    }
+            std::vector<std::vector<uint8_t>> encoded;
+            cancel_fec_timer();
+            fec.flush(&encoded);
+            fec.drain_tx_shards(&encoded);
+            for (auto& pkt : encoded)
+            {
+                push_tx(make_pkt(std::move(pkt)), true);
+            }
+        });
 }
 
 bool UdpEndpoint::set_fec(FecType type, int k, int n, std::string* error)

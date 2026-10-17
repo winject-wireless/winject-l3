@@ -186,9 +186,14 @@ void RadioManager::on_info_due()
             });
     }
 
+    const uint32_t gen = gen_;
     query_info_(
-        [this](bool ok, const ManagerRadioView& actual)
+        [this, gen](bool ok, const ManagerRadioView& actual)
         {
+            if (gen != gen_)
+            {
+                return;
+            }
             if (!ok)
             {
                 LOG_WRN("radio_info poll failed");

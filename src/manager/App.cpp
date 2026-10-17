@@ -1348,13 +1348,11 @@ void App::on_console_request_deadline(
         });
 }
 
-// After deadlines were polled: arm for the earliest one still pending.
+// After deadlines were polled: arm for the earliest one still pending. A
+// timeout callback may already have armed for a later request; this moves
+// the timer earlier if an older request is still due first.
 void App::arm_console_deadline()
 {
-    if (console_deadline_timer_.armed())
-    {
-        return;
-    }
     if (const auto next = console.next_deadline())
     {
         on_console_request_deadline(*next);

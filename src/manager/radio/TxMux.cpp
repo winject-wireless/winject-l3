@@ -84,19 +84,6 @@ uint32_t TxMux::pacing_interval_full_us() const
     return frame_interval_us(k_pacing_full_psdu_bytes);
 }
 
-bool TxMux::has_pending_tx_data() const
-{
-    const auto& entries = table_.entries();
-    for (const auto& s : entries)
-    {
-        if (s.up != nullptr && s.up->get_tx_size() > 0)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 void TxMux::init_schedule_shares(std::vector<size_t>& shares) const
 {
     const auto& entries = table_.entries();
@@ -134,11 +121,6 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
     {
         return false;
     }
-    const auto now = std::chrono::steady_clock::now();
-    if (now < next_tx_at_)
-    {
-        return false;
-    }
     if (schedule_shares[primary] == 0)
     {
         return false;
@@ -146,6 +128,12 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
     if (s0.up->get_tx_size() == 0)
     {
         schedule_shares[primary] = 0;
+        return false;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_tx_at_)
+    {
+        pacing_blocked_ = true;
         return false;
     }
 
@@ -322,28 +310,41 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
     return true;
 }
 
-void TxMux::tick_impl()
+bool TxMux::tick_impl()
 {
     auto& entries = table_.entries();
+    pacing_blocked_ = false;
     if (entries.empty())
     {
-        return;
+        return false;
     }
     std::vector<size_t> schedule_shares;
-    init_schedule_shares(schedule_shares);
-
-    bool progress = true;
-    while (progress)
+    // Each round gives every upstream its scheduler budget; budgets weight
+    // upstreams against each other and do not cap the rate. Rounds repeat
+    // until pacing closes or a round sends nothing.
+    for (;;)
     {
-        progress = false;
-        for (size_t n = 0; n < entries.size(); n++)
+        init_schedule_shares(schedule_shares);
+        pacing_blocked_ = false;
+        bool sent = false;
+        bool progress = true;
+        while (progress)
         {
-            const size_t i = (next + n) % entries.size();
-            if (emit_mpdu(i, schedule_shares))
+            progress = false;
+            for (size_t n = 0; n < entries.size(); n++)
             {
-                progress = true;
-                next = (i + 1) % entries.size();
+                const size_t i = (next + n) % entries.size();
+                if (emit_mpdu(i, schedule_shares))
+                {
+                    progress = true;
+                    sent = true;
+                    next = (i + 1) % entries.size();
+                }
             }
+        }
+        if (!sent || pacing_blocked_)
+        {
+            return pacing_blocked_;
         }
     }
 }
@@ -518,20 +519,19 @@ void TxMux::tx_thread_main()
             wlock.lock();
         }
         wlock.unlock();
-        bool pending = false;
+        bool paced = false;
         std::chrono::steady_clock::time_point pacing_until;
         {
             std::lock_guard<std::mutex> lock(table_.mutex());
-            tick_impl();
-            pending = has_pending_tx_data();
+            paced = tick_impl();
             pacing_until = next_tx_at_;
         }
         wlock.lock();
-        // Queued data that pacing already allows but no upstream could send
-        // (e.g. no d-plane yet) waits for the next wake, not a spin.
-        const auto now = std::chrono::steady_clock::now();
-        wake_at = now + k_tx_max_sleep;
-        if (pending && pacing_until > now && pacing_until < wake_at)
+        // Data held back by pacing goes at the next slot (at once if the slot
+        // passed meanwhile). Data no upstream could send (e.g. no d-plane
+        // yet) waits for a wake or the cap, not a spin.
+        wake_at = std::chrono::steady_clock::now() + k_tx_max_sleep;
+        if (paced && pacing_until < wake_at)
         {
             wake_at = pacing_until;
         }

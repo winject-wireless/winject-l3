@@ -59,10 +59,11 @@ public:
     uint64_t tx_send_fail_byt() const;
 
 private:
-    void tick_impl();
+    // Returns true when it stopped because pacing closed (more data may be
+    // sendable at next_tx_at_).
+    bool tick_impl();
     void tx_thread_main();
     void init_schedule_shares(std::vector<size_t>& shares) const;
-    bool has_pending_tx_data() const;
     bool emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares);
     bool note_build_fail(size_t body_bytes);
     uint32_t frame_interval_us(size_t psdu_bytes) const;
@@ -74,6 +75,8 @@ private:
     PhyMode phy_{};
     uint32_t gap_us_ = 96;
     uint32_t pacing_credit_us_ = 0;
+    // Set by emit_mpdu when pacing (next_tx_at_) refused a frame.
+    bool pacing_blocked_ = false;
     uint16_t domain_ = 0;
     std::chrono::steady_clock::time_point next_tx_at_{};
     size_t next = 0;

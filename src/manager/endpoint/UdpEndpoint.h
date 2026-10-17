@@ -102,9 +102,26 @@ private:
     };
 
     void push_tx(bfc::sized_buffer pkt, bool is_fec);
-    // Caller holds tx_mu_. Producers wake the TX thread only when this goes
-    // from false to true; while data is queued the TX pacing timer drains it.
+    // Caller holds tx_mu_.
     bool has_tx_locked() const;
+    // Runs `queue` under tx_mu_, then wakes the TX thread if this upstream
+    // went from no TX data to some. While data is queued the TX pacing timer
+    // drains it, so every producer goes through here.
+    template <typename F>
+    void queue_tx(F&& queue)
+    {
+        bool wake = false;
+        {
+            std::lock_guard<std::mutex> lock(tx_mu_);
+            const bool had_tx = has_tx_locked();
+            queue();
+            wake = !had_tx && has_tx_locked();
+        }
+        if (wake && tx_wake_)
+        {
+            tx_wake_();
+        }
+    }
     void enqueue_air(bfc::sized_buffer pkt);
     void send_app(const uint8_t* data, size_t len);
     void stage_fec_shard_for_tx(size_t max);

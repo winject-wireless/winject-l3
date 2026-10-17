@@ -353,3 +353,28 @@ TEST(TxMuxTest, ThreadSendsUnwokenDataWithinMaxSleep)
     EXPECT_LT(waited, k_tx_max_sleep + std::chrono::milliseconds(5));
     h.mux().stop();
 }
+
+// A scheduler budget below the SDU size (default 256) weights upstreams; it
+// must not cap the rate. One 1400 B SDU spends the share, and the next round
+// refills it while pacing is open, instead of the TX thread sleeping 5 ms.
+TEST(TxMuxTest, SmallBudgetDoesNotCapRate)
+{
+    TxMuxHarness h(256, "OFDM_24M");
+    constexpr size_t k_frames = 40;
+    {
+        std::lock_guard<std::mutex> lock(h.table().mutex());
+        for (size_t i = 0; i < k_frames; i++)
+        {
+            h.up().txq.push_back(make_sdu(1400, static_cast<uint8_t>(i)));
+        }
+    }
+    // Start behind schedule, as after any stall: pacing credit is open.
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    h.mux().start();
+    h.mux().request_tick();
+    // ~669 us per frame: ~27 ms paced; 40 x 5 ms = 200 ms if the share capped
+    // each wake to one frame.
+    EXPECT_EQ(h.wait_received(k_frames, std::chrono::milliseconds(80)),
+              k_frames);
+    h.mux().stop();
+}
