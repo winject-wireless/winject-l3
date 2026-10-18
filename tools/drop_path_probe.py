@@ -309,6 +309,7 @@ def main() -> int:
     p.add_argument("--duration", type=float, default=5.0)
     p.add_argument("--size", type=int, default=1400)
     p.add_argument("--channel", type=int, default=11)
+    p.add_argument("--power", type=int, default=20, help="winject TX power dBm (both radios)")
     args = p.parse_args()
 
     manager = os.environ.get(
@@ -342,7 +343,7 @@ winject.local_ip      = {args.host}
 winject.console       = 22
 winject.channel       = {args.channel}
 winject.modulation    = OFDM_24M
-winject.power         = 20
+winject.power         = {args.power}
 winject.domain        = 1234
 winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
@@ -369,7 +370,7 @@ winject.local_ip      = {args.host}
 winject.console       = 22
 winject.channel       = {args.channel}
 winject.modulation    = OFDM_24M
-winject.power         = 20
+winject.power         = {args.power}
 winject.domain        = 1234
 winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
