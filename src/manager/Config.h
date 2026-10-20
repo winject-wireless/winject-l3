@@ -15,6 +15,8 @@ enum class UpstreamMode
     udp_static,
     udp_client,
     udp_server,
+    // In-process datagrams via named lossy queues. See QueueEndpoint.
+    queue,
 };
 
 // UDP peer endpoints: both set = static; rx only = server bind; tx only =
@@ -61,7 +63,14 @@ enum class RadioFcsConfig
 struct UpstreamConfig
 {
     size_t index = 0;
+    UpstreamMode mode = UpstreamMode::udp_static;
     UdpPeerEndpoint endpoint;
+    // QUEUE_FORWARDING: registry names. queue_in is consumed (app toward
+    // air); queue_out is produced (air toward app). reactor is the host's
+    // running cv_reactor. Ignored for UDP modes.
+    std::string queue_in;
+    std::string queue_out;
+    std::string reactor;
     uint8_t bus_tx = 0;
     uint8_t bus_rx = 0;
     size_t scheduler_budget = 256;

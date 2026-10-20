@@ -480,6 +480,89 @@ upstream-0.tx               = 127.0.0.1:21082
     std::remove(path.c_str());
 }
 
+TEST(ConfigTest, LoadsQueueForwarding)
+{
+    const std::string path = write_conf(R"(
+winject.channel       = 1
+winject.modulation    = OFDM_24M
+winject.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = QUEUE_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.queue_in         = video-to-radio
+upstream-0.queue_out        = radio-to-video
+upstream-0.reactor          = host-reactor
+upstream-0.fec.type         = RS_BLOCK_ERASURE
+upstream-0.fec.k            = 10
+upstream-0.fec.n            = 12
+)");
+    Config cfg;
+    std::string err;
+    ASSERT_TRUE(cfg.load(path, &err)) << err;
+    ASSERT_EQ(cfg.upstreams.size(), 1u);
+    EXPECT_EQ(cfg.upstreams[0].mode, UpstreamMode::queue);
+    EXPECT_EQ(cfg.upstreams[0].queue_in, "video-to-radio");
+    EXPECT_EQ(cfg.upstreams[0].queue_out, "radio-to-video");
+    EXPECT_EQ(cfg.upstreams[0].reactor, "host-reactor");
+    EXPECT_EQ(cfg.upstreams[0].fec_type, FecType::RsBlockErasure);
+    EXPECT_EQ(cfg.upstreams[0].fec_k, 10);
+    EXPECT_EQ(cfg.upstreams[0].fec_n, 12);
+    EXPECT_TRUE(cfg.upstreams[0].endpoint.rx.empty());
+    EXPECT_TRUE(cfg.upstreams[0].endpoint.tx.empty());
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsQueueForwardingWithoutAPair)
+{
+    const std::string path = write_conf(R"(
+winject.channel       = 1
+winject.modulation    = OFDM_24M
+winject.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = QUEUE_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.queue_in         = video-to-radio
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("queue"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsSharedQueueNames)
+{
+    const std::string path = write_conf(R"(
+winject.channel       = 1
+winject.modulation    = OFDM_24M
+winject.power         = 20
+winject.domain        = 1234
+upstream.size = 2
+upstream-0.mode             = QUEUE_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.queue_in         = shared
+upstream-0.queue_out        = radio-to-video
+upstream-0.reactor          = host-reactor
+upstream-1.mode             = QUEUE_FORWARDING
+upstream-1.tx_bus           = c3
+upstream-1.scheduler_budget = 100
+upstream-1.queue_in         = other-to-radio
+upstream-1.queue_out        = shared
+upstream-1.reactor          = host-reactor
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("queue name"), std::string::npos);
+    std::remove(path.c_str());
+}
+
 TEST(ConfigTest, LoadsRadioDeviceFromLegacyKeys)
 {
     const std::string path = write_conf(R"(

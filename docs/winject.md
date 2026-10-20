@@ -123,7 +123,7 @@ The radio m-plane, d-plane and counters are specified in the winject-radio-esp32
 ### Layering (TX)
 
 ```
-UDP application datagram                    (user SDU, ≤ 1445 bytes)
+UDP or queue application datagram           (user SDU, ≤ 1445 bytes)
         |
         v  optional RsBlockErasure          (k-of-n Reed–Solomon shards)
 air SDU (FEC shard or raw datagram)
@@ -138,7 +138,9 @@ slot payload                                (per upstream)
 radio (raw 802.11 TX)
 ```
 
-RX reverses the chain: demux slots → route by LC bus → check LC seq → FEC decode (if the LC header marks a shard) → deliver UDP.
+RX reverses the chain: demux slots → route by LC bus → check LC seq → FEC decode (if the LC header marks a shard) → deliver a UDP datagram or push one queue entry.
+
+`QUEUE_FORWARDING` (`upstream-N.mode`) carries the same SDU as UDP, through a pair of host-owned lossy queues instead of a socket. `queue_in` is what the application sends (a stream sender's `queue_transport_tx`); `queue_out` is what the application receives (its `queue_transport_rx`). The host runs the named `cv_reactor`. See [mplane.md](mplane.md).
 
 ### 802.11 header
 

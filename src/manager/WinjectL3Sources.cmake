@@ -25,5 +25,8 @@ set(WINJECT_L3_SOURCES
     radio/RxDemux.cpp
     endpoint/Upstream.cpp
     endpoint/UpstreamStats.cpp
+    endpoint/DatagramAir.cpp
+    endpoint/HostEndpoint.cpp
     endpoint/UdpEndpoint.cpp
+    endpoint/QueueEndpoint.cpp
 )

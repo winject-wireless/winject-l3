@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <unordered_set>
 
 namespace winject
 {
@@ -40,6 +41,11 @@ static bool parse_mode(const std::string& text, UpstreamMode* mode)
     if (text == "UDP_SERVER_FORWARDING")
     {
         *mode = UpstreamMode::udp_server;
+        return true;
+    }
+    if (text == "QUEUE_FORWARDING")
+    {
+        *mode = UpstreamMode::queue;
         return true;
     }
     return false;
@@ -448,6 +454,45 @@ bool Config::load(const std::string& path, std::string* error)
             }
         }
 
+        const std::string queue_in =
+            parser.arg(key_of(i, "queue_in")).value_or("");
+        const std::string queue_out =
+            parser.arg(key_of(i, "queue_out")).value_or("");
+        const std::string queue_reactor =
+            parser.arg(key_of(i, "reactor")).value_or("");
+        if (mode == UpstreamMode::queue)
+        {
+            if (!rx.empty() || !tx.empty())
+            {
+                *error = key_of(i, "mode") +
+                         " does not use rx/tx or bind/connect addresses";
+                return false;
+            }
+            if (queue_in.empty() || queue_out.empty() || queue_reactor.empty())
+            {
+                *error = "upstream-" + std::to_string(i) +
+                         " needs queue_in, queue_out, and reactor";
+                return false;
+            }
+            if (queue_in == queue_out)
+            {
+                *error = "upstream-" + std::to_string(i) +
+                         " queue_in and queue_out must differ";
+                return false;
+            }
+            u.mode = UpstreamMode::queue;
+            u.queue_in = queue_in;
+            u.queue_out = queue_out;
+            u.reactor = queue_reactor;
+            upstreams.push_back(std::move(u));
+            continue;
+        }
+        if (!queue_in.empty() || !queue_out.empty() || !queue_reactor.empty())
+        {
+            *error = key_of(i, "mode") +
+                     " does not use queue_in, queue_out, or reactor";
+            return false;
+        }
         if (rx.empty() && tx.empty())
         {
             *error = "upstream-" + std::to_string(i) +
@@ -461,8 +506,9 @@ bool Config::load(const std::string& path, std::string* error)
             *error = key_of(i, "mode") + " does not match rx/tx";
             return false;
         }
+        u.mode = inferred;
         u.endpoint = UdpPeerEndpoint{std::move(rx), std::move(tx)};
-        upstreams.push_back(u);
+        upstreams.push_back(std::move(u));
     }
     if (!validate_upstreams(upstreams, error))
     {
@@ -514,6 +560,32 @@ bool Config::validate_upstreams(const std::vector<UpstreamConfig>& upstreams,
             if (error != nullptr)
             {
                 *error = "shared tx_bus with FEC enabled";
+            }
+            return false;
+        }
+    }
+    std::unordered_set<std::string> queue_names;
+    for (const auto& u : upstreams)
+    {
+        if (u.mode != UpstreamMode::queue)
+        {
+            continue;
+        }
+        if (u.queue_in.empty() || u.queue_out.empty() || u.reactor.empty() ||
+            u.queue_in == u.queue_out)
+        {
+            if (error != nullptr)
+            {
+                *error = "queue upstream needs distinct queue_in and queue_out";
+            }
+            return false;
+        }
+        if (!queue_names.insert(u.queue_in).second ||
+            !queue_names.insert(u.queue_out).second)
+        {
+            if (error != nullptr)
+            {
+                *error = "queue name used by more than one upstream";
             }
             return false;
         }

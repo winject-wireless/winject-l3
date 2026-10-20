@@ -4,6 +4,7 @@
 #include "console/ConsoleParse.h"
 #include "console/MplaneCorrelation.h"
 #include "console/MplaneErrno.h"
+#include "endpoint/QueueEndpoint.h"
 #include "endpoint/UdpEndpoint.h"
 #include "frames/Mpdu.h"
 #include "radio/RadioDefs.h"
@@ -41,20 +42,34 @@ bool App::add_upstream(const UpstreamConfig& uc)
     {
         return false;
     }
-    auto up = std::make_shared<UdpEndpoint>();
-    if (!up->open(reactor, uc,
-                  [this]()
-                  {
-                      tx_mux_.request_tick();
-                  }))
+    const auto tx_wake = [this]()
     {
-        return false;
+        tx_mux_.request_tick();
+    };
+    std::shared_ptr<HostEndpoint> up;
+    if (uc.mode == UpstreamMode::queue)
+    {
+        auto queue = std::make_shared<QueueEndpoint>();
+        if (!queue->open(reactor, uc, tx_wake))
+        {
+            return false;
+        }
+        up = std::move(queue);
+    }
+    else
+    {
+        auto udp = std::make_shared<UdpEndpoint>();
+        if (!udp->open(reactor, uc, tx_wake))
+        {
+            return false;
+        }
+        up = std::move(udp);
     }
     radio_upstream_table_.add(up, radio, uc.bus_tx, uc.bus_rx,
                               uc.scheduler_budget);
     upstreams.push_back(up);
-    LOG_INF("upstream-%zu bus_tx=%s bus_rx=%s", uc.index,
-            uc.bus_tx ? bus_to_string(uc.bus_tx).c_str() : "-",
+    LOG_INF("upstream-%zu type=%s bus_tx=%s bus_rx=%s", uc.index,
+            up->type_name(), uc.bus_tx ? bus_to_string(uc.bus_tx).c_str() : "-",
             uc.bus_rx ? bus_to_string(uc.bus_rx).c_str() : "-");
     return true;
 }
@@ -148,7 +163,7 @@ bool App::set_upstream_fec(size_t index, FecType type, int k, int n,
     {
         return fail("invalid upstream index");
     }
-    UdpEndpoint* udp = upstreams[index].get();
+    HostEndpoint* udp = upstreams[index].get();
     if (!udp->set_fec(type, k, n, error))
     {
         return false;
@@ -177,7 +192,7 @@ bool App::get_upstream_fec(size_t index, FecType* type, int* k, int* n,
     {
         return fail("invalid upstream index");
     }
-    UdpEndpoint* udp = upstreams[index].get();
+    HostEndpoint* udp = upstreams[index].get();
     udp->get_fec(type, k, n);
     return true;
 }
@@ -221,13 +236,22 @@ bool App::fill_upstream_view(size_t index, ManagerUpstreamView* out) const
     out->id = static_cast<uint8_t>(uc.index);
     out->bus_tx = uc.bus_tx;
     out->bus_rx = uc.bus_rx;
-    out->type = "UDP";
+    out->type = uc.mode == UpstreamMode::queue ? "QUEUE" : "UDP";
     if (udp != nullptr)
     {
-        out->rx = udp->peer_endpoints().rx;
-        out->tx = udp->peer_endpoints().tx;
+        out->rx = udp->endpoint_rx();
+        out->tx = udp->endpoint_tx();
         out->fec_timeout_ms = udp->fec_timeout_ms();
         udp->get_fec(&out->fec, &out->fec_k, &out->fec_n);
+    }
+    else if (uc.mode == UpstreamMode::queue)
+    {
+        out->rx = uc.queue_in;
+        out->tx = uc.queue_out;
+        out->fec = uc.fec_type;
+        out->fec_k = uc.fec_k;
+        out->fec_n = uc.fec_n;
+        out->fec_timeout_ms = uc.fec_timeout_ms;
     }
     else
     {
@@ -297,6 +321,7 @@ bool App::console_add_upstream(const ManagerUpstreamView& spec,
     uc.bus_rx = spec.bus_rx;
     uc.scheduler_budget = spec.quanta;
     uc.endpoint = UdpPeerEndpoint{spec.rx, spec.tx};
+    uc.mode = upstream_mode(uc.endpoint);
     uc.fec_type = spec.fec;
     uc.fec_k = spec.fec_k;
     uc.fec_n = spec.fec_n;
@@ -488,7 +513,7 @@ std::vector<uint8_t> console_upstream_ids(const std::vector<uint8_t>& ids,
     return want;
 }
 
-void fill_upstream_fec_fields(const UdpEndpoint* udp, FecType* fec, int* k,
+void fill_upstream_fec_fields(const HostEndpoint* udp, FecType* fec, int* k,
                               int* n)
 {
     if (fec == nullptr || k == nullptr || n == nullptr)
@@ -637,7 +662,7 @@ void App::refresh_host_metrics()
         ->store(radio_proto_ok_ ? 1u : 0u);
     for (size_t i = 0; i < upstreams.size(); ++i)
     {
-        const UdpEndpoint* up = upstreams[i].get();
+        const HostEndpoint* up = upstreams[i].get();
         if (up == nullptr)
         {
             continue;

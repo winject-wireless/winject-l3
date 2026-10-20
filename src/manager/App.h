@@ -5,7 +5,7 @@
 #include "console/ConsoleClient.h"
 #include "console/ConsoleService.h"
 #include "console/ManagerConsoleTypes.h"
-#include "endpoint/UdpEndpoint.h"
+#include "endpoint/HostEndpoint.h"
 #include "radio/RadioManager.h"
 #include "radio/RadioUpstreamTable.h"
 #include "radio/RxDemux.h"
@@ -104,7 +104,7 @@ private:
     RadioManager radio_manager_;
     RxDemux rx_demux_{radio_upstream_table_};
     std::shared_ptr<WifiUdp> radio;
-    std::vector<std::shared_ptr<UdpEndpoint>> upstreams;
+    std::vector<std::shared_ptr<HostEndpoint>> upstreams;
     OneShotTimer reconnect_timer_;
     // Runs ConsoleClient::poll_deadlines() at the earliest request deadline.
     OneShotTimer console_deadline_timer_;
