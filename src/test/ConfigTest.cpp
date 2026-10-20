@@ -46,7 +46,6 @@ upstream-0.tx               = 127.0.0.1:21082
     Config cfg;
     std::string err;
     ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_TRUE(cfg.radio_device.have_mplane);
     EXPECT_TRUE(cfg.radio_device.have_dplane);
     EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 22);
     EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9000);
@@ -334,7 +333,6 @@ winject.modulation    = OFDM_24M
 winject.power         = 20
 winject.domain        = 1234
 winject.local_ip      = 127.0.0.1
-winject.skip_console  = 1
 upstream.size = 1
 upstream-0.mode             = UDP_STATIC_FORWARDING
 upstream-0.tx_bus           = b2
@@ -344,11 +342,12 @@ upstream-0.rx               = 0.0.0.0:22081
 upstream-0.tx               = 127.0.0.1:21082
 )";
     {
-        const std::string path = write_conf(base);
+        const std::string path =
+            write_conf(base + "winject.skip_console = 1\n");
         Config cfg;
         std::string err;
         EXPECT_FALSE(cfg.load(path, &err));
-        EXPECT_NE(err.find("radio_fcs"), std::string::npos);
+        EXPECT_NE(err.find("skip_console"), std::string::npos);
         std::remove(path.c_str());
     }
     {
@@ -357,7 +356,7 @@ upstream-0.tx               = 127.0.0.1:21082
         Config cfg;
         std::string err;
         ASSERT_TRUE(cfg.load(path, &err)) << err;
-        EXPECT_FALSE(cfg.radio_device.have_mplane);
+        EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 22);
         EXPECT_EQ(cfg.radio_device.fcs, RadioFcsConfig::signal);
         std::remove(path.c_str());
     }
@@ -457,7 +456,7 @@ upstream-0.tx               = 127.0.0.1:21082
     }
 }
 
-TEST(ConfigTest, RadioDeviceOptional)
+TEST(ConfigTest, RejectsMissingDevice)
 {
     const std::string path = write_conf(R"(
 winject.channel       = 1
@@ -474,9 +473,8 @@ upstream-0.tx               = 127.0.0.1:21082
 )");
     Config cfg;
     std::string err;
-    ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_FALSE(cfg.radio_device.have_mplane);
-    EXPECT_FALSE(cfg.radio_device.have_dplane);
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("device"), std::string::npos);
     std::remove(path.c_str());
 }
 
@@ -487,6 +485,11 @@ TEST(ConfigTest, ValidateAcceptsFilledStruct)
     cfg.modulation = "OFDM_24M";
     cfg.power_dbm = 20;
     cfg.domain = 0x1234;
+    cfg.radio_device.mplane.sin_family = AF_INET;
+    ASSERT_EQ(
+        inet_pton(AF_INET, "192.168.253.11", &cfg.radio_device.mplane.sin_addr),
+        1);
+    cfg.radio_device.mplane.sin_port = htons(22);
     UpstreamConfig u;
     u.index = 0;
     u.mode = UpstreamMode::udp_server;
@@ -506,11 +509,17 @@ TEST(ConfigTest, ValidateAcceptsFilledStruct)
     cfg.modulation = "ofdm_24m";
     EXPECT_FALSE(cfg.validate(&err));
     EXPECT_NE(err.find("modulation"), std::string::npos);
+
+    cfg.modulation = "OFDM_24M";
+    cfg.radio_device.mplane = {};
+    EXPECT_FALSE(cfg.validate(&err));
+    EXPECT_NE(err.find("mplane"), std::string::npos);
 }
 
 TEST(ConfigTest, LoadsQueueForwarding)
 {
     const std::string path = write_conf(R"(
+winject.device        = 192.168.32.1
 winject.channel       = 1
 winject.modulation    = OFDM_24M
 winject.power         = 20
@@ -546,6 +555,7 @@ upstream-0.fec.n            = 12
 TEST(ConfigTest, RejectsQueueForwardingWithoutAPair)
 {
     const std::string path = write_conf(R"(
+winject.device        = 192.168.32.1
 winject.channel       = 1
 winject.modulation    = OFDM_24M
 winject.power         = 20
@@ -566,6 +576,7 @@ upstream-0.queue_in         = video-to-radio
 TEST(ConfigTest, RejectsSharedQueueNames)
 {
     const std::string path = write_conf(R"(
+winject.device        = 192.168.32.1
 winject.channel       = 1
 winject.modulation    = OFDM_24M
 winject.power         = 20
@@ -612,7 +623,6 @@ upstream-0.tx               = 127.0.0.1:21082
     Config cfg;
     std::string err;
     ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_TRUE(cfg.radio_device.have_mplane);
     EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 2201u);
     EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9001u);
     std::remove(path.c_str());

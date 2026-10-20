@@ -29,7 +29,7 @@ Bench configs use loopback `console_in` per manager, for example A `127.0.0.1:24
 | `NOK EINVAL` | Missing, unknown, repeated, empty or out-of-range argument |
 | `NOK ENOENT` | Unknown upstream id |
 | `NOK EEXIST` | `add_upstream` with an id already in use |
-| `NOK ENODEV` | Radio command while no radio m-plane is configured or connected |
+| `NOK ENODEV` | Radio command while the radio m-plane is not connected |
 | `NOK ENODATA` | `radio_caps_info` while the FCS mode is not known yet |
 | `NOK ENOSYS` | Unknown command |
 | `NOK ECANCELED` | A forwarded radio command was dropped because the radio connection was reset (for example by `radio_device mplane=`) |
@@ -103,11 +103,11 @@ Procedure for a new connection:
 
 | Request | Description | Response |
 |---|---|---|
-| `radio_device\|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] [fcs=AUTO\|SIGNAL\|ACTUAL]` | Set or read the radio the manager drives. Only `id=0`. Keys left out keep their value; `id=0` alone reads. Addresses cannot be cleared | `OK radio_device id=0 mplane=<ip:port\|-> dplane=<ip:port\|-> fcs=<mode>` |
+| `radio_device\|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] [fcs=AUTO\|SIGNAL\|ACTUAL]` | Set or read the radio the manager drives. Only `id=0`. Keys left out keep their value; `id=0` alone reads. Addresses cannot be cleared | `OK radio_device id=0 mplane=<ip:port> dplane=<ip:port\|-> fcs=<mode>` |
 
-`mplane` selects the radio m-plane (omit or use `winject.skip_console = 1` in config to leave it unset). `dplane` is the radio's single UDP port for inject, registration and forward. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
+`mplane` is the radio m-plane address. Config always sets it. A `radio_device` command may omit `mplane=` to keep the current address; it cannot be cleared. `dplane` is the radio's single UDP port for inject, registration and forward. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
 
-These are forwarded to the radio's m-plane when `radio_device` has an `mplane` address and the protocol versions match; otherwise they reply `NOK ENODEV` or `NOK EPROTO`. `radio_caps_info` is the exception (see below).
+These are forwarded to the radio's m-plane when the console is up and the protocol versions match; otherwise they reply `NOK ENODEV` or `NOK EPROTO`. `radio_caps_info` is the exception (see below).
 
 | Request | Description | Response |
 |---|---|---|
@@ -155,7 +155,7 @@ Run the Linux manager with `winject-manager <config file>`. The file holds `key 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `winject.device` | | Optional; with `console` and `dplane_port` sets `radio_device id=0` at startup |
+| `winject.device` | required | Radio address. With `console` and `dplane_port` it sets the m-plane and d-plane |
 | `winject.console` | `22` | Radio m-plane UDP port (ESP32 `22`, Realtek `2201`) |
 | `winject.dplane_port` | `9000` | Radio d-plane port (`winject.inject_port` accepted as an alias) |
 | `winject.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
@@ -163,7 +163,7 @@ Run the Linux manager with `winject-manager <config file>`. The file holds `key 
 | `winject.power` | `20` | TX power, dBm |
 | `winject.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
 | `winject.domain` | required | 16-bit hex domain, non-zero; carried in Address 3 (see [winject.md](winject.md)) |
-| `winject.skip_console` | `0` | `1`: do not set `radio_device mplane` from the config |
+| `winject.skip_console` | `0` | Must be `0` or omitted. `1` is rejected: the radio m-plane is required |
 | `winject.radio_fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
 | `winject.stats_sec` | `0` | Log stream stats every N seconds; `0` = off. Overridden by the `WINJECT_STATS_SEC` environment variable |
 

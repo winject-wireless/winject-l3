@@ -35,7 +35,6 @@ winject::Config make_config()
     cfg.domain = 0x1234;
     cfg.stats_sec = 1;
     cfg.radio_device.fcs = winject::RadioFcsConfig::signal;
-    cfg.radio_device.have_mplane = true;
     cfg.radio_device.mplane = ipv4_port("192.168.253.11", 22);
     cfg.radio_device.have_dplane = true;
     cfg.radio_device.dplane = ipv4_port("192.168.253.11", 9000);

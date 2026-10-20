@@ -453,14 +453,7 @@ std::string console_format_radio_device(const ManagerRadioDeviceView& view)
 {
     std::string s = "radio_device id=" + std::to_string(view.id);
     s += " mplane=";
-    if (view.device.have_mplane)
-    {
-        s += console_format_ipv4_port(view.device.mplane);
-    }
-    else
-    {
-        s += '-';
-    }
+    s += console_format_ipv4_port(view.device.mplane);
     s += " dplane=";
     if (view.device.have_dplane)
     {

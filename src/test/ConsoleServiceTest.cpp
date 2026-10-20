@@ -2,6 +2,7 @@
 #include "console/ManagerConsoleTypes.h"
 #include "console/MplaneErrno.h"
 
+#include <arpa/inet.h>
 #include <gtest/gtest.h>
 #include <netinet/in.h>
 #include <string.h>
@@ -140,6 +141,10 @@ TEST(ConsoleParseTest, FormatRadioDevice)
 {
     ManagerRadioDeviceView view;
     view.id = 0;
+    view.device.mplane.sin_family = AF_INET;
+    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &view.device.mplane.sin_addr),
+              1);
+    view.device.mplane.sin_port = htons(22);
     EXPECT_EQ(console_format_radio_device(view),
-              "radio_device id=0 mplane=- dplane=- fcs=AUTO");
+              "radio_device id=0 mplane=192.168.32.1:22 dplane=- fcs=AUTO");
 }

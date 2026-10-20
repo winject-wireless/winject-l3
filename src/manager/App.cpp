@@ -799,11 +799,6 @@ void App::apply_radio_caps_mplane(const MplaneResult& r)
 
 void App::send_radio_unavailable_nok(ManagerConsoleReply reply) const
 {
-    if (!cfg.radio_device.have_mplane)
-    {
-        reply.send_nok(k_enodev);
-        return;
-    }
     if (radio_version_known_ && !radio_proto_ok_)
     {
         reply.send_nok(k_eproto);
@@ -859,7 +854,6 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
     RadioDeviceConfig next = cfg.radio_device;
     if (patch.have_mplane)
     {
-        next.have_mplane = true;
         next.mplane = patch.mplane;
     }
     if (patch.have_dplane)
@@ -873,8 +867,7 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
     }
     const bool mplane_changed =
         patch.have_mplane &&
-        (!cfg.radio_device.have_mplane ||
-         cfg.radio_device.mplane.sin_addr.s_addr !=
+        (cfg.radio_device.mplane.sin_addr.s_addr !=
              patch.mplane.sin_addr.s_addr ||
          cfg.radio_device.mplane.sin_port != patch.mplane.sin_port);
     const bool dplane_changed =
@@ -896,10 +889,7 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
         radio_version_known_ = false;
         radio_proto_ok_ = false;
         apply_configured_fcs();
-        if (cfg.radio_device.have_mplane)
-        {
-            schedule_reconnect(std::chrono::milliseconds(0));
-        }
+        schedule_reconnect(std::chrono::milliseconds(0));
     }
     else if (fcs_changed)
     {
@@ -1335,7 +1325,7 @@ void App::drop_console()
     console.close();
     console_deadline_timer_.cancel();
     console_ok = false;
-    if (cfg.radio_device.have_mplane && !reconnect_timer_.armed())
+    if (!reconnect_timer_.armed())
     {
         schedule_reconnect(k_reconnect_interval);
     }
@@ -1346,7 +1336,7 @@ void App::schedule_reconnect(std::chrono::milliseconds after)
     reconnect_timer_.arm(after,
                          [this]()
                          {
-                             if (!cfg.radio_device.have_mplane || console_ok)
+                             if (console_ok)
                              {
                                  return;
                              }
@@ -1596,18 +1586,11 @@ int App::run()
     {
         return 1;
     }
-    if (cfg.radio_device.have_mplane)
+    begin_console();
+    if (!console_ok)
     {
-        begin_console();
-        if (!console_ok)
-        {
-            LOG_WRN("waiting for radio m-plane %s",
-                    console_format_ipv4_port(cfg.radio_device.mplane).c_str());
-        }
-    }
-    else
-    {
-        LOG_INF("no radio m-plane configured; radio is not managed");
+        LOG_WRN("waiting for radio m-plane %s",
+                console_format_ipv4_port(cfg.radio_device.mplane).c_str());
     }
     ManagerRadioDeviceView rd_view;
     rd_view.id = 0;

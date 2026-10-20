@@ -586,16 +586,6 @@ void ConsoleClient::apply_radio(const Config& cfg, uint8_t save_slot,
 void ConsoleClient::program(const Config& cfg, DoneFn done)
 {
     std::string err;
-    if (!cfg.radio_device.have_mplane)
-    {
-        MplaneResult r;
-        r.error = "no radio m-plane";
-        if (done)
-        {
-            done(std::move(r));
-        }
-        return;
-    }
     if (!start_connect(cfg.radio_device.mplane, &err) || !finish_connect(&err))
     {
         MplaneResult r;

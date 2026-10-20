@@ -80,11 +80,10 @@ struct UpstreamConfig
     int fec_timeout_ms = 20;
 };
 
-// One radio the manager drives (docs/mplane.md § radio_device). Each address
-// starts unset; once set it can change but not be cleared.
+// One radio the manager drives (docs/mplane.md § radio_device). mplane is
+// required. dplane starts unset; once set it can change but not be cleared.
 struct RadioDeviceConfig
 {
-    bool have_mplane = false;
     sockaddr_in mplane{};  // radio m-plane (ESP32 :22, Realtek :2201)
     bool have_dplane = false;
     sockaddr_in dplane{};  // radio d-plane: inject, registration, forward

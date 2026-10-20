@@ -134,10 +134,18 @@ bool Config::load(const std::string& path, std::string* error)
         }
         console_port = *console;
     }
-    bool skip_console = false;
     if (auto skip = parser.arg("winject.skip_console"))
     {
-        skip_console = *skip == "1" || *skip == "true";
+        if (*skip == "1" || *skip == "true")
+        {
+            *error = "winject.skip_console cannot omit the radio mplane";
+            return false;
+        }
+        if (*skip != "0" && *skip != "false")
+        {
+            *error = "invalid winject.skip_console";
+            return false;
+        }
     }
 
     auto ch = parser.as<unsigned>("winject.channel");
@@ -287,30 +295,26 @@ bool Config::load(const std::string& path, std::string* error)
             dplane_port = *inj;
         }
     }
-    if (have_device)
+    if (!have_device)
     {
-        in_addr dev_ip = {};
-        if (!parse_host(device, &dev_ip))
-        {
-            *error = "cannot resolve winject.device";
-            return false;
-        }
-        if (!skip_console)
-        {
-            radio_device.have_mplane = true;
-            radio_device.mplane = {};
-            radio_device.mplane.sin_family = AF_INET;
-            radio_device.mplane.sin_addr = dev_ip;
-            radio_device.mplane.sin_port =
-                htons(static_cast<uint16_t>(console_port));
-        }
-        radio_device.have_dplane = true;
-        radio_device.dplane = {};
-        radio_device.dplane.sin_family = AF_INET;
-        radio_device.dplane.sin_addr = dev_ip;
-        radio_device.dplane.sin_port =
-            htons(static_cast<uint16_t>(dplane_port));
+        *error = "winject.device is required";
+        return false;
     }
+    in_addr dev_ip = {};
+    if (!parse_host(device, &dev_ip))
+    {
+        *error = "cannot resolve winject.device";
+        return false;
+    }
+    radio_device.mplane = {};
+    radio_device.mplane.sin_family = AF_INET;
+    radio_device.mplane.sin_addr = dev_ip;
+    radio_device.mplane.sin_port = htons(static_cast<uint16_t>(console_port));
+    radio_device.have_dplane = true;
+    radio_device.dplane = {};
+    radio_device.dplane.sin_family = AF_INET;
+    radio_device.dplane.sin_addr = dev_ip;
+    radio_device.dplane.sin_port = htons(static_cast<uint16_t>(dplane_port));
     stats_sec = parser.as<unsigned>("winject.stats_sec").value_or(0);
     if (const char* env = std::getenv("WINJECT_STATS_SEC"))
     {
@@ -514,13 +518,6 @@ bool Config::load(const std::string& path, std::string* error)
     {
         return false;
     }
-    if (have_device && skip_console &&
-        radio_device.fcs == RadioFcsConfig::auto_detect)
-    {
-        *error =
-            "winject.skip_console requires winject.radio_fcs=signal|actual";
-        return false;
-    }
     return validate(error);
 }
 
@@ -569,19 +566,13 @@ bool Config::validate(std::string* error) const
     {
         return addr.sin_family == AF_INET && addr.sin_port != 0;
     };
-    if (radio_device.have_mplane && !ipv4_set(radio_device.mplane))
+    if (!ipv4_set(radio_device.mplane))
     {
-        return fail("invalid radio mplane address");
+        return fail("radio mplane address is required");
     }
     if (radio_device.have_dplane && !ipv4_set(radio_device.dplane))
     {
         return fail("invalid radio dplane address");
-    }
-    if (radio_device.have_dplane && !radio_device.have_mplane &&
-        radio_device.fcs == RadioFcsConfig::auto_detect)
-    {
-        return fail(
-            "winject.skip_console requires winject.radio_fcs=signal|actual");
     }
     if (upstreams.empty())
     {
