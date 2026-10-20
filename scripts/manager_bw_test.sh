@@ -3,8 +3,9 @@
 #
 # UDP forwarding (lat_udp_*.cfg by default; --bw uses bw_*.cfg).
 #
-# Each manager programs its radio (PHY, CCA, domain filter) at startup; the
-# script never talks to a radio directly. Two bus pairs: b2/a1 for A→B,
+# An existing winject-manager is stopped (SIGTERM) and waited on first. Each
+# test manager then programs its radio (PHY, CCA, domain filter); the script
+# never talks to a radio directly. Two bus pairs: b2/a1 for A→B,
 # c3/d4 for B→A. Edit the cfg files for radio IPs, or pass
 # --a/--b/--host (or legacy positional RADIO_A RADIO_B HOST).
 #
@@ -185,7 +186,11 @@ CFG_CCA="${CFG_CCA:-0}"
 CFG_MODULATION="${CFG_MODULATION%%,*}"
 
 if [[ "$HOST_SET" -eq 0 ]]; then
-  HOST_IP="$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('$RADIO_A', 22)); print(s.getsockname()[0]); s.close()")"
+  HOST_IP="$(ip -4 route get "$RADIO_A" | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  if [[ -z "$HOST_IP" ]]; then
+    echo "error: cannot find local address toward $RADIO_A" >&2
+    exit 1
+  fi
 fi
 
 ensure_winject_manager "$ROOT"
@@ -232,17 +237,12 @@ patch_conf "$CONF_A" "$RADIO_A" 2400 >"$CONF_A_RUN"
 patch_conf "$CONF_B" "$RADIO_B" 2410 >"$CONF_B_RUN"
 
 cleanup() {
-  if [[ -n "${PID_A:-}" ]]; then kill "$PID_A" 2>/dev/null || true
-  fi
-  if [[ -n "${PID_B:-}" ]]; then kill "$PID_B" 2>/dev/null || true
-  fi
+  stop_winject_managers || true
 }
 trap cleanup EXIT INT TERM
 
-# Match the process name only: -f would also match shells whose command line
-# mentions winject-manager (and kill the caller).
-pkill -x winject-manager 2>/dev/null || true
-sleep 1
+# Release any manager that already holds the radios, then start this test's.
+stop_winject_managers
 
 echo "managers [$PATH_LABEL]: A=$RADIO_A B=$RADIO_B host=$HOST_IP logs=$LOG_DIR"
 "$MANAGER" "$CONF_A_RUN" >"$LOG_DIR/manager_a.log" 2>&1 &
@@ -250,24 +250,9 @@ PID_A=$!
 "$MANAGER" "$CONF_B_RUN" >"$LOG_DIR/manager_b.log" 2>&1 &
 PID_B=$!
 
-echo "waiting for managers..."
-for i in $(seq 1 20); do
-  if grep -q "manager running" "$LOG_DIR/manager_a.log" \
-    && grep -q "manager running" "$LOG_DIR/manager_b.log"; then
-    break
-  fi
-  sleep 0.25
-done
-if ! grep -q "manager running" "$LOG_DIR/manager_a.log"; then
-  echo "manager A upstream setup failed; tail $LOG_DIR/manager_a.log"
-  tail -20 "$LOG_DIR/manager_a.log"
-  exit 1
-fi
-if ! grep -q "manager running" "$LOG_DIR/manager_b.log"; then
-  echo "manager B upstream setup failed; tail $LOG_DIR/manager_b.log"
-  tail -20 "$LOG_DIR/manager_b.log"
-  exit 1
-fi
+echo "waiting for test managers to acquire the radios..."
+wait_manager_radio "$LOG_DIR/manager_a.log"
+wait_manager_radio "$LOG_DIR/manager_b.log"
 
 export WINJECT_RADIO_SNAP_DIR="$LOG_DIR"
 echo "running bw_test $PATH_FLAG --a $RADIO_A --b $RADIO_B --drop-stages ${BW_ARGS[*]}"

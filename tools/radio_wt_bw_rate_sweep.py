@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Sweep payload offer (kbps) between two ESP32 radios via running managers.
+"""Sweep payload offer (kbps) between two ESP32 radios via this test's managers.
+
+Stops any running winject-manager, then waits until these managers have
+programmed the radios. Does not open a radio console.
 
 Writes CSV rows:
   requested_rate, a_to_b_rate, a_to_b_loss, a_to_b_rssi, b_to_a_rate, b_to_a_loss, b_to_a_rssi
@@ -84,7 +87,6 @@ LOG_DIR="${{TMPDIR:-/tmp}}/winject-bw-sweep-$$"
 mkdir -p "$LOG_DIR"
 RADIO_A="{a}"
 RADIO_B="{b}"
-HOST_IP="$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('$RADIO_A', 22)); print(s.getsockname()[0]); s.close()")"
 CONF_A="$ROOT/configuration/winject-tests/esp32/lat_udp_a.cfg"
 CONF_B="$ROOT/configuration/winject-tests/esp32/lat_udp_b.cfg"
 patch_conf() {{
@@ -100,24 +102,12 @@ patch_conf() {{
 }}
 patch_conf "$CONF_A" "$RADIO_A" 2400 >"$LOG_DIR/winject_a.conf"
 patch_conf "$CONF_B" "$RADIO_B" 2410 >"$LOG_DIR/winject_b.conf"
-pkill -x winject-manager 2>/dev/null || true
-sleep 1
+stop_winject_managers
 "$MANAGER" "$LOG_DIR/winject_a.conf" >"$LOG_DIR/manager_a.log" 2>&1 &
-PID_A=$!
 "$MANAGER" "$LOG_DIR/winject_b.conf" >"$LOG_DIR/manager_b.log" 2>&1 &
-PID_B=$!
-for i in $(seq 1 40); do
-  if grep -q "manager running" "$LOG_DIR/manager_a.log" \\
-    && grep -q "manager running" "$LOG_DIR/manager_b.log"; then
-    echo "managers ready log_dir=$LOG_DIR pid_a=$PID_A pid_b=$PID_B"
-    exit 0
-  fi
-  sleep 0.25
-done
-echo "manager startup failed" >&2
-tail -30 "$LOG_DIR/manager_a.log" >&2 || true
-tail -30 "$LOG_DIR/manager_b.log" >&2 || true
-exit 1
+wait_manager_radio "$LOG_DIR/manager_a.log"
+wait_manager_radio "$LOG_DIR/manager_b.log"
+echo "managers ready log_dir=$LOG_DIR"
 """
     proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
     if proc.returncode != 0:
@@ -128,7 +118,14 @@ exit 1
 
 
 def stop_managers() -> None:
-    subprocess.run(["pkill", "-x", "winject-manager"], check=False)
+    script = f"""
+set -euo pipefail
+source "{ROOT}/scripts/ensure_manager.sh"
+stop_winject_managers
+"""
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stdout + proc.stderr)
 
 
 def main() -> int:

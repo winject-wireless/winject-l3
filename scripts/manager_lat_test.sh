@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-way air TX-RX latency through winject-manager on this host (ARM or x86).
-# Both managers run locally and program their radios; no direct radio access.
+# Stops any running winject-manager, then these managers program the radios.
+# No direct radio access.
 #
 # Cases (default all three):
 #   raw      raw UDP (no FEC)
@@ -126,7 +127,11 @@ while [[ $i -lt ${#LAT_ARGS[@]} ]]; do
 done
 
 if [[ "$HOST_SET" -eq 0 ]]; then
-  HOST_IP="$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('$RADIO_A', 22)); print(s.getsockname()[0]); s.close()")"
+  HOST_IP="$(ip -4 route get "$RADIO_A" | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  if [[ -z "$HOST_IP" ]]; then
+    echo "error: cannot find local address toward $RADIO_A" >&2
+    exit 1
+  fi
 fi
 
 ensure_winject_manager "$ROOT"
@@ -176,29 +181,17 @@ EOF
 start_managers() {
   local conf_a="$1" conf_b="$2" tag="$3"
   stop_managers
-  pkill -x winject-manager 2>/dev/null || true
-  sleep 0.4
+  stop_winject_managers
   echo "managers [$tag]: A=$RADIO_A B=$RADIO_B host=$HOST_IP"
   "$MANAGER" "$conf_a" >"$LOG_DIR/manager_a_${tag}.log" 2>&1 &
   PID_A=$!
   "$MANAGER" "$conf_b" >"$LOG_DIR/manager_b_${tag}.log" 2>&1 &
   PID_B=$!
-  local i
-  for i in $(seq 1 40); do
-    if grep -q "manager running" "$LOG_DIR/manager_a_${tag}.log" \
-      && grep -q "manager running" "$LOG_DIR/manager_b_${tag}.log"; then
-      return 0
-    fi
-    if ! kill -0 "$PID_A" 2>/dev/null || ! kill -0 "$PID_B" 2>/dev/null; then
-      break
-    fi
-    sleep 0.15
-  done
-  echo "manager failed to start [$tag]"
-  echo "--- A ---"
-  tail -30 "$LOG_DIR/manager_a_${tag}.log" || true
-  echo "--- B ---"
-  tail -30 "$LOG_DIR/manager_b_${tag}.log" || true
+  if wait_manager_radio "$LOG_DIR/manager_a_${tag}.log" \
+    && wait_manager_radio "$LOG_DIR/manager_b_${tag}.log"; then
+    return 0
+  fi
+  echo "manager failed to acquire the radios [$tag]"
   return 1
 }
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Sweep TX power (dBm) at a fixed payload offer between two ESP32 radios.
 
+Stops any running winject-manager, then waits until this sweep's managers
+have programmed the radios. Does not open a radio console.
+
 Output columns:
   tx_power, a_to_b_rate, a_to_b_loss, a_to_b_rssi,
   b_to_a_rate, b_to_a_loss, b_to_a_rssi
@@ -100,21 +103,11 @@ patch_conf() {{
 }}
 patch_conf "$CONF_A" "$RADIO_A" 2400 >"$LOG_DIR/winject_a.conf"
 patch_conf "$CONF_B" "$RADIO_B" 2410 >"$LOG_DIR/winject_b.conf"
-pkill -x winject-manager 2>/dev/null || true
-sleep 1
+stop_winject_managers
 "$MANAGER" "$LOG_DIR/winject_a.conf" >"$LOG_DIR/manager_a.log" 2>&1 &
-PID_A=$!
 "$MANAGER" "$LOG_DIR/winject_b.conf" >"$LOG_DIR/manager_b.log" 2>&1 &
-PID_B=$!
-for i in $(seq 1 40); do
-  if grep -q "manager running" "$LOG_DIR/manager_a.log" \\
-    && grep -q "manager running" "$LOG_DIR/manager_b.log"; then
-    exit 0
-  fi
-  sleep 0.25
-done
-echo "manager startup failed" >&2
-exit 1
+wait_manager_radio "$LOG_DIR/manager_a.log"
+wait_manager_radio "$LOG_DIR/manager_b.log"
 """
     proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
     if proc.returncode != 0:
@@ -122,35 +115,14 @@ exit 1
 
 
 def stop_managers() -> None:
-    subprocess.run(["pkill", "-x", "winject-manager"], check=False)
-
-
-def wait_for_radios(a: str, b: str, timeout_s: float = 300.0) -> None:
-    """Block until both radios answer m-plane ping on UDP :22."""
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        ok = True
-        for ip in (a, b):
-            try:
-                import socket
-
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.settimeout(1.5)
-                sock.sendto(b"ping\n", (ip, 22))
-                data = sock.recvfrom(256)[0]
-                sock.close()
-                if b"pong" not in data.lower() and not data.startswith(b"OK"):
-                    ok = False
-            except OSError:
-                ok = False
-        if ok:
-            print(f"radios {a} and {b} online", flush=True)
-            return
-        print(f"waiting for radios {a} {b}...", flush=True)
-        time.sleep(2.0)
-    raise RuntimeError(
-        f"radios not reachable on m-plane within {timeout_s}s ({a}, {b})"
-    )
+    script = f"""
+set -euo pipefail
+source "{ROOT}/scripts/ensure_manager.sh"
+stop_winject_managers
+"""
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stdout + proc.stderr)
 
 
 def main() -> int:
@@ -164,22 +136,7 @@ def main() -> int:
     p.add_argument("--power-step", type=int, default=1)
     p.add_argument("-o", "--output", type=Path, required=True)
     p.add_argument("--notes", default="", help="extra markdown line under title")
-    p.add_argument(
-        "--wait-radios",
-        type=float,
-        default=300.0,
-        help="seconds to wait for radio m-plane before starting (0 = no wait)",
-    )
     args = p.parse_args()
-
-    if args.wait_radios > 0:
-        try:
-            wait_for_radios(args.a, args.b, args.wait_radios)
-        except RuntimeError as err:
-            # Radios often reply with bare `pong`; retry once after a short pause.
-            print(f"warning: {err}; retrying in 3s", flush=True)
-            time.sleep(3.0)
-            wait_for_radios(args.a, args.b, max(args.wait_radios, 60.0))
 
     powers = list(
         range(args.min_power, args.max_power + 1, args.power_step)
@@ -195,7 +152,6 @@ def main() -> int:
         for idx, power in enumerate(powers):
             print(f"=== power {power} dBm ({idx + 1}/{len(powers)}) ===", flush=True)
             start_managers(args.a, args.b, power, args.modulation)
-            time.sleep(1.2)
             skip = [] if idx == 0 else ["--skip-config"]
             common = [
                 "--a",

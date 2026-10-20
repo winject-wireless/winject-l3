@@ -34,14 +34,11 @@ patch_conf 192.168.253.11 "$ROOT/configuration/winject-tests/esp32/lat_udp_a.cfg
 patch_conf 192.168.253.12 "$ROOT/configuration/winject-tests/esp32/lat_udp_b.cfg" 2410 >"$LOG/b.conf"
 
 pkill -f "tcpdump -i ${MON}" 2>/dev/null || true
-pkill -x winject-manager 2>/dev/null || true
-sleep 1
+stop_winject_managers
 "$MANAGER" "$LOG/a.conf" >"$LOG/a.log" 2>&1 &
 "$MANAGER" "$LOG/b.conf" >"$LOG/b.log" 2>&1 &
-for _ in $(seq 1 40); do
-  grep -q "manager running" "$LOG/a.log" && grep -q "manager running" "$LOG/b.log" && break
-  sleep 0.25
-done
+wait_manager_radio "$LOG/a.log"
+wait_manager_radio "$LOG/b.log"
 
 rm -f "$PCAP"
 CAP_SEC=$((5 + 2))
@@ -57,7 +54,7 @@ if [[ ! -s "$PCAP" ]] && [[ -s "$LOG/tcpdump.err" ]]; then
   echo "tcpdump stderr:" >&2
   tail -5 "$LOG/tcpdump.err" >&2
 fi
-pkill -x winject-manager 2>/dev/null || true
+stop_winject_managers || true
 
 echo "pcap=$PCAP"
 grep "A->B sent" "$LOG/bw.out" || true

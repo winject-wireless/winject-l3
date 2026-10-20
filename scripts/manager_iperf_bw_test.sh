@@ -99,8 +99,9 @@ Radio PHY:
   --modulation M    radio modulation, e.g. OFDM_24M (default: from bw_{a,b}.cfg)
   --power DBM       radio TX power (default: from bw_{a,b}.cfg)
 
-The managers program the radios (PHY, CCA, domain filter) at startup; the
-script never talks to a radio's console directly.
+An existing winject-manager is stopped (SIGTERM) and waited on first. These
+managers then program the radios (PHY, CCA, domain filter). The script never
+talks to a radio's console directly.
 
 Test selection:
   --dir DIR         ab | ba | both | bidir  (default: both)
@@ -380,7 +381,11 @@ if [[ "$HOST_SET" -eq 0 ]]; then
   if [[ "$SCENARIO" == "realtek-cross" ]]; then
     host_probe="$RADIO_B"
   fi
-  HOST_IP="$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('$host_probe', 22)); print(s.getsockname()[0]); s.close()")"
+  HOST_IP="$(ip -4 route get "$host_probe" | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  if [[ -z "$HOST_IP" ]]; then
+    echo "error: cannot find local address toward $host_probe" >&2
+    exit 1
+  fi
 fi
 
 ensure_winject_manager "$ROOT"
@@ -443,15 +448,13 @@ stop_server() {
 
 cleanup() {
   stop_server
-  if [[ -n "${PID_A:-}" ]]; then kill "$PID_A" 2>/dev/null || true; fi
-  if [[ -n "${PID_B:-}" ]]; then kill "$PID_B" 2>/dev/null || true; fi
+  stop_winject_managers || true
   realtek_radios_stop
 }
 trap cleanup EXIT INT TERM
 
-# Match the process name only: -f would also match shells whose command line
-# mentions winject-manager (and kill the caller).
-pkill -x winject-manager 2>/dev/null || true
+# Release any manager that already holds the radios, then start this test's.
+stop_winject_managers
 for p in "$PORT_RECV_AB" "$PORT_RECV_BA" "$PORT_SEND_AB" "$PORT_SEND_BA"; do
   fuser -k "${p}/udp" 2>/dev/null || true
 done
@@ -477,24 +480,9 @@ PID_A=$!
 "$MANAGER" "$CONF_B_RUN" >"$LOG_DIR/manager_b.log" 2>&1 &
 PID_B=$!
 
-echo "waiting for managers..."
-for _ in $(seq 1 20); do
-  if grep -q "manager running" "$LOG_DIR/manager_a.log" \
-    && grep -q "manager running" "$LOG_DIR/manager_b.log"; then
-    break
-  fi
-  sleep 0.25
-done
-if ! grep -q "manager running" "$LOG_DIR/manager_a.log"; then
-  echo "manager A upstream setup failed; tail $LOG_DIR/manager_a.log"
-  tail -20 "$LOG_DIR/manager_a.log"
-  exit 1
-fi
-if ! grep -q "manager running" "$LOG_DIR/manager_b.log"; then
-  echo "manager B upstream setup failed; tail $LOG_DIR/manager_b.log"
-  tail -20 "$LOG_DIR/manager_b.log"
-  exit 1
-fi
+echo "waiting for test managers to acquire the radios..."
+wait_manager_radio "$LOG_DIR/manager_a.log"
+wait_manager_radio "$LOG_DIR/manager_b.log"
 
 wait_udp_listen() {
   local port="$1" deadline=$((SECONDS + 5))
