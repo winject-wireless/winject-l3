@@ -145,6 +145,12 @@ TEST(ConsoleParseTest, FormatRadioDevice)
     ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &view.device.mplane.sin_addr),
               1);
     view.device.mplane.sin_port = htons(22);
-    EXPECT_EQ(console_format_radio_device(view),
-              "radio_device id=0 mplane=192.168.32.1:22 dplane=- fcs=AUTO");
+    view.device.dplane.sin_family = AF_INET;
+    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &view.device.dplane.sin_addr),
+              1);
+    view.device.dplane.sin_port = htons(9000);
+    EXPECT_EQ(
+        console_format_radio_device(view),
+        "radio_device id=0 mplane=192.168.32.1:22 dplane=192.168.32.1:9000 "
+        "fcs=AUTO");
 }

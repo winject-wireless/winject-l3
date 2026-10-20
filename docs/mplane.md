@@ -103,9 +103,9 @@ Procedure for a new connection:
 
 | Request | Description | Response |
 |---|---|---|
-| `radio_device\|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] [fcs=AUTO\|SIGNAL\|ACTUAL]` | Set or read the radio the manager drives. Only `id=0`. Keys left out keep their value; `id=0` alone reads. Addresses cannot be cleared | `OK radio_device id=0 mplane=<ip:port> dplane=<ip:port\|-> fcs=<mode>` |
+| `radio_device\|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] [fcs=AUTO\|SIGNAL\|ACTUAL]` | Set or read the radio the manager drives. Only `id=0`. Keys left out keep their value; `id=0` alone reads. Addresses cannot be cleared | `OK radio_device id=0 mplane=<ip:port> dplane=<ip:port> fcs=<mode>` |
 
-`mplane` is the radio m-plane address. Config always sets it. A `radio_device` command may omit `mplane=` to keep the current address; it cannot be cleared. `dplane` is the radio's single UDP port for inject, registration and forward. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
+`mplane` is the radio m-plane address and `dplane` is its UDP port for inject, registration and forward. Config always sets both. A `radio_device` command may omit either key to keep the current address; neither can be cleared. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
 
 These are forwarded to the radio's m-plane when the console is up and the protocol versions match; otherwise they reply `NOK ENODEV` or `NOK EPROTO`. `radio_caps_info` is the exception (see below).
 

@@ -88,12 +88,8 @@ bool App::setup_radio()
     }
     apply_radio_dplane();
     apply_configured_fcs();
-    std::string dplane_log = "-";
-    if (cfg.radio_device.have_dplane)
-    {
-        dplane_log = console_format_ipv4_port(cfg.radio_device.dplane);
-    }
-    LOG_INF("radio dplane=%s fcs=%s", dplane_log.c_str(),
+    LOG_INF("radio dplane=%s fcs=%s",
+            console_format_ipv4_port(cfg.radio_device.dplane).c_str(),
             console_format_radio_fcs(cfg.radio_device.fcs));
     return true;
 }
@@ -101,7 +97,7 @@ bool App::setup_radio()
 void App::apply_radio_dplane()
 {
     const RadioDeviceConfig& d = cfg.radio_device;
-    if (!d.have_dplane || radio == nullptr)
+    if (radio == nullptr)
     {
         return;
     }
@@ -858,7 +854,6 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
     }
     if (patch.have_dplane)
     {
-        next.have_dplane = true;
         next.dplane = patch.dplane;
     }
     if (patch.have_fcs)
@@ -872,8 +867,7 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
          cfg.radio_device.mplane.sin_port != patch.mplane.sin_port);
     const bool dplane_changed =
         patch.have_dplane &&
-        (!cfg.radio_device.have_dplane ||
-         cfg.radio_device.dplane.sin_addr.s_addr !=
+        (cfg.radio_device.dplane.sin_addr.s_addr !=
              patch.dplane.sin_addr.s_addr ||
          cfg.radio_device.dplane.sin_port != patch.dplane.sin_port);
     const bool fcs_changed =

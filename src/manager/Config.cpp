@@ -310,7 +310,6 @@ bool Config::load(const std::string& path, std::string* error)
     radio_device.mplane.sin_family = AF_INET;
     radio_device.mplane.sin_addr = dev_ip;
     radio_device.mplane.sin_port = htons(static_cast<uint16_t>(console_port));
-    radio_device.have_dplane = true;
     radio_device.dplane = {};
     radio_device.dplane.sin_family = AF_INET;
     radio_device.dplane.sin_addr = dev_ip;
@@ -570,9 +569,9 @@ bool Config::validate(std::string* error) const
     {
         return fail("radio mplane address is required");
     }
-    if (radio_device.have_dplane && !ipv4_set(radio_device.dplane))
+    if (!ipv4_set(radio_device.dplane))
     {
-        return fail("invalid radio dplane address");
+        return fail("radio dplane address is required");
     }
     if (upstreams.empty())
     {

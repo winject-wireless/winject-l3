@@ -91,7 +91,7 @@ At startup the manager connects to the radio m-plane (`radio_device.mplane`, fro
 2. programs `radio_tx` (channel, power, modulation, and CCA when `winject.cca` is set) and `rx_filter_addr3` (domain);
 3. stores it with `save <slot>`.
 
-While the m-plane is up, `RadioManager` runs these on reactor timers: it re-reads the PHY and filter every 5 s and corrects them, pings the radio 250 ms after each pong (no pong within 500 ms drops the m-plane, which is retried every second), and re-registers on the d-plane port every second so the radio keeps forwarding to this manager. The first registration happens when the d-plane address is applied.
+While the m-plane is up, `RadioManager` runs these on reactor timers: it re-reads the PHY and filter every 5 s and corrects them, pings the radio 250 ms after each pong (no pong within 500 ms drops the m-plane, which is retried every second), and re-registers on the configured d-plane port every second so the radio keeps forwarding to this manager. The first registration happens at startup.
 
 The manager m-plane also forwards radio commands for operators and bench tools (`radio_info`, `radio_tx`, `radio_stats`, `reset`, `radio_caps_info`); see [mplane.md](mplane.md). The bench scripts and tools reach the radios only through these.
 

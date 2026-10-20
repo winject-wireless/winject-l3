@@ -46,7 +46,6 @@ upstream-0.tx               = 127.0.0.1:21082
     Config cfg;
     std::string err;
     ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_TRUE(cfg.radio_device.have_dplane);
     EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 22);
     EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9000);
     EXPECT_EQ(cfg.channel, 1);
@@ -490,6 +489,11 @@ TEST(ConfigTest, ValidateAcceptsFilledStruct)
         inet_pton(AF_INET, "192.168.253.11", &cfg.radio_device.mplane.sin_addr),
         1);
     cfg.radio_device.mplane.sin_port = htons(22);
+    cfg.radio_device.dplane.sin_family = AF_INET;
+    ASSERT_EQ(
+        inet_pton(AF_INET, "192.168.253.11", &cfg.radio_device.dplane.sin_addr),
+        1);
+    cfg.radio_device.dplane.sin_port = htons(9000);
     UpstreamConfig u;
     u.index = 0;
     u.mode = UpstreamMode::udp_server;
@@ -511,9 +515,15 @@ TEST(ConfigTest, ValidateAcceptsFilledStruct)
     EXPECT_NE(err.find("modulation"), std::string::npos);
 
     cfg.modulation = "OFDM_24M";
+    const sockaddr_in mplane = cfg.radio_device.mplane;
     cfg.radio_device.mplane = {};
     EXPECT_FALSE(cfg.validate(&err));
     EXPECT_NE(err.find("mplane"), std::string::npos);
+
+    cfg.radio_device.mplane = mplane;
+    cfg.radio_device.dplane = {};
+    EXPECT_FALSE(cfg.validate(&err));
+    EXPECT_NE(err.find("dplane"), std::string::npos);
 }
 
 TEST(ConfigTest, LoadsQueueForwarding)
