@@ -30,7 +30,9 @@ namespace winject
 class App
 {
 public:
-    bool load(const std::string& path);
+    // Copies config after Config::validate. The host parses a file or fills
+    // the struct; this does not open a file.
+    bool load(Config config);
     int run();
     void stop();
 

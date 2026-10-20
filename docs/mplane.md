@@ -149,7 +149,7 @@ get_metrics keys=radio_tx_pkt,radio_rx_pkt,radio_proto_ok,radio_version
 
 ## Configuration file
 
-Run the manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`).
+Run the Linux manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`). That process parses the file in its `main` and calls `winject_l3::main(const Config&)`. An ESP-IDF host fills the same `Config` in code (`idf/example/main/main.cpp`) and does not pass argv.
 
 ### Radio and manager (`winject.*`)
 

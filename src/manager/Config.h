@@ -110,6 +110,9 @@ struct Config
     std::vector<UpstreamConfig> upstreams;
 
     bool load(const std::string& path, std::string* error);
+    // Checks a Config already in memory (a parsed file or one filled in by
+    // the host). load() runs this after parsing.
+    bool validate(std::string* error) const;
 
     static bool validate_upstreams(const std::vector<UpstreamConfig>& upstreams,
                                    std::string* error);

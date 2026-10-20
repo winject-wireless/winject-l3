@@ -54,9 +54,11 @@ The manager is built as a static library, `winject-l3`, with one entry point, pl
 ```cpp
 #include "WinjectL3.h"
 
-int winject_l3::main(int argc, char* argv[]);  // argv[1] = config path; blocks until stop()
-void winject_l3::stop();                       // any thread; main() then returns
+int winject_l3::main(const winject::Config& config);  // blocks until stop()
+void winject_l3::stop();                              // any thread; main() then returns
 ```
+
+`winject-manager`'s `main` reads `argv[1]` (default `winject.conf`), parses it into a `winject::Config`, and calls `winject_l3::main`. A host that already has the settings — the ESP32-P4 example — fills the struct and does not pass argv.
 
 The library builds without RTTI (`-fno-rtti`), as it does on ESP-IDF.
 
@@ -78,7 +80,7 @@ Differences from Linux:
 | `pipe()` | Missing in ESP-IDF; [`port/pipe.c`](idf/winject_l3/port/pipe.c) provides it as two connected loopback UDP sockets (BFC's reactor wakes itself through a pipe) |
 | Exceptions | The component compiles with `-fexceptions` because BFC throws on fatal errors; with the project's C++ exceptions off, such a throw aborts |
 | Signals | None: stop the manager with `winject_l3::stop()` (any task, also before `main` has started its loop) |
-| Config file | Read with `fopen`, so it must be on a mounted filesystem (e.g. LittleFS) |
+| Config | `app_main` fills a `winject::Config` and passes it to `winject_l3::main`. No config file and no argv |
 
 Configuration keys and the manager console are described in [docs/mplane.md](docs/mplane.md).
 

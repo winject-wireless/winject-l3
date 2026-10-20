@@ -521,6 +521,153 @@ bool Config::load(const std::string& path, std::string* error)
             "winject.skip_console requires winject.radio_fcs=signal|actual";
         return false;
     }
+    return validate(error);
+}
+
+bool Config::validate(std::string* error) const
+{
+    auto fail = [&](const std::string& msg) -> bool
+    {
+        if (error != nullptr)
+        {
+            *error = msg;
+        }
+        return false;
+    };
+
+    if (channel < 1 || channel > 14)
+    {
+        return fail("invalid winject.channel");
+    }
+    // load() stores the canonical name. A filled struct must already use it
+    // so the radio sees the same string a parsed file would.
+    if (canonical_modulation(modulation) != modulation)
+    {
+        return fail("invalid winject.modulation");
+    }
+    if (!modulation_ok_for_channel(modulation, channel))
+    {
+        return fail("winject.modulation not valid for winject.channel");
+    }
+    if (power_dbm < 2 || power_dbm > 20)
+    {
+        return fail("invalid winject.power");
+    }
+    if (domain == 0)
+    {
+        return fail("winject.domain must be non-zero");
+    }
+    if (!manager_console_in.empty())
+    {
+        sockaddr_in tmp = {};
+        if (!parse_host_port(manager_console_in, &tmp))
+        {
+            return fail("invalid manager.console_in");
+        }
+    }
+    auto ipv4_set = [](const sockaddr_in& addr) -> bool
+    {
+        return addr.sin_family == AF_INET && addr.sin_port != 0;
+    };
+    if (radio_device.have_mplane && !ipv4_set(radio_device.mplane))
+    {
+        return fail("invalid radio mplane address");
+    }
+    if (radio_device.have_dplane && !ipv4_set(radio_device.dplane))
+    {
+        return fail("invalid radio dplane address");
+    }
+    if (radio_device.have_dplane && !radio_device.have_mplane &&
+        radio_device.fcs == RadioFcsConfig::auto_detect)
+    {
+        return fail(
+            "winject.skip_console requires winject.radio_fcs=signal|actual");
+    }
+    if (upstreams.empty())
+    {
+        return fail("invalid upstream.size");
+    }
+
+    for (size_t i = 0; i < upstreams.size(); ++i)
+    {
+        const UpstreamConfig& u = upstreams[i];
+        if (u.scheduler_budget == 0)
+        {
+            return fail("invalid upstream-" + std::to_string(i) +
+                        ".scheduler_budget");
+        }
+        for (size_t j = 0; j < i; ++j)
+        {
+            if (upstreams[j].index == u.index)
+            {
+                return fail("duplicate upstream index");
+            }
+        }
+        if (u.mode == UpstreamMode::queue)
+        {
+            if (!u.endpoint.rx.empty() || !u.endpoint.tx.empty())
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            " queue mode does not use rx/tx");
+            }
+            if (u.queue_in.empty() || u.queue_out.empty() || u.reactor.empty())
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            " needs queue_in, queue_out, and reactor");
+            }
+            if (u.queue_in == u.queue_out)
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            " queue_in and queue_out must differ");
+            }
+        }
+        else
+        {
+            if (!u.queue_in.empty() || !u.queue_out.empty() ||
+                !u.reactor.empty())
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            " does not use queue_in, queue_out, or reactor");
+            }
+            if (u.endpoint.rx.empty() && u.endpoint.tx.empty())
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            " needs rx and tx (static), rx only (server), or "
+                            "tx only (client)");
+            }
+            if (u.mode != upstream_mode(u.endpoint))
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            ".mode does not match rx/tx");
+            }
+            sockaddr_in tmp = {};
+            if (!u.endpoint.rx.empty() && !parse_host_port(u.endpoint.rx, &tmp))
+            {
+                return fail("invalid upstream-" + std::to_string(i) + ".rx");
+            }
+            if (!u.endpoint.tx.empty() && !parse_host_port(u.endpoint.tx, &tmp))
+            {
+                return fail("invalid upstream-" + std::to_string(i) + ".tx");
+            }
+        }
+        if (u.fec_type == FecType::RsBlockErasure)
+        {
+            RsBlockErasure codec;
+            if (!codec.init(u.fec_k, u.fec_n, u.fec_timeout_ms))
+            {
+                return fail("invalid upstream-" + std::to_string(i) +
+                            " fec k/n");
+            }
+        }
+        else if (u.fec_type != FecType::none)
+        {
+            return fail("invalid upstream-" + std::to_string(i) + ".fec.type");
+        }
+    }
+    if (!validate_upstreams(upstreams, error))
+    {
+        return false;
+    }
     return true;
 }
 

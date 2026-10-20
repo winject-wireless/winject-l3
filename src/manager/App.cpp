@@ -25,14 +25,15 @@
 namespace winject
 {
 
-bool App::load(const std::string& path)
+bool App::load(Config config)
 {
     std::string err;
-    if (!cfg.load(path, &err))
+    if (!config.validate(&err))
     {
         LOG_ERR("%s", err.c_str());
         return false;
     }
+    cfg = std::move(config);
     return true;
 }
 

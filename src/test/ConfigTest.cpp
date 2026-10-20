@@ -480,6 +480,34 @@ upstream-0.tx               = 127.0.0.1:21082
     std::remove(path.c_str());
 }
 
+TEST(ConfigTest, ValidateAcceptsFilledStruct)
+{
+    Config cfg;
+    cfg.channel = 1;
+    cfg.modulation = "OFDM_24M";
+    cfg.power_dbm = 20;
+    cfg.domain = 0x1234;
+    UpstreamConfig u;
+    u.index = 0;
+    u.mode = UpstreamMode::udp_server;
+    u.bus_tx = 0xb2;
+    u.bus_rx = 0xa1;
+    u.scheduler_budget = 256;
+    u.endpoint.rx = "127.0.0.1:29000";
+    cfg.upstreams.push_back(u);
+    std::string err;
+    EXPECT_TRUE(cfg.validate(&err)) << err;
+
+    cfg.domain = 0;
+    EXPECT_FALSE(cfg.validate(&err));
+    EXPECT_NE(err.find("domain"), std::string::npos);
+
+    cfg.domain = 0x1234;
+    cfg.modulation = "ofdm_24m";
+    EXPECT_FALSE(cfg.validate(&err));
+    EXPECT_NE(err.find("modulation"), std::string::npos);
+}
+
 TEST(ConfigTest, LoadsQueueForwarding)
 {
     const std::string path = write_conf(R"(
