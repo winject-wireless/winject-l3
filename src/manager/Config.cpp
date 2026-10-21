@@ -408,38 +408,19 @@ bool Config::load(const std::string& path, std::string* error)
             return false;
         }
         u.scheduler_budget = *budget;
-        std::string rx = parser.arg(key_of(i, "rx")).value_or("");
-        std::string tx = parser.arg(key_of(i, "tx")).value_or("");
-        const std::string bind_address =
-            parser.arg(key_of(i, "bind_address")).value_or("");
-        const std::string connect_address =
-            parser.arg(key_of(i, "connect_address")).value_or("");
-        if (!bind_address.empty())
+        const std::string rx_key = key_of(i, "rx");
+        const std::string tx_key = key_of(i, "tx");
+        const std::string legacy_bind = key_of(i, "bind_address");
+        const std::string legacy_connect = key_of(i, "connect_address");
+        if (!reject_moved_key(parser, legacy_bind.c_str(), rx_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_connect.c_str(), tx_key.c_str(),
+                              error))
         {
-            if (!rx.empty() && rx != bind_address)
-            {
-                *error = key_of(i, "rx") + " and " + key_of(i, "bind_address") +
-                         " conflict";
-                return false;
-            }
-            if (rx.empty())
-            {
-                rx = bind_address;
-            }
+            return false;
         }
-        if (!connect_address.empty())
-        {
-            if (!tx.empty() && tx != connect_address)
-            {
-                *error = key_of(i, "tx") + " and " +
-                         key_of(i, "connect_address") + " conflict";
-                return false;
-            }
-            if (tx.empty())
-            {
-                tx = connect_address;
-            }
-        }
+        std::string rx = parser.arg(rx_key).value_or("");
+        std::string tx = parser.arg(tx_key).value_or("");
 
         const std::string fec_type =
             parser.arg(key_of(i, "fec.type")).value_or("");
@@ -484,8 +465,7 @@ bool Config::load(const std::string& path, std::string* error)
         {
             if (!rx.empty() || !tx.empty())
             {
-                *error = key_of(i, "mode") +
-                         " does not use rx/tx or bind/connect addresses";
+                *error = key_of(i, "mode") + " does not use rx/tx";
                 return false;
             }
             if (queue_in.empty() || queue_out.empty() || queue_reactor.empty())

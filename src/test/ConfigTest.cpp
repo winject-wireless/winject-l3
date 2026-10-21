@@ -111,13 +111,35 @@ upstream-0.mode             = UDP_CLIENT_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = a1
 upstream-0.scheduler_budget = 100
-upstream-0.connect_address  = 127.0.0.1:9
-upstream-0.bind_address     = 127.0.0.1:22081
+upstream-0.tx               = 127.0.0.1:9
+upstream-0.rx               = 127.0.0.1:22081
 )");
     Config cfg;
     std::string err;
     EXPECT_FALSE(cfg.load(path, &err));
     EXPECT_NE(err.find("does not match rx/tx"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsLegacyAddressKeys)
+{
+    const std::string path = write_conf(R"(
+radio.device        = 192.168.32.1
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_SERVER_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.bind_address     = 127.0.0.1:22081
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to upstream-0.rx"), std::string::npos);
     std::remove(path.c_str());
 }
 
@@ -135,7 +157,7 @@ upstream-0.mode             = UDP_CLIENT_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = b2
 upstream-0.scheduler_budget = 100
-upstream-0.connect_address  = 127.0.0.1:9
+upstream-0.tx               = 127.0.0.1:9
 )");
     Config cfg;
     std::string err;
@@ -221,7 +243,7 @@ upstream-0.mode             = UDP_SERVER_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = a1
 upstream-0.scheduler_budget = 4096
-upstream-0.bind_address     = 127.0.0.1:22081
+upstream-0.rx               = 127.0.0.1:22081
 upstream-0.fec.type         = RS_BLOCK_ERASURE
 upstream-0.fec.k            = 10
 upstream-0.fec.n            = 15
@@ -252,7 +274,7 @@ upstream-0.mode             = UDP_SERVER_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = a1
 upstream-0.scheduler_budget = 100
-upstream-0.bind_address     = 127.0.0.1:22081
+upstream-0.rx               = 127.0.0.1:22081
 upstream-0.fec.type         = RS_BLOCK_ERASURE
 upstream-0.fec.k            = 15
 upstream-0.fec.n            = 10
@@ -278,7 +300,7 @@ upstream-0.mode             = TCP_SERVER_FORWARDING
 upstream-0.tx_bus           = c3
 upstream-0.rx_bus           = d4
 upstream-0.scheduler_budget = 1024
-upstream-0.bind_address     = 127.0.0.1:22022
+upstream-0.rx               = 127.0.0.1:22022
 )");
     Config cfg;
     std::string err;
