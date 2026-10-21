@@ -158,11 +158,11 @@ trap cleanup EXIT INT TERM
 # The managers program the radios (PHY, CCA, domain filter) at startup.
 patch_conf() {
   local src="$1" device="$2" dest="$3"
-  sed -e "s/^winject\.device.*/winject.device        = ${device}/" \
-      -e "s/^winject\.skip_console.*/winject.skip_console  = 0/" \
+  sed -e "s/^radio\.device.*/radio.device        = ${device}/" \
+      -e "s/^radio\.skip_console.*/radio.skip_console  = 0/" \
       "$src" >"$dest"
   if [[ -n "$CFG_CCA" ]]; then
-    printf 'winject.cca           = %s\n' "$CFG_CCA" >>"$dest"
+    printf 'radio.cca           = %s\n' "$CFG_CCA" >>"$dest"
   fi
 }
 

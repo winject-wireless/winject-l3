@@ -108,11 +108,11 @@ ctest --test-dir build_test_ci --output-on-failure
 Manager config for a Realtek radio on the same host:
 
 ```ini
-winject.device       = 127.0.0.1
-winject.console      = 2201        # the radio's net.console_port (not 22: sshd owns it on Linux)
-winject.dplane_port  = 9000        # the radio's net.dplane_port (inject + registration + forward)
-winject.radio_fcs    = actual      # or leave unset to auto-detect; never signal
-# no winject.cca = 0
+radio.device       = 127.0.0.1
+radio.console      = 2201        # the radio's net.console_port (not 22: sshd owns it on Linux)
+radio.dplane_port  = 9000        # the radio's net.dplane_port (inject + registration + forward)
+radio.fcs    = actual      # or leave unset to auto-detect; never signal
+# no radio.cca = 0
 ```
 
 You can also set the radio at runtime with `radio_device` on the manager m-plane (`mplane`, `dplane`, `fcs`). A second radio on the same host needs distinct console and d-plane ports. The bench pair uses 2201/9000 for radio A and 2202/9003 for radio B. Avoid 9001 and 9002, because `tools/bw_test.py` listens there.
@@ -121,10 +121,10 @@ Differences from the ESP32:
 
 | Topic | Realtek radio |
 |---|---|
-| CCA | `cca=false` is rejected (`NOK EINVAL`). Leave `winject.cca` unset or `1`, and do not pass `--no-cca` to the bench scripts |
+| CCA | `cca=false` is rejected (`NOK EINVAL`). Leave `radio.cca` unset or `1`, and do not pass `--no-cca` to the bench scripts |
 | Modulations | `DSS_*_L`, `CCK_*_L`, `OFDM_6M`…`OFDM_54M`, `OFDM_MCS0-7_LGI/SGI`. Short preamble (`*_S`) is rejected because the driver ignores it |
 | Channels | Whatever the dongle's regulatory domain allows, 2.4 and 5 GHz. The manager still accepts only 1–14 |
-| TX power | `winject.power` is mapped through a measured index table (`txpower.csv` in the radio repo). The driver's power override is global: **all Realtek radios on one host must use the same `winject.power`** |
+| TX power | `radio.power` is mapped through a measured index table (`txpower.csv` in the radio repo). The driver's power override is global: **all Realtek radios on one host must use the same `radio.power`** |
 | Radio tests | `test_wifi_*` / `test_ether_*` reply `NOK ENODEV`. They measure ESP32 Wi-Fi/EMAC contention, which this radio does not have |
 | Bad-FCS frames | Dropped by the driver before monitor mode, so on-air errors show up as lost frames rather than in `fcs_error_pkt` |
 
@@ -171,7 +171,7 @@ Run it from an interactive terminal, in the winject-l3 checkout:
 |---|---|---|
 | `esp32` (default) | Two ESP32 boards on Ethernet (`--a` / `--b`) | Nothing: the radios are already running |
 | `realtek` | Two RTL8812AU dongles on this host | Builds [winject-radio-realtek](https://github.com/winject-wireless/winject-radio-realtek) and starts one instance per dongle with `radio_a.cfg` / `radio_b.cfg` under `sudo` |
-| `realtek-cross` | Radio A on this host, radio B on a peer (`--b`) | Starts radio A locally; starts radio B on `--radio-b-ssh` (default `ubuntu@<--b>`) with `net.bind = 0.0.0.0`. Both managers run on this host; `winject.device` for B is `--b`. |
+| `realtek-cross` | Radio A on this host, radio B on a peer (`--b`) | Starts radio A locally; starts radio B on `--radio-b-ssh` (default `ubuntu@<--b>`) with `net.bind = 0.0.0.0`. Both managers run on this host; `radio.device` for B is `--b`. |
 
 ```bash
 ./scripts/manager_iperf_bw_test.sh --scenario realtek --bitrate 16M

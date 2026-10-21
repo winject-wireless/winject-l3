@@ -52,7 +52,7 @@ enum class FecType
     RsBlockErasure,
 };
 
-// winject.radio_fcs config (runtime mode is RadioFcsMode on WifiUdp).
+// radio.fcs config (runtime mode is RadioFcsMode on WifiUdp).
 enum class RadioFcsConfig
 {
     auto_detect,
@@ -96,7 +96,7 @@ struct Config
     uint8_t channel = 1;
     std::string modulation = "DSS_1M_L";
     int8_t power_dbm = 20;
-    // Radio CCA, sent with the PHY when cca_explicit (winject.cca present).
+    // Radio CCA, sent with the PHY when cca_explicit (radio.cca present).
     bool cca = false;
     bool cca_explicit = false;
     // Shared air domain (Addr3); 0 = unset / invalid.

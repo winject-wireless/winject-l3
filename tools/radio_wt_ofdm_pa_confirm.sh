@@ -35,12 +35,12 @@ stop_winject_managers
 ensure_winject_manager "$ROOT"
 TMPD=$(mktemp -d /tmp/pa_confirm_XXXX)
 patch() {
-  sed -e "s/^winject\\.device.*/winject.device        = ${1}/" \
-      -e "s/^winject\\.power.*/winject.power         = 20/" \
-      -e "s/^winject\\.channel.*/winject.channel       = 1/" \
-      -e "s/^winject\\.modulation.*/winject.modulation    = OFDM_24M/" \
-      -e "s/^winject\\.cca.*/winject.cca           = 0/" \
-      -e "s/^winject\\.skip_console.*/winject.skip_console  = 0/" \
+  sed -e "s/^radio\\.device.*/radio.device        = ${1}/" \
+      -e "s/^radio\\.power.*/radio.power         = 20/" \
+      -e "s/^radio\\.channel.*/radio.channel       = 1/" \
+      -e "s/^radio\\.modulation.*/radio.modulation    = OFDM_24M/" \
+      -e "s/^radio\\.cca.*/radio.cca           = 0/" \
+      -e "s/^radio\\.skip_console.*/radio.skip_console  = 0/" \
       "$2"
   printf 'manager.console_in    = 127.0.0.1:%s\n' "$3"
 }

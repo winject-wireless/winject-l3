@@ -8,7 +8,7 @@
 #            with radio_{a,b}.cfg first (scripts/realtek_radios.sh), then the
 #            managers with bw_{a,b}.cfg
 #   realtek-cross  radio A on this host, radio B on a peer (--b, --radio-b-ssh);
-#            managers on this host; winject.device = --a (default 127.0.0.1) and --b
+#            managers on this host; radio.device = --a (default 127.0.0.1) and --b
 #
 # Topology (A→B):
 #   iperf -c 127.0.0.1:29000 -u  → manager A UDP_SERVER → air
@@ -86,8 +86,8 @@ Radio / host (esp32):
   --host IP         bench host / manager IP (auto-detect if omitted)
 
 Radio / host (realtek-cross):
-  --a IP            manager A winject.device (default: 127.0.0.1, radio A local)
-  --b IP            manager B winject.device / radio B LAN IP (default: 192.168.253.127)
+  --a IP            manager A radio.device (default: 127.0.0.1, radio A local)
+  --b IP            manager B radio.device / radio B LAN IP (default: 192.168.253.127)
   --radio-b-ssh U@H ssh target to start/stop radio B (default: ubuntu@<--b>)
   --host IP         where managers and iperf run (default: auto via --b)
 
@@ -393,20 +393,20 @@ ensure_winject_manager "$ROOT"
 patch_conf() {
   local file="$1" device="$2" gci_in="$3"
   local -a sed_args=(
-    -e "s/^winject\.device.*/winject.device        = ${device}/"
+    -e "s/^radio\.device.*/radio.device        = ${device}/"
   )
   if [[ -n "$CHANNEL" ]]; then
-    sed_args+=(-e "s/^winject\.channel.*/winject.channel       = ${CHANNEL}/")
+    sed_args+=(-e "s/^radio\.channel.*/radio.channel       = ${CHANNEL}/")
   fi
   if [[ -n "$MODULATION" ]]; then
-    sed_args+=(-e "s/^winject\.modulation.*/winject.modulation    = ${MODULATION}/")
+    sed_args+=(-e "s/^radio\.modulation.*/radio.modulation    = ${MODULATION}/")
   fi
   if [[ -n "$POWER" ]]; then
-    sed_args+=(-e "s/^winject\.power.*/winject.power         = ${POWER}/")
+    sed_args+=(-e "s/^radio\.power.*/radio.power         = ${POWER}/")
   fi
   sed "${sed_args[@]}" "$file"
   if [[ -n "$CCA" ]]; then
-    printf 'winject.cca           = %s\n' "$CCA"
+    printf 'radio.cca           = %s\n' "$CCA"
   fi
   printf 'manager.console_in    = 127.0.0.1:%s\n' "$gci_in"
 }

@@ -209,24 +209,24 @@ PATH_LABEL=udp
 patch_conf() {
   local file="$1" device="$2" gci_in="$3"
   local -a sed_args=(
-    -e "s/^winject\.device.*/winject.device        = ${device}/"
-    -e "s/^winject\.skip_console.*/winject.skip_console  = 0/"
+    -e "s/^radio\.device.*/radio.device        = ${device}/"
+    -e "s/^radio\.skip_console.*/radio.skip_console  = 0/"
   )
   if [[ -n "$CFG_DOMAIN" ]]; then
     sed_args+=(-e "s/^winject\.domain.*/winject.domain        = ${CFG_DOMAIN}/")
   fi
   if [[ -n "$CFG_CHANNEL" ]]; then
-    sed_args+=(-e "s/^winject\.channel.*/winject.channel       = ${CFG_CHANNEL}/")
+    sed_args+=(-e "s/^radio\.channel.*/radio.channel       = ${CFG_CHANNEL}/")
   fi
   if [[ -n "$CFG_MODULATION" ]]; then
-    sed_args+=(-e "s/^winject\.modulation.*/winject.modulation    = ${CFG_MODULATION}/")
+    sed_args+=(-e "s/^radio\.modulation.*/radio.modulation    = ${CFG_MODULATION}/")
   fi
   if [[ -n "$CFG_POWER" ]]; then
-    sed_args+=(-e "s/^winject\.power.*/winject.power         = ${CFG_POWER}/")
+    sed_args+=(-e "s/^radio\.power.*/radio.power         = ${CFG_POWER}/")
   fi
   sed "${sed_args[@]}" "$file"
   if [[ -n "$CFG_CCA" ]]; then
-    printf 'winject.cca           = %s\n' "$CFG_CCA"
+    printf 'radio.cca           = %s\n' "$CFG_CCA"
   fi
   printf 'manager.console_in    = 127.0.0.1:%s\n' "$gci_in"
 }

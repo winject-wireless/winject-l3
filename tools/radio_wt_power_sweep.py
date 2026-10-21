@@ -92,13 +92,13 @@ CONF_A="$ROOT/configuration/winject-tests/esp32/lat_udp_a.cfg"
 CONF_B="$ROOT/configuration/winject-tests/esp32/lat_udp_b.cfg"
 patch_conf() {{
   local file="$1" device="$2" gci_in="$3"
-  sed -e "s/^winject\\.device.*/winject.device        = ${{device}}/" \\
-      -e "s/^winject\\.skip_console.*/winject.skip_console  = 0/" \\
-      -e "s/^winject\\.channel.*/winject.channel       = 1/" \\
-      -e "s/^winject\\.modulation.*/winject.modulation    = {modulation}/" \\
-      -e "s/^winject\\.power.*/winject.power         = {power}/" \\
+  sed -e "s/^radio\\.device.*/radio.device        = ${{device}}/" \\
+      -e "s/^radio\\.skip_console.*/radio.skip_console  = 0/" \\
+      -e "s/^radio\\.channel.*/radio.channel       = 1/" \\
+      -e "s/^radio\\.modulation.*/radio.modulation    = {modulation}/" \\
+      -e "s/^radio\\.power.*/radio.power         = {power}/" \\
       "$file"
-  printf 'winject.cca           = 0\\n'
+  printf 'radio.cca           = 0\\n'
   printf 'manager.console_in    = 127.0.0.1:%s\\n' "$gci_in"
 }}
 patch_conf "$CONF_A" "$RADIO_A" 2400 >"$LOG_DIR/winject_a.conf"

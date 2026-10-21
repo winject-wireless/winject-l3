@@ -338,18 +338,18 @@ def main() -> int:
     def write_conf(path: Path, role: str, device: str, dplane: int, cons_in: int) -> None:
         if role == "a":
             body = f"""
-winject.device        = {device}
+radio.device        = {device}
 winject.local_ip      = {args.host}
-winject.console       = 22
-winject.channel       = {args.channel}
-winject.modulation    = OFDM_24M
-winject.power         = {args.power}
+radio.console       = 22
+radio.channel       = {args.channel}
+radio.modulation    = OFDM_24M
+radio.power         = {args.power}
 winject.domain        = 1234
 winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
-winject.skip_console  = 0
-winject.cca           = 0
-winject.dplane_port   = {dplane}
+radio.skip_console  = 0
+radio.cca           = 0
+radio.dplane_port   = {dplane}
 manager.console_in    = 127.0.0.1:{cons_in}
 upstream.size = 2
 upstream-0.mode             = UDP_SERVER_FORWARDING
@@ -365,18 +365,18 @@ upstream-1.connect_address  = 127.0.0.1:9001
 """
         else:
             body = f"""
-winject.device        = {device}
+radio.device        = {device}
 winject.local_ip      = {args.host}
-winject.console       = 22
-winject.channel       = {args.channel}
-winject.modulation    = OFDM_24M
-winject.power         = {args.power}
+radio.console       = 22
+radio.channel       = {args.channel}
+radio.modulation    = OFDM_24M
+radio.power         = {args.power}
 winject.domain        = 1234
 winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
-winject.skip_console  = 0
-winject.cca           = 0
-winject.dplane_port   = {dplane}
+radio.skip_console  = 0
+radio.cca           = 0
+radio.dplane_port   = {dplane}
 manager.console_in    = 127.0.0.1:{cons_in}
 upstream.size = 2
 upstream-0.mode             = UDP_CLIENT_FORWARDING

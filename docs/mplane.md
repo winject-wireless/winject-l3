@@ -151,23 +151,30 @@ get_metrics keys=radio_tx_pkt,radio_rx_pkt,radio_proto_ok,radio_version
 
 Run the Linux manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`). That process parses the file in its `main` and calls `winject_l3::main(const Config&)`. An ESP-IDF host fills the same `Config` in code (`idf/example/main/main.cpp`) and does not pass argv.
 
-### Radio and manager (`winject.*`)
+### Radio (`radio.*`)
 
 | Key | Default | Meaning |
 |---|---|---|
-| `winject.device` | required | Radio address. With `console` and `dplane_port` it sets the m-plane and d-plane |
-| `winject.console` | `22` | Radio m-plane UDP port (ESP32 `22`, Realtek `2201`) |
-| `winject.dplane_port` | `9000` | Radio d-plane port (`winject.inject_port` accepted as an alias) |
-| `winject.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
-| `winject.modulation` | `DSS_1M_L` | PHY rate name, for example `OFDM_24M` |
-| `winject.power` | `20` | TX power, dBm |
-| `winject.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
+| `radio.device` | required | Radio address. With `console` and `dplane_port` it sets the m-plane and d-plane |
+| `radio.console` | `22` | Radio m-plane UDP port (ESP32 `22`, Realtek `2201`) |
+| `radio.dplane_port` | `9000` | Radio d-plane port (`radio.inject_port` accepted as an alias) |
+| `radio.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
+| `radio.modulation` | `DSS_1M_L` | PHY rate name, for example `OFDM_24M` |
+| `radio.power` | `20` | TX power, dBm |
+| `radio.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
+| `radio.skip_console` | `0` | Must be `0` or omitted. `1` is rejected: the radio m-plane is required |
+| `radio.fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
+
+The old `winject.device`, `winject.console`, `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, `winject.dplane_port`, `winject.inject_port`, `winject.radio_fcs`, and `winject.skip_console` keys are rejected. The error names the `radio.*` key to use.
+
+### Link and manager (`winject.*`)
+
+| Key | Default | Meaning |
+|---|---|---|
 | `winject.domain` | required | 16-bit hex domain, non-zero; carried in Address 3 (see [winject.md](winject.md)) |
-| `winject.skip_console` | `0` | Must be `0` or omitted. `1` is rejected: the radio m-plane is required |
-| `winject.radio_fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
 | `winject.stats_sec` | `0` | Log stream stats every N seconds; `0` = off. Overridden by the `WINJECT_STATS_SEC` environment variable |
 
-TX pacing is not configurable: it follows `winject.modulation` at 90 % of its airtime (see [winject.md](winject.md)). The old keys `winject.max_rate_kbps`, `tx_gap_us`, `max_data_per_tick`, `tx_burst_size` and `tx_burst_interval_us` are ignored with a warning.
+TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airtime (see [winject.md](winject.md)). The old keys `winject.max_rate_kbps`, `tx_gap_us`, `max_data_per_tick`, `tx_burst_size` and `tx_burst_interval_us` are ignored with a warning.
 
 ### Manager console (`manager.*`)
 

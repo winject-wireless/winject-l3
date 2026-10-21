@@ -58,6 +58,18 @@ static std::string key_of(size_t i, const char* field)
     return os.str();
 }
 
+static bool reject_moved_key(const bfc::configuration_parser& parser,
+                             const char* from, const char* to,
+                             std::string* error)
+{
+    if (!parser.arg(from).has_value())
+    {
+        return true;
+    }
+    *error = std::string(from) + " moved to " + to;
+    return false;
+}
+
 static bool require_arg(const bfc::configuration_parser& p,
                         const std::string& key, std::string* out,
                         std::string* error)
@@ -118,64 +130,84 @@ bool Config::load(const std::string& path, std::string* error)
         parser.load_line(t);
     }
 
+    const char* moved[][2] = {
+        {"winject.device", "radio.device"},
+        {"winject.console", "radio.console"},
+        {"winject.dplane_port", "radio.dplane_port"},
+        {"winject.inject_port", "radio.inject_port"},
+        {"winject.channel", "radio.channel"},
+        {"winject.modulation", "radio.modulation"},
+        {"winject.power", "radio.power"},
+        {"winject.cca", "radio.cca"},
+        {"winject.radio_fcs", "radio.fcs"},
+        {"winject.skip_console", "radio.skip_console"},
+    };
+    for (const auto& pair : moved)
+    {
+        if (!reject_moved_key(parser, pair[0], pair[1], error))
+        {
+            return false;
+        }
+    }
+
     std::string device;
-    const bool have_device = parser.arg("winject.device").has_value();
+    const bool have_device = parser.arg("radio.device").has_value();
     if (have_device)
     {
-        device = *parser.arg("winject.device");
+        device = *parser.arg("radio.device");
     }
     unsigned console_port = 22;
-    if (auto console = parser.as<unsigned>("winject.console"))
+    if (auto console = parser.as<unsigned>("radio.console"))
     {
         if (*console == 0 || *console > 65535)
         {
-            *error = "invalid winject.console";
+            *error = "invalid radio.console";
             return false;
         }
         console_port = *console;
     }
-    if (auto skip = parser.arg("winject.skip_console"))
+    if (auto skip = parser.arg("radio.skip_console"))
     {
         if (*skip == "1" || *skip == "true")
         {
-            *error = "winject.skip_console cannot omit the radio mplane";
+            *error = "radio.skip_console cannot omit the radio mplane";
             return false;
         }
         if (*skip != "0" && *skip != "false")
         {
-            *error = "invalid winject.skip_console";
+            *error = "invalid radio.skip_console";
             return false;
         }
     }
 
-    auto ch = parser.as<unsigned>("winject.channel");
+    auto ch = parser.as<unsigned>("radio.channel");
     if (!ch || *ch < 1 || *ch > 14)
     {
-        *error = "invalid winject.channel";
+        *error = "invalid radio.channel";
         return false;
     }
     channel = static_cast<uint8_t>(*ch);
 
-    if (!require_arg(parser, "winject.modulation", &modulation, error))
+    if (!require_arg(parser, "radio.modulation", &modulation, error))
     {
         return false;
     }
     const std::string canon = canonical_modulation(modulation);
     if (canon.empty())
     {
-        *error = "invalid winject.modulation";
+        *error = "invalid radio.modulation";
         return false;
     }
     modulation = canon;
     if (!modulation_ok_for_channel(modulation, channel))
     {
-        *error = "winject.modulation not valid for winject.channel";
+        *error = "radio.modulation not valid for radio.channel";
         return false;
     }
-    auto pwr = parser.as<int>("winject.power");
+    auto pwr = parser.as<int>("radio.power");
     if (!pwr || *pwr < 2 || *pwr > 20)
     {
-        *error = "invalid winject.power";
+        *error = "invalid radio.power";
         return false;
     }
     power_dbm = static_cast<int8_t>(*pwr);
@@ -211,7 +243,7 @@ bool Config::load(const std::string& path, std::string* error)
     {
         LOG_WRN("winject.local_ip is ignored");
     }
-    if (auto c = parser.arg("winject.cca"))
+    if (auto c = parser.arg("radio.cca"))
     {
         if (*c == "1" || *c == "true")
         {
@@ -223,12 +255,12 @@ bool Config::load(const std::string& path, std::string* error)
         }
         else
         {
-            *error = "invalid winject.cca";
+            *error = "invalid radio.cca";
             return false;
         }
         cca_explicit = true;
     }
-    if (auto fcs = parser.arg("winject.radio_fcs"))
+    if (auto fcs = parser.arg("radio.fcs"))
     {
         std::string v;
         for (char c : *fcs)
@@ -250,7 +282,7 @@ bool Config::load(const std::string& path, std::string* error)
         }
         else
         {
-            *error = "invalid winject.radio_fcs";
+            *error = "invalid radio.fcs";
             return false;
         }
     }
@@ -269,25 +301,25 @@ bool Config::load(const std::string& path, std::string* error)
     {
         LOG_WRN(
             "winject.forward_port is obsolete: the radio uses one d-plane "
-            "port (winject.dplane_port)");
+            "port (radio.dplane_port)");
     }
     unsigned dplane_port = 9000;
     bool dplane_from_dplane_key = false;
-    if (auto dp = parser.as<unsigned>("winject.dplane_port"))
+    if (auto dp = parser.as<unsigned>("radio.dplane_port"))
     {
         if (*dp == 0 || *dp > 65535)
         {
-            *error = "invalid winject.dplane_port";
+            *error = "invalid radio.dplane_port";
             return false;
         }
         dplane_port = *dp;
         dplane_from_dplane_key = true;
     }
-    if (auto inj = parser.as<unsigned>("winject.inject_port"))
+    if (auto inj = parser.as<unsigned>("radio.inject_port"))
     {
         if (*inj == 0 || *inj > 65535)
         {
-            *error = "invalid winject.inject_port";
+            *error = "invalid radio.inject_port";
             return false;
         }
         if (!dplane_from_dplane_key)
@@ -297,13 +329,13 @@ bool Config::load(const std::string& path, std::string* error)
     }
     if (!have_device)
     {
-        *error = "winject.device is required";
+        *error = "radio.device is required";
         return false;
     }
     in_addr dev_ip = {};
     if (!parse_host(device, &dev_ip))
     {
-        *error = "cannot resolve winject.device";
+        *error = "cannot resolve radio.device";
         return false;
     }
     radio_device.mplane = {};
@@ -533,21 +565,21 @@ bool Config::validate(std::string* error) const
 
     if (channel < 1 || channel > 14)
     {
-        return fail("invalid winject.channel");
+        return fail("invalid radio.channel");
     }
     // load() stores the canonical name. A filled struct must already use it
     // so the radio sees the same string a parsed file would.
     if (canonical_modulation(modulation) != modulation)
     {
-        return fail("invalid winject.modulation");
+        return fail("invalid radio.modulation");
     }
     if (!modulation_ok_for_channel(modulation, channel))
     {
-        return fail("winject.modulation not valid for winject.channel");
+        return fail("radio.modulation not valid for radio.channel");
     }
     if (power_dbm < 2 || power_dbm > 20)
     {
-        return fail("invalid winject.power");
+        return fail("invalid radio.power");
     }
     if (domain == 0)
     {

@@ -20,12 +20,12 @@ iw dev "$MON" set freq 2412 HT20
 LOG="$(mktemp -d /tmp/t3u_cap_XXXX)"
 patch_conf() {
   local dev="$1" in="$2" out="$3"
-  sed -e "s/^winject\\.device.*/winject.device        = ${dev}/" \
-      -e "s/^winject\\.skip_console.*/winject.skip_console  = 0/" \
-      -e "s/^winject\\.channel.*/winject.channel       = 1/" \
-      -e "s/^winject\\.modulation.*/winject.modulation    = OFDM_24M/" \
-      -e "s/^winject\\.power.*/winject.power         = ${PWR}/" \
-      -e "s/^winject\\.cca.*/winject.cca           = 0/" \
+  sed -e "s/^radio\\.device.*/radio.device        = ${dev}/" \
+      -e "s/^radio\\.skip_console.*/radio.skip_console  = 0/" \
+      -e "s/^radio\\.channel.*/radio.channel       = 1/" \
+      -e "s/^radio\\.modulation.*/radio.modulation    = OFDM_24M/" \
+      -e "s/^radio\\.power.*/radio.power         = ${PWR}/" \
+      -e "s/^radio\\.cca.*/radio.cca           = 0/" \
       "$in"
   printf 'manager.console_in    = 127.0.0.1:%s\n' "$out"
 }
