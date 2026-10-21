@@ -13,8 +13,8 @@ This document covers the system architecture, the manager's internal structure, 
 |        ^   |                  |                    |        ^   |                  |
 |        |   v  upstreams       |                    |        |   v  upstreams       |
 | winject-manager               |                    | winject-manager               |
-|   m-plane (UDP 22) --------+  |                    |  +-------- m-plane (UDP 22)   |
-|   d-plane (:9000) --------+  |                    |  +- d-plane (:9000)          |
+|   radio.mplane -----------+  |                    |  +-------- radio.mplane       |
+|   radio.dplane -----------+  |                    |  +- radio.dplane             |
 +----------------------------|--+                    +--|----------------------------+
                 Ethernet     |                          |     Ethernet
 +----------------------------v--+                    +--v----------------------------+
@@ -30,8 +30,8 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 
 | Plane | Endpoint | Purpose |
 |---|---|---|
-| Radio m-plane | radio UDP **22** | Text commands from the manager to the radio: PHY (`radio_tx`), domain filter (`rx_filter_addr3`), capabilities (`radio_caps_info`), counters (`tx_info`, `rx_info`), `save` / `load`, `reset`. Specified in the winject-radio-esp32 repository |
-| Radio d-plane | radio UDP **9000** (typical) | One port for inject (24–1472 byte MPDUs), peer registration (1–23 bytes), and forward (MPDU + 4-byte trailer to the registered peer). See the radio repos for the length rules |
+| Radio m-plane | `radio.mplane` (`host:port`, ESP32 `:22`, Realtek `:2201`) | Text commands from the manager to the radio: PHY (`radio_tx`), domain filter (`rx_filter_addr3`), capabilities (`radio_caps_info`), counters (`tx_info`, `rx_info`), `save` / `load`, `reset`. Specified in the radio firmware repos |
+| Radio d-plane | `radio.dplane` (`host:port`, typical `:9000`) | One UDP endpoint for inject (24–1472 byte MPDUs), peer registration (1–23 bytes), and forward (MPDU + 4-byte trailer to the registered peer). See the radio repos for the length rules |
 | Manager m-plane | `winject.console_in` | Text commands from operators and tools to the manager: upstreams, metrics, radio passthrough. Specified in [mplane.md](mplane.md) |
 
 ## Manager
@@ -46,11 +46,12 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | `ConsoleClient` | [`ConsoleClient.*`](../src/manager/console/ConsoleClient.cpp) | Radio m-plane client: correlated requests (`cmd:<u8>`), timeouts, `apply_radio`, `radio_caps_info` query |
 | `ConsoleService` | [`ConsoleService.*`](../src/manager/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender) |
 | `RadioManager` | [`RadioManager.*`](../src/manager/radio/RadioManager.cpp) | Keeps the radio in the configured state: PHY reconcile, filter reconcile, heartbeat, forward re-registration, TX pacing per modulation |
-| `WifiUdp` | [`WifiUdp.*`](../src/manager/radio/WifiUdp.cpp) | d-plane socket: MPDUs and 1-byte registration to `radio_device dplane`; checks the forward trailer per FCS mode |
+| `WifiUdp` | [`WifiUdp.*`](../src/manager/radio/WifiUdp.cpp) | d-plane socket to `radio_device.dplane`: MPDUs and 1-byte registration; checks the forward trailer per FCS mode |
 | `TxMux` | [`TxMux.*`](../src/manager/radio/TxMux.cpp) | TX scheduler: picks upstreams, builds MPDUs, paces them at 90 % of the modulation's airtime |
 | `RxDemux` | [`RxDemux.*`](../src/manager/radio/RxDemux.cpp) | RX: validates domain, splits slots, routes each slot by its LC bus to upstreams |
 | `RadioUpstreamTable` | [`RadioUpstreamTable.*`](../src/manager/radio/RadioUpstreamTable.cpp) | Shared upstream list (`bus_tx`, `bus_rx`, upstream pointer), guarded by one mutex |
 | `Upstream` / `UdpEndpoint` | [`endpoint/`](../src/manager/endpoint/UdpEndpoint.cpp) | One application flow: UDP socket in `UDP_SERVER_FORWARDING`, `UDP_CLIENT_FORWARDING` or static mode; TX queue; optional FEC |
+| `Upstream` / `QueueEndpoint` | [`QueueEndpoint.*`](../src/manager/endpoint/QueueEndpoint.cpp) | Same SDU path through host-owned queues (`QUEUE_FORWARDING`; `rx` / `tx` are registry names) |
 | `UpstreamStats` | [`UpstreamStats.*`](../src/manager/endpoint/UpstreamStats.cpp) | Stamps and checks the LC header (bus, sequence); duplicate drop and gap counting |
 | `RsBlockErasure` | [`fec/`](../src/manager/fec/RsBlockErasure.cpp) | Optional k-of-n Reed–Solomon erasure coding (ISA-L) |
 | `Mpdu` / `Frame` / `LCHeader` | [`frames/`](../src/manager/frames/Mpdu.cpp) | On-air framing (see § Framing) |
@@ -72,7 +73,7 @@ The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue 
 3. The TX thread picks a primary upstream that has data, then fills the remaining room in the MPDU from other upstreams, up to 5 slots and 1448 body bytes.
 4. Each slot payload is prefixed with the LC header (upstream `tx_bus`, FEC flag, per-bus sequence).
 5. The MPDU header gets the domain in Address 3, the slot lengths in Address 1–2, and a 12-bit MPDU sequence.
-6. `WifiUdp::send` sends it as one UDP datagram to the configured d-plane address. Pacing decides when the next MPDU may go.
+6. `WifiUdp::send` sends it as one UDP datagram to `radio.dplane`. Pacing decides when the next MPDU may go.
 7. The radio transmits it unchanged.
 
 ### Data path: RX
@@ -91,7 +92,7 @@ At startup the manager connects to the radio m-plane (`radio_device.mplane`, fro
 2. programs `radio_tx` (channel, power, modulation, and CCA when `radio.cca` is set) and `rx_filter_addr3` (domain);
 3. stores it with `save <slot>`.
 
-While the m-plane is up, `RadioManager` runs these on reactor timers: it re-reads the PHY and filter every 5 s and corrects them, pings the radio 250 ms after each pong (no pong within 500 ms drops the m-plane, which is retried every second), and re-registers on the configured d-plane port every second so the radio keeps forwarding to this manager. The first registration happens at startup.
+While the m-plane is up, `RadioManager` runs these on reactor timers: it re-reads the PHY and filter every 5 s and corrects them, pings the radio 250 ms after each pong (no pong within 500 ms drops the m-plane, which is retried every second), and re-registers on `radio.dplane` every second so the radio keeps forwarding to this manager. The first registration happens at startup.
 
 The manager m-plane also forwards radio commands for operators and bench tools (`radio_info`, `radio_tx`, `radio_stats`, `reset`, `radio_caps_info`); see [mplane.md](mplane.md). The bench scripts and tools reach the radios only through these.
 
@@ -132,7 +133,7 @@ slot payload                                (per upstream)
         v  Mpdu: up to 5 slots in one 802.11 DATA frame body
 802.11 MPDU                                 (≤ 1472 bytes on inject)
         |
-        v  UDP to radio:9000
+        v  UDP to radio.dplane
 radio (raw 802.11 TX)
 ```
 

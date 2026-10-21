@@ -9,7 +9,7 @@ Two radios speak this protocol:
 | ESP32 (WT32-ETH01) | [winject-radio-esp32](https://github.com/winject-wireless/winject-radio-esp32) | Its own board, reached over Ethernet | `SIGNAL` |
 | Realtek RTL8812AU | [winject-radio-realtek](https://github.com/winject-wireless/winject-radio-realtek) | A Linux host, one process per USB dongle, `rtl88xxau_wfb` driver | `ACTUAL` |
 
-Both expose the same UDP console and d-plane ports, so the manager drives either one with the same config keys. See [Realtek radio](#realtek-radio) for the settings that differ.
+Both speak the same radio protocol; the manager uses the same config schema for either (`radio.mplane`, `radio.dplane`, `radio.*` PHY keys, `winject.*`, `upstream-N.*`). See [docs/mplane.md](docs/mplane.md) for the full format and [Realtek radio](#realtek-radio) for settings that differ on RTL8812AU.
 
 ## Layout
 
@@ -82,7 +82,7 @@ Differences from Linux:
 | Signals | None: stop the manager with `winject_l3::stop()` (any task, also before `main` has started its loop) |
 | Config | `app_main` fills a `winject::Config` and passes it to `winject_l3::main`. No config file and no argv |
 
-Configuration keys and the manager console are described in [docs/mplane.md](docs/mplane.md).
+Configuration keys and the manager console are described in [docs/mplane.md](docs/mplane.md) (format overview, per-key tables, legacy keys). Example trees: `configuration/host_x86/`, `configuration/host_arm/`, `configuration/winject-tests/<scenario>/` — see [configuration/scenario.md](configuration/scenario.md).
 
 Cross-build for Allwinner H3 / Orange Pi PC (32-bit armhf; needs the `arm-linux-gnueabihf` toolchain):
 
@@ -138,7 +138,7 @@ Measured throughput on the bench (two RTL8812AU, channel 13, 1400-byte payload, 
 
 The radios dropped no frames themselves on these runs, and the 4–10 % loss was all on air. These runs capped the manager with `winject.max_rate_kbps` (20000 on the ESP32 bench, 80000 on the Realtek one); that key has since been removed, and TX pacing is now fixed at 90 % of the modulation's airtime. `OFDM_24M` itself tops out near 18 Mbit/s of payload.
 
-`configuration/winject-tests/realtek/` holds the Realtek bench scenario. `bw_a.cfg` / `bw_b.cfg` are the manager configs, with the ports and FCS setting above. `radio_a.cfg` / `radio_b.cfg` are the radio configs, one per dongle, selected by interface name. Run it with `manager_iperf_bw_test.sh --scenario realtek` (see below). `manager_bw_test.sh` and `manager_lat_test.sh` only cover the ESP32 scenario for now.
+`configuration/winject-tests/realtek/` holds the Realtek bench scenario. `bw_a.cfg` / `bw_b.cfg` are **manager** configs (`radio.mplane`, `radio.dplane`, upstreams). `radio_a.cfg` / `radio_b.cfg` are **winject-radio-realtek** process configs (dongle `radio.device`, `net.console_port`, `net.dplane_port` — not read by winject-manager). Run it with `manager_iperf_bw_test.sh --scenario realtek` (see below). `manager_bw_test.sh` and `manager_lat_test.sh` only cover the ESP32 scenario for now.
 
 ## Bandwidth test (two radios)
 

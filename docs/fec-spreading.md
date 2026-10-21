@@ -30,9 +30,10 @@ raw loss):
   FEC 1/3 repetition), the three copies of a packet arrive within microseconds of each other
   and are lost together: 34 % shard loss gave 22 % packet loss, against about 4 % if losses
   were independent.
-- **A slower link does not lower raw loss.** Spacing every frame in the L3 (`winject.tx_gap_us` up
-  to 1000 µs, or `winject.max_rate_kbps`) left raw loss at 15–16 %. It did halve block
-  failures (5.5 % → 3.4 %) by spreading each block over 22–26 ms, but it caps the whole link.
+- **A slower link does not lower raw loss.** Historical runs spaced every frame with removed manager
+  keys (`winject.tx_gap_us`, `winject.max_rate_kbps`; TX pacing is now fixed at 90 % of the
+  modulation airtime). That left raw loss at 15–16 %. It did halve block failures (5.5 % → 3.4 %)
+  by spreading each block over 22–26 ms, but it caps the whole link.
 
 ## How spreading works
 

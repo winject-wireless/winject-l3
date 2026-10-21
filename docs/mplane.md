@@ -105,7 +105,7 @@ Procedure for a new connection:
 |---|---|---|
 | `radio_device\|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] [fcs=AUTO\|SIGNAL\|ACTUAL]` | Set or read the radio the manager drives. Only `id=0`. Keys left out keep their value; `id=0` alone reads. Addresses cannot be cleared | `OK radio_device id=0 mplane=<ip:port> dplane=<ip:port> fcs=<mode>` |
 
-`mplane` is the radio m-plane address and `dplane` is its UDP port for inject, registration and forward. Config always sets both. A `radio_device` command may omit either key to keep the current address; neither can be cleared. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
+`mplane` and `dplane` are each a `host:port` (the radio m-plane console and the UDP d-plane for inject, registration, and forward). Config always sets both. A `radio_device` command may omit either key to keep the current address; neither can be cleared. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
 
 These are forwarded to the radio's m-plane when the console is up and the protocol versions match; otherwise they reply `NOK ENODEV` or `NOK EPROTO`. `radio_caps_info` is the exception (see below).
 
@@ -151,6 +151,39 @@ get_metrics keys=radio_tx_pkt,radio_rx_pkt,radio_proto_ok,radio_version
 
 Run the Linux manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`). That process parses the file in its `main` and calls `winject_l3::main(const Config&)`. An ESP-IDF host fills the same `Config` in code (`idf/example/main/main.cpp`) and does not pass argv.
 
+### Format overview
+
+Keys fall into three namespaces:
+
+| Namespace | Purpose |
+|---|---|
+| `radio.*` | Radio the manager drives: `mplane` and `dplane` (`host:port`), PHY (`channel`, `modulation`, `power`), optional `cca` and `fcs` |
+| `winject.*` | Shared air domain and manager behaviour: required `domain`, optional `console_in` and `stats_sec` |
+| `upstream.size` + `upstream-N.*` | Application bridges: `mode`, `rx` / `tx`, `tx_bus` / `rx_bus`, scheduling, optional FEC; queue mode also needs `reactor` |
+
+`radio.mplane` and `radio.dplane` are independent: hosts and ports may differ (for example Realtek on `127.0.0.1` with console `2201` and d-plane `9000`). On every upstream, `rx` and `tx` use the same names for UDP `host:port` endpoints or, in `QUEUE_FORWARDING`, queue registry names.
+
+Minimal static UDP upstream:
+
+```ini
+radio.mplane = 192.168.253.11:22
+radio.dplane = 192.168.253.11:9000
+radio.channel = 1
+radio.modulation = OFDM_24M
+radio.power = 20
+winject.domain = 1234
+
+upstream.size = 1
+upstream-0.mode = UDP_STATIC_FORWARDING
+upstream-0.tx_bus = b2
+upstream-0.rx_bus = a1
+upstream-0.scheduler_budget = 4096
+upstream-0.rx = 0.0.0.0:22081
+upstream-0.tx = 127.0.0.1:21082
+```
+
+Bench layout and scenarios: [configuration/scenario.md](../configuration/scenario.md).
+
 ### Radio (`radio.*`)
 
 | Key | Default | Meaning |
@@ -163,8 +196,6 @@ Run the Linux manager with `winject-manager <config file>`. The file holds `key 
 | `radio.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
 | `radio.fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
 
-The old `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, and `winject.radio_fcs` keys are rejected. The error names the `radio.*` key. `winject.console` and `radio.console` moved to `radio.mplane` (`host:port`). `winject.device`, `radio.dplane_port`, `winject.dplane_port`, `radio.inject_port`, `winject.inject_port`, `winject.forward_port`, and `winject.forward_base` moved to `radio.dplane` (`host:port`). `radio.device` is removed. `radio.skip_console` and `winject.skip_console` are rejected: the radio m-plane is required.
-
 ### Link and manager (`winject.*`)
 
 | Key | Default | Meaning |
@@ -173,7 +204,7 @@ The old `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`,
 | `winject.stats_sec` | `0` | Log stream stats every N seconds; `0` = off. Overridden by the `WINJECT_STATS_SEC` environment variable |
 | `winject.console_in` | | `address:port` the manager binds for commands (replies go to the sender). Unset = the manager m-plane is off |
 
-TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airtime (see [winject.md](winject.md)). `winject.max_rate_kbps`, `winject.tx_gap_us`, `winject.max_data_per_tick`, `winject.tx_burst_size`, `winject.tx_burst_interval_us`, and `winject.local_ip` are rejected. `manager.console_in` moved to `winject.console_in`.
+TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airtime (see [winject.md](winject.md)).
 
 ### Upstreams (`upstream.*`, `upstream-N.*`)
 
@@ -193,6 +224,23 @@ TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airt
 | `upstream-N.fec.timeout_ms` | Close a partial block after this long (default 20) |
 
 Server mode has `rx` only, client mode `tx` only, static mode both. `QUEUE_FORWARDING` has `rx`, `tx`, and `reactor`: `rx` and `tx` are queue names. The host registers both queues (nonzero capacity, distinct objects) on `bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>` and the reactor on `bfc::cv_reactor_registry` before the manager opens the upstream. The manager does not create or stop them. Each queue has one consumer. `add_upstream` remains a UDP upstream. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).
+
+### Legacy and removed keys
+
+Loading a file with any of these keys fails with an error that names the replacement or states the key is removed.
+
+| Old key | Replacement |
+|---|---|
+| `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, `winject.radio_fcs` | `radio.channel`, `radio.modulation`, `radio.power`, `radio.cca`, `radio.fcs` |
+| `winject.console`, `radio.console` | `radio.mplane` (`host:port`) |
+| `winject.device`, `radio.dplane_port`, `winject.dplane_port`, `radio.inject_port`, `winject.inject_port`, `winject.forward_port`, `winject.forward_base` | `radio.dplane` (`host:port`) |
+| `manager.console_in` | `winject.console_in` |
+| `upstream-N.bind_address`, `upstream-N.connect_address` | `upstream-N.rx`, `upstream-N.tx` |
+| `upstream-N.queue_in`, `upstream-N.queue_out` | `upstream-N.rx`, `upstream-N.tx` |
+| `upstream-N.bus_tx`, `upstream-N.bus_rx`, `upstream_tx-N.bus`, `upstream_rx-N.bus` | `upstream-N.tx_bus`, `upstream-N.rx_bus` |
+| `upstream-N.mode = UDP_GENERIC_FORWARDING` | `UDP_STATIC_FORWARDING` |
+
+Removed with no replacement: `radio.device`, `radio.skip_console`, `winject.skip_console`, and the old TX pacing keys (`winject.max_rate_kbps`, `winject.tx_gap_us`, `winject.max_data_per_tick`, `winject.tx_burst_size`, `winject.tx_burst_interval_us`, `winject.local_ip`). The radio m-plane is always required.
 
 ## Related docs
 
