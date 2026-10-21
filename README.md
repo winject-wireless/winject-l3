@@ -16,7 +16,7 @@ Both speak the same radio protocol; the manager uses the same config schema for 
 ```
 src/manager/            winject-manager binary (802.11 MPDU in frames/Mpdu.*, IEEE layout in frames/Frame.*)
 src/test/               Host unit tests (GoogleTest)
-configuration/          Manager configs: host_x86/, host_arm/ (video demo), winject-tests/<scenario>/ (bench pairs: esp32/, realtek/)
+configuration/          Manager configs: host_x86/, host_arm/ (video demo), winject-tests/<scenario>/ (bench); scenario.md
 scripts/                Bench scripts (bw/lat tests, ensure_manager.sh, check_guidelines.sh)
 tools/                  Python bench tools (radio_stats.py, bw_test.py, lat_test.py) and CMake toolchains
 docs/mplane.md         Manager config and m-plane (client console)
