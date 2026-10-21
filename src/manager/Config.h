@@ -85,8 +85,8 @@ struct UpstreamConfig
 // and cannot clear them.
 struct RadioDeviceConfig
 {
-    sockaddr_in mplane{};  // radio m-plane (ESP32 :22, Realtek :2201)
-    sockaddr_in dplane{};  // radio d-plane: inject, registration, forward
+    sockaddr_in mplane{};  // radio.mplane host:port (ESP32 :22, Realtek :2201)
+    sockaddr_in dplane{};  // radio.device + radio.dplane_port
     RadioFcsConfig fcs = RadioFcsConfig::auto_detect;
 };
 

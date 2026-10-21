@@ -159,6 +159,7 @@ trap cleanup EXIT INT TERM
 patch_conf() {
   local src="$1" device="$2" dest="$3"
   sed -e "s/^radio\.device.*/radio.device        = ${device}/" \
+      -e "s/^\(radio\.mplane[[:space:]]*=[[:space:]]*\)[^:]*:/\1${device}:/" \
       "$src" >"$dest"
   if [[ -n "$CFG_CCA" ]]; then
     printf 'radio.cca           = %s\n' "$CFG_CCA" >>"$dest"

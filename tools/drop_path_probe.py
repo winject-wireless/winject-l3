@@ -338,7 +338,7 @@ def main() -> int:
         if role == "a":
             body = f"""
 radio.device        = {device}
-radio.console       = 22
+radio.mplane        = {device}:22
 radio.channel       = {args.channel}
 radio.modulation    = OFDM_24M
 radio.power         = {args.power}
@@ -362,7 +362,7 @@ upstream-1.connect_address  = 127.0.0.1:9001
         else:
             body = f"""
 radio.device        = {device}
-radio.console       = 22
+radio.mplane        = {device}:22
 radio.channel       = {args.channel}
 radio.modulation    = OFDM_24M
 radio.power         = {args.power}

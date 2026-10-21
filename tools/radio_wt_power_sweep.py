@@ -93,6 +93,7 @@ CONF_B="$ROOT/configuration/winject-tests/esp32/lat_udp_b.cfg"
 patch_conf() {{
   local file="$1" device="$2" gci_in="$3"
   sed -e "s/^radio\\.device.*/radio.device        = ${{device}}/" \\
+      -e "s/^\\(radio\\.mplane[[:space:]]*=[[:space:]]*\\)[^:]*:/\\1${{device}}:/" \\
       -e "s/^radio\\.channel.*/radio.channel       = 1/" \\
       -e "s/^radio\\.modulation.*/radio.modulation    = {modulation}/" \\
       -e "s/^radio\\.power.*/radio.power         = {power}/" \\

@@ -155,8 +155,8 @@ Run the Linux manager with `winject-manager <config file>`. The file holds `key 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `radio.device` | required | Radio address. With `console` and `dplane_port` it sets the m-plane and d-plane |
-| `radio.console` | `22` | Radio m-plane UDP port (ESP32 `22`, Realtek `2201`) |
+| `radio.device` | required | D-plane IPv4 address. With `dplane_port` it sets the d-plane |
+| `radio.mplane` | required | Radio m-plane `host:port` (ESP32 `:22`, Realtek `:2201`) |
 | `radio.dplane_port` | `9000` | Radio d-plane port |
 | `radio.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
 | `radio.modulation` | `DSS_1M_L` | PHY rate name, for example `OFDM_24M` |
@@ -164,7 +164,7 @@ Run the Linux manager with `winject-manager <config file>`. The file holds `key 
 | `radio.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
 | `radio.fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
 
-The old `winject.device`, `winject.console`, `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, `winject.dplane_port`, and `winject.radio_fcs` keys are rejected. The error names the `radio.*` key. `radio.inject_port`, `winject.inject_port`, `winject.forward_port`, and `winject.forward_base` are rejected in favor of `radio.dplane_port`. `radio.skip_console` and `winject.skip_console` are rejected: the radio m-plane is required.
+The old `winject.device`, `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, `winject.dplane_port`, and `winject.radio_fcs` keys are rejected. The error names the `radio.*` key. `winject.console` and `radio.console` moved to `radio.mplane` (`host:port`). `radio.inject_port`, `winject.inject_port`, `winject.forward_port`, and `winject.forward_base` are rejected in favor of `radio.dplane_port`. `radio.skip_console` and `winject.skip_console` are rejected: the radio m-plane is required.
 
 ### Link and manager (`winject.*`)
 

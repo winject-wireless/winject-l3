@@ -143,7 +143,8 @@ bool Config::load(const std::string& path, std::string* error)
     const char* moved[][2] = {
         {"manager.console_in", "winject.console_in"},
         {"winject.device", "radio.device"},
-        {"winject.console", "radio.console"},
+        {"winject.console", "radio.mplane"},
+        {"radio.console", "radio.mplane"},
         {"winject.dplane_port", "radio.dplane_port"},
         {"winject.inject_port", "radio.dplane_port"},
         {"radio.inject_port", "radio.dplane_port"},
@@ -181,16 +182,6 @@ bool Config::load(const std::string& path, std::string* error)
     if (have_device)
     {
         device = *parser.arg("radio.device");
-    }
-    unsigned console_port = 22;
-    if (auto console = parser.as<unsigned>("radio.console"))
-    {
-        if (*console == 0 || *console > 65535)
-        {
-            *error = "invalid radio.console";
-            return false;
-        }
-        console_port = *console;
     }
 
     auto ch = parser.as<unsigned>("radio.channel");
@@ -315,10 +306,16 @@ bool Config::load(const std::string& path, std::string* error)
         *error = "cannot resolve radio.device";
         return false;
     }
-    radio_device.mplane = {};
-    radio_device.mplane.sin_family = AF_INET;
-    radio_device.mplane.sin_addr = dev_ip;
-    radio_device.mplane.sin_port = htons(static_cast<uint16_t>(console_port));
+    std::string mplane_s;
+    if (!require_arg(parser, "radio.mplane", &mplane_s, error))
+    {
+        return false;
+    }
+    if (!parse_host_port(mplane_s, &radio_device.mplane))
+    {
+        *error = "invalid radio.mplane";
+        return false;
+    }
     radio_device.dplane = {};
     radio_device.dplane.sin_family = AF_INET;
     radio_device.dplane.sin_addr = dev_ip;

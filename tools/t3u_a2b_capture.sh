@@ -21,6 +21,7 @@ LOG="$(mktemp -d /tmp/t3u_cap_XXXX)"
 patch_conf() {
   local dev="$1" in="$2" out="$3"
   sed -e "s/^radio\\.device.*/radio.device        = ${dev}/" \
+      -e "s/^\\(radio\\.mplane[[:space:]]*=[[:space:]]*\\)[^:]*:/\\1${dev}:/" \
       -e "s/^radio\\.channel.*/radio.channel       = 1/" \
       -e "s/^radio\\.modulation.*/radio.modulation    = OFDM_24M/" \
       -e "s/^radio\\.power.*/radio.power         = ${PWR}/" \

@@ -30,7 +30,7 @@ TEST(ConfigTest, LoadsStandaloneUdp)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -47,6 +47,11 @@ upstream-0.tx               = 127.0.0.1:21082
     std::string err;
     ASSERT_TRUE(cfg.load(path, &err)) << err;
     EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 22);
+    char mplane_ip[INET_ADDRSTRLEN] = {};
+    ASSERT_NE(inet_ntop(AF_INET, &cfg.radio_device.mplane.sin_addr, mplane_ip,
+                        sizeof(mplane_ip)),
+              nullptr);
+    EXPECT_STREQ(mplane_ip, "192.168.32.1");
     EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9000);
     EXPECT_EQ(cfg.channel, 1);
     EXPECT_EQ(cfg.modulation, "OFDM_24M");
@@ -68,7 +73,7 @@ TEST(ConfigTest, RejectsUdpGenericForwardingMode)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -96,7 +101,7 @@ TEST(ConfigTest, RejectsMixedEndpointKeys)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -120,7 +125,7 @@ TEST(ConfigTest, LoadsSameBusTxRx)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -142,7 +147,7 @@ TEST(ConfigTest, RejectsUnknownModulation)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = NOT_A_PHY
 radio.power         = 20
@@ -160,7 +165,7 @@ TEST(ConfigTest, RejectsRemovedPacingKeys)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -189,7 +194,7 @@ TEST(ConfigTest, RejectsZeroDomain)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -206,7 +211,7 @@ TEST(ConfigTest, LoadsRsBlockErasure)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -237,7 +242,7 @@ TEST(ConfigTest, FecRejectsBadKn)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -263,7 +268,7 @@ TEST(ConfigTest, RejectsUnknownUpstreamMode)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -286,7 +291,7 @@ TEST(ConfigTest, Channel14AcceptsDsss)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 14
 radio.modulation    = DSS_1M_L
 radio.power         = 20
@@ -324,7 +329,7 @@ TEST(ConfigTest, RadioFcsValuesAndSkipConsoleRule)
 {
     const std::string base = R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -378,7 +383,7 @@ TEST(ConfigTest, Channel14RejectsOfdm)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 14
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -402,7 +407,7 @@ TEST(ConfigTest, CcaOptional)
 {
     const std::string base = R"(
 radio.device        = 192.168.32.1
-radio.console       = 22
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -455,6 +460,7 @@ TEST(ConfigTest, LoadsWinjectConsoleIn)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -479,6 +485,7 @@ TEST(ConfigTest, RejectsManagerConsoleKey)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -503,6 +510,7 @@ TEST(ConfigTest, RejectsLegacyBusKey)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -640,6 +648,7 @@ TEST(ConfigTest, LoadsQueueForwarding)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -676,6 +685,7 @@ TEST(ConfigTest, RejectsQueueForwardingWithoutAPair)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -697,6 +707,7 @@ TEST(ConfigTest, RejectsSharedQueueNames)
 {
     const std::string path = write_conf(R"(
 radio.device        = 192.168.32.1
+radio.mplane        = 192.168.32.1:22
 radio.channel       = 1
 radio.modulation    = OFDM_24M
 radio.power         = 20
@@ -722,11 +733,88 @@ upstream-1.reactor          = host-reactor
     std::remove(path.c_str());
 }
 
-TEST(ConfigTest, LoadsRadioDeviceFromLegacyKeys)
+TEST(ConfigTest, MplaneHostIndependentOfDevice)
+{
+    const std::string path = write_conf(R"(
+radio.device        = 192.168.32.1
+radio.mplane        = 10.1.2.3:2201
+radio.dplane_port   = 9001
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_CLIENT_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.tx               = 127.0.0.1:9
+)");
+    Config cfg;
+    std::string err;
+    ASSERT_TRUE(cfg.load(path, &err)) << err;
+    char ip[INET_ADDRSTRLEN] = {};
+    ASSERT_NE(
+        inet_ntop(AF_INET, &cfg.radio_device.mplane.sin_addr, ip, sizeof(ip)),
+        nullptr);
+    EXPECT_STREQ(ip, "10.1.2.3");
+    EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 2201);
+    ASSERT_NE(
+        inet_ntop(AF_INET, &cfg.radio_device.dplane.sin_addr, ip, sizeof(ip)),
+        nullptr);
+    EXPECT_STREQ(ip, "192.168.32.1");
+    EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9001);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsRadioConsoleKey)
+{
+    const std::string path = write_conf(R"(
+radio.device        = 192.168.32.1
+radio.console       = 22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_CLIENT_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.tx               = 127.0.0.1:9
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to radio.mplane"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsMplaneWithoutPort)
+{
+    const std::string path = write_conf(R"(
+radio.device        = 192.168.32.1
+radio.mplane        = 192.168.32.1
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_CLIENT_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.tx               = 127.0.0.1:9
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("invalid radio.mplane"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, LoadsMplaneHostPort)
 {
     const std::string path = write_conf(R"(
 radio.device        = 127.0.0.1
-radio.console       = 2201
+radio.mplane        = 127.0.0.1:2201
 radio.dplane_port   = 9001
 radio.channel       = 1
 radio.modulation    = OFDM_24M
