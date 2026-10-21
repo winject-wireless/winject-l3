@@ -28,15 +28,18 @@ namespace winject
 // The host registers two distinct lossy queues on
 // bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer> and
 // a running bfc::cv_reactor<> before bind_dplane(). This class does not create
-// them. The peer consumes inject_tx and produces forward_rx.
+// them. Registry names are conventionally wifi_tx and wifi_rx; the peer
+// consumes wifi_tx and produces wifi_rx.
 //
 // m-plane (UDP console) stays on WifiUdp / sockets; only the d-plane uses
 // queues until a queue m-plane exists.
 struct WifiQueueDplaneBinding
 {
-    std::string inject_tx;   // manager -> peer (inject + registration)
-    std::string forward_rx;  // peer -> manager (forward frames)
-    std::string reactor;     // wakes both ends on queue activity
+    // Manager -> peer: inject MPDUs and 1-byte registration (same as UDP TX).
+    std::string wifi_tx;
+    // Peer -> manager: forward frames with 4-byte trailer (same as UDP RX).
+    std::string wifi_rx;
+    std::string reactor;  // wakes both ends on queue activity
 };
 
 class WifiQueue
@@ -79,7 +82,7 @@ public:
         uint64_t rx_pkt = 0;
         uint64_t fcs_error_pkt = 0;
         uint64_t fcs_unknown_pkt = 0;
-        uint64_t inject_tx_drops = 0;
+        uint64_t wifi_tx_drops = 0;
     };
     counters_s peek_counters() const
     {
@@ -90,8 +93,7 @@ public:
         c.rx_pkt = rx_pkt_.load(std::memory_order_relaxed);
         c.fcs_error_pkt = fcs_error_pkt_.load(std::memory_order_relaxed);
         c.fcs_unknown_pkt = fcs_unknown_pkt_.load(std::memory_order_relaxed);
-        c.inject_tx_drops =
-            inject_tx_drops_.load(std::memory_order_relaxed);
+        c.wifi_tx_drops = wifi_tx_drops_.load(std::memory_order_relaxed);
         return c;
     }
 
@@ -100,8 +102,8 @@ private:
         bfc::reactive_circular_lossy_queue<bfc::shared_sized_buffer>;
     using DplaneReactor = bfc::cv_reactor<>;
 
-    bool push_inject(const uint8_t* data, size_t len);
-    void on_forward_rx();
+    bool push_wifi_tx(const uint8_t* data, size_t len);
+    void on_wifi_rx();
 
     IOReactor* reactor_ = nullptr;
     rx on_rx_;
@@ -113,12 +115,12 @@ private:
     std::atomic<uint64_t> rx_pkt_{0};
     std::atomic<uint64_t> fcs_error_pkt_{0};
     std::atomic<uint64_t> fcs_unknown_pkt_{0};
-    std::atomic<uint64_t> inject_tx_drops_{0};
+    std::atomic<uint64_t> wifi_tx_drops_{0};
     mutable std::mutex transport_mu_;
     bool opened_ = false;
     bool dplane_bound_ = false;
-    std::shared_ptr<DplaneQueue> inject_tx_;
-    std::shared_ptr<DplaneQueue> forward_rx_;
+    std::shared_ptr<DplaneQueue> wifi_tx_;
+    std::shared_ptr<DplaneQueue> wifi_rx_;
     std::shared_ptr<DplaneReactor> cv_reactor_;
 };
 

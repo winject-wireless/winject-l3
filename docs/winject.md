@@ -47,7 +47,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | `ConsoleService` | [`ConsoleService.*`](../src/manager/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender) |
 | `RadioManager` | [`RadioManager.*`](../src/manager/radio/RadioManager.cpp) | Keeps the radio in the configured state: PHY reconcile, filter reconcile, heartbeat, forward re-registration, TX pacing per modulation |
 | `WifiUdp` | [`WifiUdp.*`](../src/manager/radio/WifiUdp.cpp) | d-plane socket to `radio_device.dplane`: MPDUs and 1-byte registration; checks the forward trailer per FCS mode |
-| `WifiQueue` | [`WifiQueue.*`](../src/manager/radio/WifiQueue.cpp) | Same d-plane bytes through registered lossy queues (`inject_tx` / `forward_rx` + `cv_reactor`); peer is typically winject_proxy on the same host. m-plane stays UDP |
+| `WifiQueue` | [`WifiQueue.*`](../src/manager/radio/WifiQueue.cpp) | Same d-plane bytes through registered lossy queues (`wifi_tx` / `wifi_rx` + `cv_reactor`); peer is typically winject_proxy on the same host. m-plane stays UDP |
 | `TxMux` | [`TxMux.*`](../src/manager/radio/TxMux.cpp) | TX scheduler: picks upstreams, builds MPDUs, paces them at 90 % of the modulation's airtime |
 | `RxDemux` | [`RxDemux.*`](../src/manager/radio/RxDemux.cpp) | RX: validates domain, splits slots, routes each slot by its LC bus to upstreams |
 | `RadioUpstreamTable` | [`RadioUpstreamTable.*`](../src/manager/radio/RadioUpstreamTable.cpp) | Shared upstream list (`bus_tx`, `bus_rx`, upstream pointer), guarded by one mutex |

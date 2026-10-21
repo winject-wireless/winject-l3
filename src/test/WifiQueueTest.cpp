@@ -89,8 +89,8 @@ TEST(WifiQueueTest, SignalModeAcceptsZeroTrailer)
     inject->set_capacity(16);
     forward->set_capacity(16);
     auto cv = std::make_shared<bfc::cv_reactor<>>();
-    ASSERT_TRUE(DplaneQueueRegistry::get_instance().add("wq-inject", inject));
-    ASSERT_TRUE(DplaneQueueRegistry::get_instance().add("wq-forward", forward));
+    ASSERT_TRUE(DplaneQueueRegistry::get_instance().add("wq-wifi-tx", inject));
+    ASSERT_TRUE(DplaneQueueRegistry::get_instance().add("wq-wifi-rx", forward));
     ASSERT_TRUE(bfc::cv_reactor_registry::get_instance().add("wq-reactor", cv));
 
     cv->add_read_rdy(
@@ -128,8 +128,8 @@ TEST(WifiQueueTest, SignalModeAcceptsZeroTrailer)
                               received.assign(buf.u8(), buf.u8() + buf.size());
                           }));
     WifiQueueDplaneBinding bind;
-    bind.inject_tx = "wq-inject";
-    bind.forward_rx = "wq-forward";
+    bind.wifi_tx = "wq-wifi-tx";
+    bind.wifi_rx = "wq-wifi-rx";
     bind.reactor = "wq-reactor";
     ASSERT_TRUE(wifi.bind_dplane(bind));
     wifi.set_fcs_mode(RadioFcsMode::signal);
@@ -149,9 +149,9 @@ TEST(WifiQueueTest, RegisterForwardSendsOneByte)
     inject->set_capacity(16);
     forward->set_capacity(16);
     auto cv = std::make_shared<bfc::cv_reactor<>>();
-    ASSERT_TRUE(DplaneQueueRegistry::get_instance().add("wq2-inject", inject));
+    ASSERT_TRUE(DplaneQueueRegistry::get_instance().add("wq2-wifi-tx", inject));
     ASSERT_TRUE(
-        DplaneQueueRegistry::get_instance().add("wq2-forward", forward));
+        DplaneQueueRegistry::get_instance().add("wq2-wifi-rx", forward));
     ASSERT_TRUE(bfc::cv_reactor_registry::get_instance().add("wq2-reactor",
                                                                cv));
 
@@ -173,8 +173,8 @@ TEST(WifiQueueTest, RegisterForwardSendsOneByte)
     WifiQueue wifi;
     ASSERT_TRUE(wifi.open(io, [](bfc::shared_sized_buffer) {}));
     WifiQueueDplaneBinding bind;
-    bind.inject_tx = "wq2-inject";
-    bind.forward_rx = "wq2-forward";
+    bind.wifi_tx = "wq2-wifi-tx";
+    bind.wifi_rx = "wq2-wifi-rx";
     bind.reactor = "wq2-reactor";
     ASSERT_TRUE(wifi.bind_dplane(bind));
     wifi.set_fcs_mode(RadioFcsMode::signal);
