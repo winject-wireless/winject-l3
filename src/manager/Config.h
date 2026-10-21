@@ -19,8 +19,10 @@ enum class UpstreamMode
     queue,
 };
 
-// UDP peer endpoints: both set = static; rx only = server bind; tx only =
-// client connect.
+// rx/tx are a UDP host:port, or QUEUE_FORWARDING registry names.
+// UDP: both set = static; rx only = server bind; tx only = client connect.
+// Queue: both required and distinct. rx is consumed (app toward air);
+// tx is produced (air toward app).
 struct UdpPeerEndpoint
 {
     std::string rx;
@@ -64,12 +66,9 @@ struct UpstreamConfig
 {
     size_t index = 0;
     UpstreamMode mode = UpstreamMode::udp_static;
+    // UDP host:port, or queue registry names when mode is queue.
     UdpPeerEndpoint endpoint;
-    // QUEUE_FORWARDING: registry names. queue_in is consumed (app toward
-    // air); queue_out is produced (air toward app). reactor is the host's
-    // running cv_reactor. Ignored for UDP modes.
-    std::string queue_in;
-    std::string queue_out;
+    // QUEUE_FORWARDING: the host's running cv_reactor. Empty for UDP.
     std::string reactor;
     uint8_t bus_tx = 0;
     uint8_t bus_rx = 0;

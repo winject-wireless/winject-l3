@@ -21,10 +21,10 @@ namespace winject
 // bfc::cv_reactor<> on bfc::cv_reactor_registry. This endpoint does not
 // create or stop them.
 //
-// queue_in is consumed here (one consumer). It is the sender's
-// queue_transport_tx: each entry is one application datagram, the same
-// bytes a UDP payload would have been. queue_out is produced here and
-// woken on that reactor; it is the sender's queue_transport_rx.
+// UpstreamConfig::endpoint.rx is consumed here (one consumer). It is the
+// sender's queue_transport_tx: each entry is one application datagram, the
+// same bytes a UDP payload would have been. endpoint.tx is produced here
+// and woken on that reactor; it is the sender's queue_transport_rx.
 //
 // FEC flush uses the manager IOReactor. Arming the timer wakes that
 // reactor, because the datagram arrived on the CV reactor thread.

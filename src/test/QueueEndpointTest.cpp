@@ -72,8 +72,8 @@ protected:
         ASSERT_TRUE(bfc::cv_reactor_registry::get_instance().add("qep-reactor",
                                                                  reactor));
         cfg.mode = UpstreamMode::queue;
-        cfg.queue_in = "qep-in";
-        cfg.queue_out = "qep-out";
+        cfg.endpoint.rx = "qep-in";
+        cfg.endpoint.tx = "qep-out";
         cfg.reactor = "qep-reactor";
         cfg.fec_type = FecType::none;
 
@@ -306,29 +306,29 @@ TEST_F(QueueEndpointTest, DrainsDatagramsQueuedBeforeOpen)
 TEST_F(QueueEndpointTest, OpenRejectsMissingAndAliasedQueues)
 {
     QueueEndpoint endpoint;
-    cfg.queue_in = "missing";
+    cfg.endpoint.rx = "missing";
     EXPECT_FALSE(endpoint.open(io, cfg));
 
-    cfg.queue_in = "qep-in";
+    cfg.endpoint.rx = "qep-in";
     cfg.reactor = "missing";
     EXPECT_FALSE(endpoint.open(io, cfg));
 
     cfg.reactor = "qep-reactor";
-    cfg.queue_out = "qep-in";
+    cfg.endpoint.tx = "qep-in";
     EXPECT_FALSE(endpoint.open(io, cfg));
 
     auto alias = std::make_shared<AppQueue>();
     alias->set_capacity(4);
     ASSERT_TRUE(AppQueueRegistry::get_instance().add("qep-alias-a", alias));
     ASSERT_TRUE(AppQueueRegistry::get_instance().add("qep-alias-b", alias));
-    cfg.queue_in = "qep-alias-a";
-    cfg.queue_out = "qep-alias-b";
+    cfg.endpoint.rx = "qep-alias-a";
+    cfg.endpoint.tx = "qep-alias-b";
     EXPECT_FALSE(endpoint.open(io, cfg));
     AppQueueRegistry::get_instance().rem("qep-alias-a");
     AppQueueRegistry::get_instance().rem("qep-alias-b");
 
-    cfg.queue_in = "qep-in";
-    cfg.queue_out = "qep-out";
+    cfg.endpoint.rx = "qep-in";
+    cfg.endpoint.tx = "qep-out";
     in_queue->set_capacity(0);
     EXPECT_FALSE(endpoint.open(io, cfg));
 }

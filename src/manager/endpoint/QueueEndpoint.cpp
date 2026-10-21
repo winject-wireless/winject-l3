@@ -35,29 +35,30 @@ bool QueueEndpoint::open(IOReactor& io_reactor, const UpstreamConfig& cfg,
             return false;
         }
     }
-    if (cfg.queue_in.empty() || cfg.queue_out.empty() || cfg.reactor.empty())
+    if (cfg.endpoint.rx.empty() || cfg.endpoint.tx.empty() ||
+        cfg.reactor.empty())
     {
-        LOG_ERR("queue upstream needs queue_in, queue_out, and reactor");
+        LOG_ERR("queue upstream needs rx, tx, and reactor");
         return false;
     }
-    if (cfg.queue_in == cfg.queue_out)
+    if (cfg.endpoint.rx == cfg.endpoint.tx)
     {
-        LOG_ERR("queue upstream queue_in and queue_out must differ");
+        LOG_ERR("queue upstream rx and tx must differ");
         return false;
     }
 
-    auto in_queue = AppQueueRegistry::get_instance().get(cfg.queue_in);
-    auto out_queue = AppQueueRegistry::get_instance().get(cfg.queue_out);
+    auto in_queue = AppQueueRegistry::get_instance().get(cfg.endpoint.rx);
+    auto out_queue = AppQueueRegistry::get_instance().get(cfg.endpoint.tx);
     if (!in_queue)
     {
-        LOG_ERR("queue upstream queue_in %s: not registered",
-                cfg.queue_in.c_str());
+        LOG_ERR("queue upstream rx %s: not registered",
+                cfg.endpoint.rx.c_str());
         return false;
     }
     if (!out_queue)
     {
-        LOG_ERR("queue upstream queue_out %s: not registered",
-                cfg.queue_out.c_str());
+        LOG_ERR("queue upstream tx %s: not registered",
+                cfg.endpoint.tx.c_str());
         return false;
     }
     if (in_queue == out_queue)
@@ -67,14 +68,12 @@ bool QueueEndpoint::open(IOReactor& io_reactor, const UpstreamConfig& cfg,
     }
     if (in_queue->capacity() == 0)
     {
-        LOG_ERR("queue upstream queue_in %s capacity is 0",
-                cfg.queue_in.c_str());
+        LOG_ERR("queue upstream rx %s capacity is 0", cfg.endpoint.rx.c_str());
         return false;
     }
     if (out_queue->capacity() == 0)
     {
-        LOG_ERR("queue upstream queue_out %s capacity is 0",
-                cfg.queue_out.c_str());
+        LOG_ERR("queue upstream tx %s capacity is 0", cfg.endpoint.tx.c_str());
         return false;
     }
 
@@ -87,8 +86,8 @@ bool QueueEndpoint::open(IOReactor& io_reactor, const UpstreamConfig& cfg,
     }
 
     io_reactor_ = &io_reactor;
-    queue_in_name_ = cfg.queue_in;
-    queue_out_name_ = cfg.queue_out;
+    queue_in_name_ = cfg.endpoint.rx;
+    queue_out_name_ = cfg.endpoint.tx;
     if (!start_air(
             std::move(tx_wake), &io_reactor.get_timer(),
             [this]()

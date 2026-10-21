@@ -183,11 +183,9 @@ TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airt
 | Key | Meaning |
 |---|---|
 | `upstream-N.mode` | `UDP_SERVER_FORWARDING`, `UDP_CLIENT_FORWARDING`, `UDP_STATIC_FORWARDING`, or `QUEUE_FORWARDING`. UDP modes must match the addresses given. `UDP_GENERIC_FORWARDING` is rejected |
-| `upstream-N.rx` | UDP: `address:port` to receive application datagrams on. Server mode replies to the last sender. Not used by `QUEUE_FORWARDING`. `bind_address` is rejected |
-| `upstream-N.tx` | UDP: `address:port` to send received air datagrams to. Client mode. Not used by `QUEUE_FORWARDING`. `connect_address` is rejected |
-| `upstream-N.queue_in` | `QUEUE_FORWARDING`: registry name of the lossy queue this upstream consumes (application datagrams toward the air). The stream sender's `queue_transport_tx` |
-| `upstream-N.queue_out` | `QUEUE_FORWARDING`: registry name of the lossy queue this upstream produces (air datagrams toward the application). The stream sender's `queue_transport_rx`. Must differ from `queue_in`, and neither name may be reused by another upstream |
-| `upstream-N.reactor` | `QUEUE_FORWARDING`: name of the host's running `cv_reactor`. Several upstreams may share one reactor |
+| `upstream-N.rx` | UDP: `address:port` to receive application datagrams on (server mode replies to the last sender). Queue: registry name consumed (application datagrams toward the air; the sender's `queue_transport_tx`). `bind_address` and `queue_in` are rejected |
+| `upstream-N.tx` | UDP: `address:port` to send received air datagrams to. Queue: registry name produced (air datagrams toward the application; the sender's `queue_transport_rx`). Must differ from `rx`, and neither name may be reused. `connect_address` and `queue_out` are rejected |
+| `upstream-N.reactor` | Queue mode: name of the host's running `cv_reactor`. Several upstreams may share one reactor. UDP modes reject this key |
 | `upstream-N.tx_bus` | Bus stamped on this upstream's air traffic: 1–2 hex digits, non-zero (for example `b2`). `bus_tx` and `upstream_tx-N.bus` are rejected |
 | `upstream-N.rx_bus` | Bus whose air traffic is delivered to this upstream. At least one of `tx_bus` / `rx_bus` is required. `bus_rx` and `upstream_rx-N.bus` are rejected |
 | `upstream-N.scheduler_budget` | Scheduling share per TX pass, bytes (default 256; console `quanta`) |
@@ -195,7 +193,7 @@ TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airt
 | `upstream-N.fec.k`, `upstream-N.fec.n` | Data and total shards per block (`1 ≤ k < n ≤ 31`; 5-bit fields in the shard header) |
 | `upstream-N.fec.timeout_ms` | Close a partial block after this long (default 20) |
 
-Server mode has `rx` only, client mode `tx` only, static mode both. `QUEUE_FORWARDING` has `queue_in`, `queue_out`, and `reactor` instead of addresses. The host registers both queues (nonzero capacity, distinct objects) on `bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>` and the reactor on `bfc::cv_reactor_registry` before the manager opens the upstream. The manager does not create or stop them. Each queue has one consumer. `add_upstream` remains a UDP upstream. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).
+Server mode has `rx` only, client mode `tx` only, static mode both. `QUEUE_FORWARDING` has `rx`, `tx`, and `reactor`: `rx` and `tx` are queue names. The host registers both queues (nonzero capacity, distinct objects) on `bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>` and the reactor on `bfc::cv_reactor_registry` before the manager opens the upstream. The manager does not create or stop them. Each queue has one consumer. `add_upstream` remains a UDP upstream. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).
 
 ## Related docs
 

@@ -412,9 +412,15 @@ bool Config::load(const std::string& path, std::string* error)
         const std::string tx_key = key_of(i, "tx");
         const std::string legacy_bind = key_of(i, "bind_address");
         const std::string legacy_connect = key_of(i, "connect_address");
+        const std::string legacy_queue_in = key_of(i, "queue_in");
+        const std::string legacy_queue_out = key_of(i, "queue_out");
         if (!reject_moved_key(parser, legacy_bind.c_str(), rx_key.c_str(),
                               error) ||
             !reject_moved_key(parser, legacy_connect.c_str(), tx_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_queue_in.c_str(), rx_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_queue_out.c_str(), tx_key.c_str(),
                               error))
         {
             return false;
@@ -455,42 +461,31 @@ bool Config::load(const std::string& path, std::string* error)
             }
         }
 
-        const std::string queue_in =
-            parser.arg(key_of(i, "queue_in")).value_or("");
-        const std::string queue_out =
-            parser.arg(key_of(i, "queue_out")).value_or("");
         const std::string queue_reactor =
             parser.arg(key_of(i, "reactor")).value_or("");
         if (mode == UpstreamMode::queue)
         {
-            if (!rx.empty() || !tx.empty())
-            {
-                *error = key_of(i, "mode") + " does not use rx/tx";
-                return false;
-            }
-            if (queue_in.empty() || queue_out.empty() || queue_reactor.empty())
+            if (rx.empty() || tx.empty() || queue_reactor.empty())
             {
                 *error = "upstream-" + std::to_string(i) +
-                         " needs queue_in, queue_out, and reactor";
+                         " needs rx, tx, and reactor";
                 return false;
             }
-            if (queue_in == queue_out)
+            if (rx == tx)
             {
-                *error = "upstream-" + std::to_string(i) +
-                         " queue_in and queue_out must differ";
+                *error =
+                    "upstream-" + std::to_string(i) + " rx and tx must differ";
                 return false;
             }
             u.mode = UpstreamMode::queue;
-            u.queue_in = queue_in;
-            u.queue_out = queue_out;
+            u.endpoint = UdpPeerEndpoint{std::move(rx), std::move(tx)};
             u.reactor = queue_reactor;
             upstreams.push_back(std::move(u));
             continue;
         }
-        if (!queue_in.empty() || !queue_out.empty() || !queue_reactor.empty())
+        if (!queue_reactor.empty())
         {
-            *error = key_of(i, "mode") +
-                     " does not use queue_in, queue_out, or reactor";
+            *error = key_of(i, "mode") + " does not use reactor";
             return false;
         }
         if (rx.empty() && tx.empty())
@@ -592,29 +587,24 @@ bool Config::validate(std::string* error) const
         }
         if (u.mode == UpstreamMode::queue)
         {
-            if (!u.endpoint.rx.empty() || !u.endpoint.tx.empty())
+            if (u.endpoint.rx.empty() || u.endpoint.tx.empty() ||
+                u.reactor.empty())
             {
                 return fail("upstream-" + std::to_string(i) +
-                            " queue mode does not use rx/tx");
+                            " needs rx, tx, and reactor");
             }
-            if (u.queue_in.empty() || u.queue_out.empty() || u.reactor.empty())
+            if (u.endpoint.rx == u.endpoint.tx)
             {
                 return fail("upstream-" + std::to_string(i) +
-                            " needs queue_in, queue_out, and reactor");
-            }
-            if (u.queue_in == u.queue_out)
-            {
-                return fail("upstream-" + std::to_string(i) +
-                            " queue_in and queue_out must differ");
+                            " rx and tx must differ");
             }
         }
         else
         {
-            if (!u.queue_in.empty() || !u.queue_out.empty() ||
-                !u.reactor.empty())
+            if (!u.reactor.empty())
             {
                 return fail("upstream-" + std::to_string(i) +
-                            " does not use queue_in, queue_out, or reactor");
+                            " does not use reactor");
             }
             if (u.endpoint.rx.empty() && u.endpoint.tx.empty())
             {
@@ -705,17 +695,17 @@ bool Config::validate_upstreams(const std::vector<UpstreamConfig>& upstreams,
         {
             continue;
         }
-        if (u.queue_in.empty() || u.queue_out.empty() || u.reactor.empty() ||
-            u.queue_in == u.queue_out)
+        if (u.endpoint.rx.empty() || u.endpoint.tx.empty() ||
+            u.reactor.empty() || u.endpoint.rx == u.endpoint.tx)
         {
             if (error != nullptr)
             {
-                *error = "queue upstream needs distinct queue_in and queue_out";
+                *error = "queue upstream needs distinct rx and tx";
             }
             return false;
         }
-        if (!queue_names.insert(u.queue_in).second ||
-            !queue_names.insert(u.queue_out).second)
+        if (!queue_names.insert(u.endpoint.rx).second ||
+            !queue_names.insert(u.endpoint.tx).second)
         {
             if (error != nullptr)
             {

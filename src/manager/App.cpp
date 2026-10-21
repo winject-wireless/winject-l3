@@ -241,15 +241,6 @@ bool App::fill_upstream_view(size_t index, ManagerUpstreamView* out) const
         out->fec_timeout_ms = udp->fec_timeout_ms();
         udp->get_fec(&out->fec, &out->fec_k, &out->fec_n);
     }
-    else if (uc.mode == UpstreamMode::queue)
-    {
-        out->rx = uc.queue_in;
-        out->tx = uc.queue_out;
-        out->fec = uc.fec_type;
-        out->fec_k = uc.fec_k;
-        out->fec_n = uc.fec_n;
-        out->fec_timeout_ms = uc.fec_timeout_ms;
-    }
     else
     {
         out->rx = uc.endpoint.rx;
