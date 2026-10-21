@@ -35,8 +35,8 @@ stop_winject_managers
 ensure_winject_manager "$ROOT"
 TMPD=$(mktemp -d /tmp/pa_confirm_XXXX)
 patch() {
-  sed -e "s/^radio\\.device.*/radio.device        = ${1}/" \
-      -e "s/^\\(radio\\.mplane[[:space:]]*=[[:space:]]*\\)[^:]*:/\\1${1}:/" \
+  sed -e "s/^\\(radio\\.mplane[[:space:]]*=[[:space:]]*\\)[^:]*:/\\1${1}:/" \
+      -e "s/^\\(radio\\.dplane[[:space:]]*=[[:space:]]*\\)[^:]*:/\\1${1}:/" \
       -e "s/^radio\\.power.*/radio.power         = 20/" \
       -e "s/^radio\\.channel.*/radio.channel       = 1/" \
       -e "s/^radio\\.modulation.*/radio.modulation    = OFDM_24M/" \

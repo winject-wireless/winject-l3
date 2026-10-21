@@ -85,7 +85,7 @@ struct UpstreamConfig
 struct RadioDeviceConfig
 {
     sockaddr_in mplane{};  // radio.mplane host:port (ESP32 :22, Realtek :2201)
-    sockaddr_in dplane{};  // radio.device + radio.dplane_port
+    sockaddr_in dplane{};  // radio.dplane host:port (ESP32 :9000)
     RadioFcsConfig fcs = RadioFcsConfig::auto_detect;
 };
 

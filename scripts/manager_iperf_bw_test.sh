@@ -8,7 +8,7 @@
 #            with radio_{a,b}.cfg first (scripts/realtek_radios.sh), then the
 #            managers with bw_{a,b}.cfg
 #   realtek-cross  radio A on this host, radio B on a peer (--b, --radio-b-ssh);
-#            managers on this host; radio.device and radio.mplane host are --a and --b
+#            managers on this host; radio.mplane and radio.dplane hosts are --a and --b
 #
 # Topology (A→B):
 #   iperf -c 127.0.0.1:29000 -u  → manager A UDP_SERVER → air
@@ -86,8 +86,8 @@ Radio / host (esp32):
   --host IP         bench host / manager IP (auto-detect if omitted)
 
 Radio / host (realtek-cross):
-  --a IP            manager A radio.device and radio.mplane host (default: 127.0.0.1, radio A local)
-  --b IP            manager B radio.device and radio.mplane host (default: 192.168.253.127)
+  --a IP            manager A radio.mplane and radio.dplane host (default: 127.0.0.1, radio A local)
+  --b IP            manager B radio.mplane and radio.dplane host (default: 192.168.253.127)
   --radio-b-ssh U@H ssh target to start/stop radio B (default: ubuntu@<--b>)
   --host IP         where managers and iperf run (default: auto via --b)
 
@@ -393,8 +393,8 @@ ensure_winject_manager "$ROOT"
 patch_conf() {
   local file="$1" device="$2" gci_in="$3"
   local -a sed_args=(
-    -e "s/^radio\.device.*/radio.device        = ${device}/" \
-    -e "s/^\(radio\.mplane[[:space:]]*=[[:space:]]*\)[^:]*:/\1${device}:/"
+    -e "s/^\(radio\.mplane[[:space:]]*=[[:space:]]*\)[^:]*:/\1${device}:/" \
+    -e "s/^\(radio\.dplane[[:space:]]*=[[:space:]]*\)[^:]*:/\1${device}:/"
   )
   if [[ -n "$CHANNEL" ]]; then
     sed_args+=(-e "s/^radio\.channel.*/radio.channel       = ${CHANNEL}/")

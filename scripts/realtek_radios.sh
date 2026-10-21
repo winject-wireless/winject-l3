@@ -113,7 +113,7 @@ realtek_start_local_radio() {
 }
 
 # Radio A on this host, radio B on a peer (SSH). Managers on this host use
-# radio.device and the radio.mplane host are 127.0.0.1 (--a) and the remote LAN IP (--b).
+# radio.mplane and radio.dplane hosts are 127.0.0.1 (--a) and the remote LAN IP (--b).
 realtek_cross_radios_start() {
     local root="${1:?winject-l3 root required}"
     local log_dir="${2:?log dir required}"

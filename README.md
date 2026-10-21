@@ -108,9 +108,8 @@ ctest --test-dir build_test_ci --output-on-failure
 Manager config for a Realtek radio on the same host:
 
 ```ini
-radio.device       = 127.0.0.1
 radio.mplane       = 127.0.0.1:2201  # host:port; the radio's net.console_port (not 22: sshd owns it on Linux)
-radio.dplane_port  = 9000        # the radio's net.dplane_port (inject + registration + forward)
+radio.dplane       = 127.0.0.1:9000  # host:port; the radio's net.dplane_port (inject + registration + forward)
 radio.fcs    = actual      # or leave unset to auto-detect; never signal
 # no radio.cca = 0
 ```
@@ -171,7 +170,7 @@ Run it from an interactive terminal, in the winject-l3 checkout:
 |---|---|---|
 | `esp32` (default) | Two ESP32 boards on Ethernet (`--a` / `--b`) | Nothing: the radios are already running |
 | `realtek` | Two RTL8812AU dongles on this host | Builds [winject-radio-realtek](https://github.com/winject-wireless/winject-radio-realtek) and starts one instance per dongle with `radio_a.cfg` / `radio_b.cfg` under `sudo` |
-| `realtek-cross` | Radio A on this host, radio B on a peer (`--b`) | Starts radio A locally; starts radio B on `--radio-b-ssh` (default `ubuntu@<--b>`) with `net.bind = 0.0.0.0`. Both managers run on this host; `radio.device` and the `radio.mplane` host for B are `--b`. |
+| `realtek-cross` | Radio A on this host, radio B on a peer (`--b`) | Starts radio A locally; starts radio B on `--radio-b-ssh` (default `ubuntu@<--b>`) with `net.bind = 0.0.0.0`. Both managers run on this host; the `radio.mplane` and `radio.dplane` hosts for B are `--b`. |
 
 ```bash
 ./scripts/manager_iperf_bw_test.sh --scenario realtek --bitrate 16M

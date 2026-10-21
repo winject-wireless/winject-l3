@@ -337,15 +337,14 @@ def main() -> int:
     def write_conf(path: Path, role: str, device: str, dplane: int, cons_in: int) -> None:
         if role == "a":
             body = f"""
-radio.device        = {device}
 radio.mplane        = {device}:22
+radio.dplane        = {device}:{dplane}
 radio.channel       = {args.channel}
 radio.modulation    = OFDM_24M
 radio.power         = {args.power}
 winject.domain        = 1234
 winject.stats_sec     = 1
 radio.cca           = 0
-radio.dplane_port   = {dplane}
 winject.console_in    = 127.0.0.1:{cons_in}
 upstream.size = 2
 upstream-0.mode             = UDP_SERVER_FORWARDING
@@ -361,15 +360,14 @@ upstream-1.tx               = 127.0.0.1:9001
 """
         else:
             body = f"""
-radio.device        = {device}
 radio.mplane        = {device}:22
+radio.dplane        = {device}:{dplane}
 radio.channel       = {args.channel}
 radio.modulation    = OFDM_24M
 radio.power         = {args.power}
 winject.domain        = 1234
 winject.stats_sec     = 1
 radio.cca           = 0
-radio.dplane_port   = {dplane}
 winject.console_in    = 127.0.0.1:{cons_in}
 upstream.size = 2
 upstream-0.mode             = UDP_CLIENT_FORWARDING

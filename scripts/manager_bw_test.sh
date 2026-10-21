@@ -209,8 +209,8 @@ PATH_LABEL=udp
 patch_conf() {
   local file="$1" device="$2" gci_in="$3"
   local -a sed_args=(
-    -e "s/^radio\.device.*/radio.device        = ${device}/" \
-    -e "s/^\(radio\.mplane[[:space:]]*=[[:space:]]*\)[^:]*:/\1${device}:/"
+    -e "s/^\(radio\.mplane[[:space:]]*=[[:space:]]*\)[^:]*:/\1${device}:/" \
+    -e "s/^\(radio\.dplane[[:space:]]*=[[:space:]]*\)[^:]*:/\1${device}:/"
   )
   if [[ -n "$CFG_DOMAIN" ]]; then
     sed_args+=(-e "s/^winject\.domain.*/winject.domain        = ${CFG_DOMAIN}/")
