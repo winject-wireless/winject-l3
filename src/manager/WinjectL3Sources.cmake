@@ -16,6 +16,7 @@ set(WINJECT_L3_SOURCES
     fec/RsBlockErasure.cpp
     utils/NetUtil.cpp
     radio/WifiUdp.cpp
+    radio/WifiQueue.cpp
     radio/WifiFcs.cpp
     radio/RadioUpstreamTable.cpp
     radio/RadioMplaneParse.cpp

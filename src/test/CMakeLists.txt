@@ -44,6 +44,7 @@ add_executable(winject-tests
     RadioMplaneParseTest.cpp
     WifiFcsTest.cpp
     WifiUdpTest.cpp
+    WifiQueueTest.cpp
     TxEventQueueTest.cpp
     VersionTest.cpp
     MetricsRegistryTest.cpp
@@ -68,6 +69,7 @@ add_executable(winject-tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioUpstreamTable.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/TxMux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiUdp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiQueue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioMplaneParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/Log.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/NetUtil.cpp

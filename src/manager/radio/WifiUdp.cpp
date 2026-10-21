@@ -12,29 +12,9 @@
 namespace winject
 {
 
-namespace
-{
-
-uint32_t load_le32(const uint8_t* p)
-{
-    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) |
-           (static_cast<uint32_t>(p[3]) << 24);
-}
-
-}  // namespace
-
 bool WifiUdp::forward_trailer_ok(const uint8_t* frame, size_t len) const
 {
-    switch (fcs_mode())
-    {
-        case RadioFcsMode::actual:
-            return wifi_fcs_matches(frame, len);
-        case RadioFcsMode::signal:
-            return load_le32(frame + len - 4) == 0;
-        default:
-            return false;
-    }
+    return wifi_forward_trailer_ok(frame, len, fcs_mode());
 }
 
 WifiUdp::~WifiUdp()
