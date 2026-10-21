@@ -143,7 +143,6 @@ bool Config::load(const std::string& path, std::string* error)
     const char* moved[][2] = {
         {"manager.console_in", "winject.console_in"},
         {"winject.device", "radio.dplane"},
-        {"radio.device", "radio.dplane"},
         {"winject.console", "radio.mplane"},
         {"radio.console", "radio.mplane"},
         {"winject.dplane_port", "radio.dplane"},
@@ -166,10 +165,15 @@ bool Config::load(const std::string& path, std::string* error)
         }
     }
     const char* removed[] = {
-        "winject.max_rate_kbps",        "winject.tx_gap_us",
-        "winject.max_data_per_tick",    "winject.tx_burst_size",
-        "winject.tx_burst_interval_us", "winject.local_ip",
-        "winject.skip_console",         "radio.skip_console",
+        "winject.max_rate_kbps",
+        "winject.tx_gap_us",
+        "winject.max_data_per_tick",
+        "winject.tx_burst_size",
+        "winject.tx_burst_interval_us",
+        "winject.local_ip",
+        "winject.skip_console",
+        "radio.skip_console",
+        "radio.device",
     };
     for (const char* key : removed)
     {

@@ -163,7 +163,7 @@ Run the Linux manager with `winject-manager <config file>`. The file holds `key 
 | `radio.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
 | `radio.fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
 
-The old `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, and `winject.radio_fcs` keys are rejected. The error names the `radio.*` key. `winject.console` and `radio.console` moved to `radio.mplane` (`host:port`). `radio.device`, `winject.device`, `radio.dplane_port`, `winject.dplane_port`, `radio.inject_port`, `winject.inject_port`, `winject.forward_port`, and `winject.forward_base` moved to `radio.dplane` (`host:port`). `radio.skip_console` and `winject.skip_console` are rejected: the radio m-plane is required.
+The old `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, and `winject.radio_fcs` keys are rejected. The error names the `radio.*` key. `winject.console` and `radio.console` moved to `radio.mplane` (`host:port`). `winject.device`, `radio.dplane_port`, `winject.dplane_port`, `radio.inject_port`, `winject.inject_port`, `winject.forward_port`, and `winject.forward_base` moved to `radio.dplane` (`host:port`). `radio.device` is removed. `radio.skip_console` and `winject.skip_console` are rejected: the radio m-plane is required.
 
 ### Link and manager (`winject.*`)
 

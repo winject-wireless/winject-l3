@@ -577,6 +577,31 @@ upstream-0.tx               = 127.0.0.1:9
     std::remove(path.c_str());
 }
 
+TEST(ConfigTest, RejectsRadioDeviceKey)
+{
+    const std::string path = write_conf(R"(
+radio.device        = 192.168.32.1
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("radio.device is removed"), std::string::npos);
+    std::remove(path.c_str());
+}
+
 TEST(ConfigTest, RejectsMovedRadioKeys)
 {
     const std::string path = write_conf(R"(
