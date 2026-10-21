@@ -21,13 +21,12 @@ LOG="$(mktemp -d /tmp/t3u_cap_XXXX)"
 patch_conf() {
   local dev="$1" in="$2" out="$3"
   sed -e "s/^radio\\.device.*/radio.device        = ${dev}/" \
-      -e "s/^radio\\.skip_console.*/radio.skip_console  = 0/" \
       -e "s/^radio\\.channel.*/radio.channel       = 1/" \
       -e "s/^radio\\.modulation.*/radio.modulation    = OFDM_24M/" \
       -e "s/^radio\\.power.*/radio.power         = ${PWR}/" \
       -e "s/^radio\\.cca.*/radio.cca           = 0/" \
       "$in"
-  printf 'manager.console_in    = 127.0.0.1:%s\n' "$out"
+  printf 'winject.console_in    = 127.0.0.1:%s\n' "$out"
 }
 
 patch_conf 192.168.253.11 "$ROOT/configuration/winject-tests/esp32/lat_udp_a.cfg" 2400 >"$LOG/a.conf"

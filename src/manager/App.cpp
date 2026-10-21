@@ -1136,14 +1136,14 @@ void App::console_config_slot(uint8_t slot, ManagerConsoleReply reply)
 
 bool App::start_manager_console()
 {
-    if (cfg.manager_console_in.empty())
+    if (cfg.console_in.empty())
     {
         return true;
     }
     sockaddr_in in_addr = {};
-    if (!parse_host_port(cfg.manager_console_in, &in_addr))
+    if (!parse_host_port(cfg.console_in, &in_addr))
     {
-        LOG_ERR("manager console: invalid console_in");
+        LOG_ERR("manager console: invalid winject.console_in");
         return false;
     }
     ManagerConsoleHandlers handlers;

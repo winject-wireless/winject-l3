@@ -7,11 +7,11 @@ winject-manager is controlled two ways: a **configuration file** read at startup
 The manager m-plane is request/response and always client-initiated:
 
 ```
-client -> manager : request  (UDP datagram to manager.console_in)
+client -> manager : request  (UDP datagram to winject.console_in)
 client <- manager : response (UDP datagram to the request's source address)
 ```
 
-- The manager **binds** `manager.console_in`. Each reply is sent to the **source address and port** of the request. Clients use an ephemeral UDP socket: send to `console_in`, read the reply on the same socket.
+- The manager **binds** `winject.console_in`. Each reply is sent to the **source address and port** of the request. Clients use an ephemeral UDP socket: send to `console_in`, read the reply on the same socket.
 - Optional request prefix `cmd:<u8> ` (0–255). Replies are tagged `OK:<id>` / `NOK:<id>` with the same id. Ids are scoped per sender; a retransmitted tagged request still in flight is ignored. Too many in-flight requests → `NOK EBUSY` (tagged when the request was).
 - Untagged requests get untagged replies (one at a time per socket; no correlation).
 - One command per datagram, at most 511 bytes. Empty lines and lines starting with `#` are ignored (no reply).
@@ -157,15 +157,14 @@ Run the Linux manager with `winject-manager <config file>`. The file holds `key 
 |---|---|---|
 | `radio.device` | required | Radio address. With `console` and `dplane_port` it sets the m-plane and d-plane |
 | `radio.console` | `22` | Radio m-plane UDP port (ESP32 `22`, Realtek `2201`) |
-| `radio.dplane_port` | `9000` | Radio d-plane port (`radio.inject_port` accepted as an alias) |
+| `radio.dplane_port` | `9000` | Radio d-plane port |
 | `radio.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
 | `radio.modulation` | `DSS_1M_L` | PHY rate name, for example `OFDM_24M` |
 | `radio.power` | `20` | TX power, dBm |
 | `radio.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
-| `radio.skip_console` | `0` | Must be `0` or omitted. `1` is rejected: the radio m-plane is required |
 | `radio.fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
 
-The old `winject.device`, `winject.console`, `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, `winject.dplane_port`, `winject.inject_port`, `winject.radio_fcs`, and `winject.skip_console` keys are rejected. The error names the `radio.*` key to use.
+The old `winject.device`, `winject.console`, `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, `winject.dplane_port`, and `winject.radio_fcs` keys are rejected. The error names the `radio.*` key. `radio.inject_port`, `winject.inject_port`, `winject.forward_port`, and `winject.forward_base` are rejected in favor of `radio.dplane_port`. `radio.skip_console` and `winject.skip_console` are rejected: the radio m-plane is required.
 
 ### Link and manager (`winject.*`)
 
@@ -173,16 +172,9 @@ The old `winject.device`, `winject.console`, `winject.channel`, `winject.modulat
 |---|---|---|
 | `winject.domain` | required | 16-bit hex domain, non-zero; carried in Address 3 (see [winject.md](winject.md)) |
 | `winject.stats_sec` | `0` | Log stream stats every N seconds; `0` = off. Overridden by the `WINJECT_STATS_SEC` environment variable |
+| `winject.console_in` | | `address:port` the manager binds for commands (replies go to the sender). Unset = the manager m-plane is off |
 
-TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airtime (see [winject.md](winject.md)). The old keys `winject.max_rate_kbps`, `tx_gap_us`, `max_data_per_tick`, `tx_burst_size` and `tx_burst_interval_us` are ignored with a warning.
-
-### Manager console (`manager.*`)
-
-| Key | Meaning |
-|---|---|
-| `manager.console_in` | `address:port` the manager binds for commands (replies go to the sender) |
-
-If unset, the manager m-plane is off.
+TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airtime (see [winject.md](winject.md)). `winject.max_rate_kbps`, `winject.tx_gap_us`, `winject.max_data_per_tick`, `winject.tx_burst_size`, `winject.tx_burst_interval_us`, and `winject.local_ip` are rejected. `manager.console_in` moved to `winject.console_in`.
 
 ### Upstreams (`upstream.*`, `upstream-N.*`)
 
@@ -190,14 +182,14 @@ If unset, the manager m-plane is off.
 
 | Key | Meaning |
 |---|---|
-| `upstream-N.mode` | `UDP_SERVER_FORWARDING`, `UDP_CLIENT_FORWARDING`, `UDP_STATIC_FORWARDING` (`UDP_GENERIC_FORWARDING` is an alias for static), or `QUEUE_FORWARDING`. UDP modes must match the addresses given |
+| `upstream-N.mode` | `UDP_SERVER_FORWARDING`, `UDP_CLIENT_FORWARDING`, `UDP_STATIC_FORWARDING`, or `QUEUE_FORWARDING`. UDP modes must match the addresses given. `UDP_GENERIC_FORWARDING` is rejected |
 | `upstream-N.bind_address` (or `rx`) | UDP: `address:port` to receive application datagrams on. Server mode replies to the last sender. Not used by `QUEUE_FORWARDING` |
 | `upstream-N.connect_address` (or `tx`) | UDP: `address:port` to send received air datagrams to. Client mode. Not used by `QUEUE_FORWARDING` |
 | `upstream-N.queue_in` | `QUEUE_FORWARDING`: registry name of the lossy queue this upstream consumes (application datagrams toward the air). The stream sender's `queue_transport_tx` |
 | `upstream-N.queue_out` | `QUEUE_FORWARDING`: registry name of the lossy queue this upstream produces (air datagrams toward the application). The stream sender's `queue_transport_rx`. Must differ from `queue_in`, and neither name may be reused by another upstream |
 | `upstream-N.reactor` | `QUEUE_FORWARDING`: name of the host's running `cv_reactor`. Several upstreams may share one reactor |
-| `upstream-N.tx_bus` | Bus stamped on this upstream's air traffic: 1–2 hex digits, non-zero (for example `b2`) |
-| `upstream-N.rx_bus` | Bus whose air traffic is delivered to this upstream. At least one of `tx_bus` / `rx_bus` is required |
+| `upstream-N.tx_bus` | Bus stamped on this upstream's air traffic: 1–2 hex digits, non-zero (for example `b2`). `bus_tx` and `upstream_tx-N.bus` are rejected |
+| `upstream-N.rx_bus` | Bus whose air traffic is delivered to this upstream. At least one of `tx_bus` / `rx_bus` is required. `bus_rx` and `upstream_rx-N.bus` are rejected |
 | `upstream-N.scheduler_budget` | Scheduling share per TX pass, bytes (default 256; console `quanta`) |
 | `upstream-N.fec.type` | `NONE` or `RS_BLOCK_ERASURE` |
 | `upstream-N.fec.k`, `upstream-N.fec.n` | Data and total shards per block (`1 ≤ k < n ≤ 31`; 5-bit fields in the shard header) |

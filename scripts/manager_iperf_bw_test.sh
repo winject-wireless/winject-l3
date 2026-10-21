@@ -408,7 +408,7 @@ patch_conf() {
   if [[ -n "$CCA" ]]; then
     printf 'radio.cca           = %s\n' "$CCA"
   fi
-  printf 'manager.console_in    = 127.0.0.1:%s\n' "$gci_in"
+  printf 'winject.console_in    = 127.0.0.1:%s\n' "$gci_in"
 }
 
 CONF_A_RUN="$LOG_DIR/winject_a.conf"

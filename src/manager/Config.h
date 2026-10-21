@@ -103,9 +103,9 @@ struct Config
     uint16_t domain = 0;
     // Radio config slot for save/load (0 = scratch pad until config slot=).
     uint8_t config_slot = 0;
-    // Local UDP management console. Empty = disabled.
-    // console_in = bind address for m-plane commands; replies go to the sender.
-    std::string manager_console_in;
+    // winject.console_in. Empty disables the manager m-plane.
+    // Bind address for commands; replies go to the sender.
+    std::string console_in;
     std::vector<UpstreamConfig> upstreams;
 
     bool load(const std::string& path, std::string* error);

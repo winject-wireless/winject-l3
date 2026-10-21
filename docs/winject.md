@@ -32,7 +32,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 |---|---|---|
 | Radio m-plane | radio UDP **22** | Text commands from the manager to the radio: PHY (`radio_tx`), domain filter (`rx_filter_addr3`), capabilities (`radio_caps_info`), counters (`tx_info`, `rx_info`), `save` / `load`, `reset`. Specified in the winject-radio-esp32 repository |
 | Radio d-plane | radio UDP **9000** (typical) | One port for inject (24–1472 byte MPDUs), peer registration (1–23 bytes), and forward (MPDU + 4-byte trailer to the registered peer). See the radio repos for the length rules |
-| Manager m-plane | `manager.console_in` | Text commands from operators and tools to the manager: upstreams, metrics, radio passthrough. Specified in [mplane.md](mplane.md) |
+| Manager m-plane | `winject.console_in` | Text commands from operators and tools to the manager: upstreams, metrics, radio passthrough. Specified in [mplane.md](mplane.md) |
 
 ## Manager
 
@@ -41,7 +41,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | Component | Source | Role |
 |---|---|---|
 | `App` | [`App.*`](../src/manager/App.cpp) | Owns everything below; startup, radio programming sequence, metrics, console handlers |
-| `Config` | [`Config.*`](../src/manager/Config.cpp) | Parses the `winject.*`, `upstream-N.*` and `manager.*` keys |
+| `Config` | [`Config.*`](../src/manager/Config.cpp) | Parses the `winject.*`, `radio.*`, and `upstream-N.*` keys |
 | `IOReactor` | [`IOReactor.h`](../src/manager/utils/IOReactor.h) | epoll reactor (`bfc::epoll_reactor`); runs all socket I/O and timers on one thread |
 | `ConsoleClient` | [`ConsoleClient.*`](../src/manager/console/ConsoleClient.cpp) | Radio m-plane client: correlated requests (`cmd:<u8>`), timeouts, `apply_radio`, `radio_caps_info` query |
 | `ConsoleService` | [`ConsoleService.*`](../src/manager/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender) |

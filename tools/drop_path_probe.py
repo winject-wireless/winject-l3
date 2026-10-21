@@ -303,7 +303,6 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--a", default="192.168.253.11")
     p.add_argument("--b", default="192.168.253.12")
-    p.add_argument("--host", default="192.168.253.106")
     p.add_argument("--mon", default="wlx3c789537952a")
     p.add_argument("--kbps", type=float, default=10000)
     p.add_argument("--duration", type=float, default=5.0)
@@ -339,18 +338,15 @@ def main() -> int:
         if role == "a":
             body = f"""
 radio.device        = {device}
-winject.local_ip      = {args.host}
 radio.console       = 22
 radio.channel       = {args.channel}
 radio.modulation    = OFDM_24M
 radio.power         = {args.power}
 winject.domain        = 1234
-winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
-radio.skip_console  = 0
 radio.cca           = 0
 radio.dplane_port   = {dplane}
-manager.console_in    = 127.0.0.1:{cons_in}
+winject.console_in    = 127.0.0.1:{cons_in}
 upstream.size = 2
 upstream-0.mode             = UDP_SERVER_FORWARDING
 upstream-0.tx_bus           = b2
@@ -366,18 +362,15 @@ upstream-1.connect_address  = 127.0.0.1:9001
         else:
             body = f"""
 radio.device        = {device}
-winject.local_ip      = {args.host}
 radio.console       = 22
 radio.channel       = {args.channel}
 radio.modulation    = OFDM_24M
 radio.power         = {args.power}
 winject.domain        = 1234
-winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
-radio.skip_console  = 0
 radio.cca           = 0
 radio.dplane_port   = {dplane}
-manager.console_in    = 127.0.0.1:{cons_in}
+winject.console_in    = 127.0.0.1:{cons_in}
 upstream.size = 2
 upstream-0.mode             = UDP_CLIENT_FORWARDING
 upstream-0.tx_bus           = a1

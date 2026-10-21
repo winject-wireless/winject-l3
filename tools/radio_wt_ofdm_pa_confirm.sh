@@ -40,9 +40,8 @@ patch() {
       -e "s/^radio\\.channel.*/radio.channel       = 1/" \
       -e "s/^radio\\.modulation.*/radio.modulation    = OFDM_24M/" \
       -e "s/^radio\\.cca.*/radio.cca           = 0/" \
-      -e "s/^radio\\.skip_console.*/radio.skip_console  = 0/" \
       "$2"
-  printf 'manager.console_in    = 127.0.0.1:%s\n' "$3"
+  printf 'winject.console_in    = 127.0.0.1:%s\n' "$3"
 }
 patch 192.168.253.11 configuration/winject-tests/esp32/lat_udp_a.cfg 2400 >"$TMPD/a.conf"
 patch 192.168.253.12 configuration/winject-tests/esp32/lat_udp_b.cfg 2410 >"$TMPD/b.conf"

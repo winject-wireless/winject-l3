@@ -210,7 +210,6 @@ patch_conf() {
   local file="$1" device="$2" gci_in="$3"
   local -a sed_args=(
     -e "s/^radio\.device.*/radio.device        = ${device}/"
-    -e "s/^radio\.skip_console.*/radio.skip_console  = 0/"
   )
   if [[ -n "$CFG_DOMAIN" ]]; then
     sed_args+=(-e "s/^winject\.domain.*/winject.domain        = ${CFG_DOMAIN}/")
@@ -228,7 +227,7 @@ patch_conf() {
   if [[ -n "$CFG_CCA" ]]; then
     printf 'radio.cca           = %s\n' "$CFG_CCA"
   fi
-  printf 'manager.console_in    = 127.0.0.1:%s\n' "$gci_in"
+  printf 'winject.console_in    = 127.0.0.1:%s\n' "$gci_in"
 }
 
 CONF_A_RUN="$LOG_DIR/winject_a.conf"

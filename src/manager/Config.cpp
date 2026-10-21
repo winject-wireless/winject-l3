@@ -2,7 +2,6 @@
 
 #include "fec/RsBlockErasure.h"
 #include "radio/PhyAirtime.h"
-#include "utils/Log.h"
 #include "utils/NetUtil.h"
 
 #include <bfc/configuration_parser.hpp>
@@ -28,7 +27,7 @@ static std::string trim(const std::string& s)
 
 static bool parse_mode(const std::string& text, UpstreamMode* mode)
 {
-    if (text == "UDP_STATIC_FORWARDING" || text == "UDP_GENERIC_FORWARDING")
+    if (text == "UDP_STATIC_FORWARDING")
     {
         *mode = UpstreamMode::udp_static;
         return true;
@@ -67,6 +66,17 @@ static bool reject_moved_key(const bfc::configuration_parser& parser,
         return true;
     }
     *error = std::string(from) + " moved to " + to;
+    return false;
+}
+
+static bool reject_removed_key(const bfc::configuration_parser& parser,
+                               const char* key, std::string* error)
+{
+    if (!parser.arg(key).has_value())
+    {
+        return true;
+    }
+    *error = std::string(key) + " is removed";
     return false;
 }
 
@@ -131,20 +141,36 @@ bool Config::load(const std::string& path, std::string* error)
     }
 
     const char* moved[][2] = {
+        {"manager.console_in", "winject.console_in"},
         {"winject.device", "radio.device"},
         {"winject.console", "radio.console"},
         {"winject.dplane_port", "radio.dplane_port"},
-        {"winject.inject_port", "radio.inject_port"},
+        {"winject.inject_port", "radio.dplane_port"},
+        {"radio.inject_port", "radio.dplane_port"},
+        {"winject.forward_port", "radio.dplane_port"},
+        {"winject.forward_base", "radio.dplane_port"},
         {"winject.channel", "radio.channel"},
         {"winject.modulation", "radio.modulation"},
         {"winject.power", "radio.power"},
         {"winject.cca", "radio.cca"},
         {"winject.radio_fcs", "radio.fcs"},
-        {"winject.skip_console", "radio.skip_console"},
     };
     for (const auto& pair : moved)
     {
         if (!reject_moved_key(parser, pair[0], pair[1], error))
+        {
+            return false;
+        }
+    }
+    const char* removed[] = {
+        "winject.max_rate_kbps",        "winject.tx_gap_us",
+        "winject.max_data_per_tick",    "winject.tx_burst_size",
+        "winject.tx_burst_interval_us", "winject.local_ip",
+        "winject.skip_console",         "radio.skip_console",
+    };
+    for (const char* key : removed)
+    {
+        if (!reject_removed_key(parser, key, error))
         {
             return false;
         }
@@ -165,19 +191,6 @@ bool Config::load(const std::string& path, std::string* error)
             return false;
         }
         console_port = *console;
-    }
-    if (auto skip = parser.arg("radio.skip_console"))
-    {
-        if (*skip == "1" || *skip == "true")
-        {
-            *error = "radio.skip_console cannot omit the radio mplane";
-            return false;
-        }
-        if (*skip != "0" && *skip != "false")
-        {
-            *error = "invalid radio.skip_console";
-            return false;
-        }
     }
 
     auto ch = parser.as<unsigned>("radio.channel");
@@ -228,21 +241,6 @@ bool Config::load(const std::string& path, std::string* error)
         return false;
     }
 
-    // TX pacing is fixed by the modulation (see TxMux).
-    for (const char* key :
-         {"winject.max_rate_kbps", "winject.tx_gap_us",
-          "winject.max_data_per_tick", "winject.tx_burst_size",
-          "winject.tx_burst_interval_us"})
-    {
-        if (parser.arg(key).has_value())
-        {
-            LOG_WRN("%s is ignored; TX pacing follows the modulation", key);
-        }
-    }
-    if (parser.arg("winject.local_ip").has_value())
-    {
-        LOG_WRN("winject.local_ip is ignored");
-    }
     if (auto c = parser.arg("radio.cca"))
     {
         if (*c == "1" || *c == "true")
@@ -286,25 +284,17 @@ bool Config::load(const std::string& path, std::string* error)
             return false;
         }
     }
-    manager_console_in = parser.arg("manager.console_in").value_or("");
-    if (!manager_console_in.empty())
+    console_in = parser.arg("winject.console_in").value_or("");
+    if (!console_in.empty())
     {
         sockaddr_in tmp = {};
-        if (!parse_host_port(manager_console_in, &tmp))
+        if (!parse_host_port(console_in, &tmp))
         {
-            *error = "invalid manager.console_in";
+            *error = "invalid winject.console_in";
             return false;
         }
     }
-    if (parser.arg("winject.forward_port").has_value() ||
-        parser.arg("winject.forward_base").has_value())
-    {
-        LOG_WRN(
-            "winject.forward_port is obsolete: the radio uses one d-plane "
-            "port (radio.dplane_port)");
-    }
     unsigned dplane_port = 9000;
-    bool dplane_from_dplane_key = false;
     if (auto dp = parser.as<unsigned>("radio.dplane_port"))
     {
         if (*dp == 0 || *dp > 65535)
@@ -313,19 +303,6 @@ bool Config::load(const std::string& path, std::string* error)
             return false;
         }
         dplane_port = *dp;
-        dplane_from_dplane_key = true;
-    }
-    if (auto inj = parser.as<unsigned>("radio.inject_port"))
-    {
-        if (*inj == 0 || *inj > 65535)
-        {
-            *error = "invalid radio.inject_port";
-            return false;
-        }
-        if (!dplane_from_dplane_key)
-        {
-            dplane_port = *inj;
-        }
     }
     if (!have_device)
     {
@@ -374,26 +351,37 @@ bool Config::load(const std::string& path, std::string* error)
             return false;
         }
         UpstreamMode mode = UpstreamMode::udp_static;
+        if (umode == "UDP_GENERIC_FORWARDING")
+        {
+            *error = "UDP_GENERIC_FORWARDING moved to UDP_STATIC_FORWARDING";
+            return false;
+        }
         if (!parse_mode(umode, &mode))
         {
             *error = "invalid " + key_of(i, "mode");
             return false;
         }
         // Firmware TX/RX are independent and optional.
-        // Preferred: upstream-N.tx_bus / rx_bus.
-        // Legacy: upstream_tx-N.bus / upstream_rx-N.bus, or bus_tx / bus_rx.
-        const std::string bus_tx_s =
-            parser.arg(key_of(i, "tx_bus"))
-                .value_or(
-                    parser.arg("upstream_tx-" + std::to_string(i) + ".bus")
-                        .value_or(
-                            parser.arg(key_of(i, "bus_tx")).value_or("")));
-        const std::string bus_rx_s =
-            parser.arg(key_of(i, "rx_bus"))
-                .value_or(
-                    parser.arg("upstream_rx-" + std::to_string(i) + ".bus")
-                        .value_or(
-                            parser.arg(key_of(i, "bus_rx")).value_or("")));
+        const std::string idx = std::to_string(i);
+        const std::string tx_bus_key = key_of(i, "tx_bus");
+        const std::string rx_bus_key = key_of(i, "rx_bus");
+        const std::string legacy_tx = "upstream_tx-" + idx + ".bus";
+        const std::string legacy_rx = "upstream_rx-" + idx + ".bus";
+        const std::string legacy_bus_tx = key_of(i, "bus_tx");
+        const std::string legacy_bus_rx = key_of(i, "bus_rx");
+        if (!reject_moved_key(parser, legacy_tx.c_str(), tx_bus_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_rx.c_str(), rx_bus_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_bus_tx.c_str(), tx_bus_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_bus_rx.c_str(), rx_bus_key.c_str(),
+                              error))
+        {
+            return false;
+        }
+        const std::string bus_tx_s = parser.arg(tx_bus_key).value_or("");
+        const std::string bus_rx_s = parser.arg(rx_bus_key).value_or("");
         if (!bus_tx_s.empty())
         {
             if (!parse_bus(bus_tx_s, &u.bus_tx) || u.bus_tx == 0)
@@ -585,12 +573,12 @@ bool Config::validate(std::string* error) const
     {
         return fail("winject.domain must be non-zero");
     }
-    if (!manager_console_in.empty())
+    if (!console_in.empty())
     {
         sockaddr_in tmp = {};
-        if (!parse_host_port(manager_console_in, &tmp))
+        if (!parse_host_port(console_in, &tmp))
         {
-            return fail("invalid manager.console_in");
+            return fail("invalid winject.console_in");
         }
     }
     auto ipv4_set = [](const sockaddr_in& addr) -> bool
