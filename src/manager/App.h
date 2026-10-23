@@ -30,6 +30,8 @@ namespace winject
 class App
 {
 public:
+    ~App();
+
     // Copies config after Config::validate. The host parses a file or fills
     // the struct; this does not open a file.
     bool load(Config config);
@@ -52,7 +54,8 @@ private:
         std::chrono::steady_clock::time_point deadline);
     void arm_console_deadline();
     void arm_stats();
-    void flush_shutdown();
+    void begin_shutdown();
+    void poll_shutdown();
     void refresh_host_metrics();
 
     bool set_upstream_fec(size_t index, FecType type, int k, int n,
@@ -112,6 +115,9 @@ private:
     OneShotTimer console_deadline_timer_;
     std::chrono::steady_clock::time_point console_deadline_at_{};
     OneShotTimer stats_timer_;
+    OneShotTimer shutdown_timer_;
+    bool shutdown_complete_ = false;
+    std::chrono::steady_clock::time_point shutdown_deadline_{};
     // Set by stop(); checked once the reactor runs, in case stop() came
     // before reactor.run() set it running.
     std::atomic<bool> stop_requested_{false};

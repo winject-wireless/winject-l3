@@ -95,9 +95,9 @@ bool WifiUdp::register_forward()
     static const uint8_t k_reg = 0;
     const bfc::const_buffer_view reg_view(
         reinterpret_cast<const std::byte*>(&k_reg), 1);
-    const ssize_t sent =
-        sock.send(reg_view, 0, reinterpret_cast<const sockaddr*>(&rx_dplane_),
-                  sizeof(rx_dplane_));
+    const ssize_t sent = sock.send(
+        reg_view, MSG_DONTWAIT, reinterpret_cast<const sockaddr*>(&rx_dplane_),
+        sizeof(rx_dplane_));
     if (sent < 0)
     {
         LOG_ERR("radio dplane_rx register failed: %s", strerror(errno));
@@ -132,9 +132,9 @@ bool WifiUdp::send(const uint8_t* mpdu, size_t len)
     }
     const bfc::const_buffer_view view(reinterpret_cast<const std::byte*>(mpdu),
                                       len);
-    const ssize_t sent =
-        sock.send(view, 0, reinterpret_cast<const sockaddr*>(&tx_dplane_),
-                  sizeof(tx_dplane_));
+    const ssize_t sent = sock.send(
+        view, MSG_DONTWAIT, reinterpret_cast<const sockaddr*>(&tx_dplane_),
+        sizeof(tx_dplane_));
     if (sent != static_cast<ssize_t>(len))
     {
         return false;

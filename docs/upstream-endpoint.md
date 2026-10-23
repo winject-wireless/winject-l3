@@ -36,6 +36,8 @@ from inside a FEC timer notification.
 - Double open fails and preserves the existing active session.
 - An initial failed open releases acquired bindings/socket resources and leaves
   the endpoint closed, ready for retry.
+- `stop_input()` fences and unregisters transport ingress while retaining pending
+  TX/FEC and application delivery, so shutdown can flush through TxMux timers.
 - Close is idempotent. It fences ingress, unregisters the selected transport,
   marks it closed, stops FEC timers and clears transport resources.
 - Reopen creates a fresh session, clears learned peers, resets LC receive state

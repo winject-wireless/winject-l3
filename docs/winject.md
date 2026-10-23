@@ -61,16 +61,21 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 
 | Thread | Runs |
 |---|---|
-| Reactor (main) | All sockets: application UDP, radio m-plane, d-plane forward, manager console. The full RX path (`WifiUdp` → `RxDemux` → `Upstream::on_radio_rx` → FEC decode → UDP send), application RX into upstream TX queues, timers and stats |
-| `TxMux` TX thread | While data is queued, wakes at each pacing slot and takes the next frame. When idle it sleeps; an upstream whose queue goes from empty to non-empty wakes it, and it never sleeps longer than 5 ms (`k_tx_max_sleep`). Builds MPDUs from upstream TX queues and sends them through `WifiUdp`. Each frame is followed by (airtime of the whole frame, MPDU + FCS, from `PhyAirtime` + the modulation's inter-frame gap) / 90 %, so the link uses at most 90 % of the modulation's capacity. Up to two full-frame intervals lost to a late wakeup are made up |
+| Manager IO reactor | All UDP sockets, the full WiFi UDP RX path, UDP upstream input/FEC, TX and RX FEC timers, management and stats. App binds TxMux here too: coalesced producer notifications and pacing timers build and submit MPDUs without a dedicated TX thread |
+| Host CV reactor (queue upstreams) | Pop application queue entries and run input FEC encoding; wake the manager reactor when a TX deadline is armed, and notify TxMux when encoded output first becomes available |
 
-The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue (per-upstream mutex).
+Upstream TX queues remain bounded, mutex-protected, non-reactive deques. Their
+producers explicitly notify TxMux after an empty-to-nonempty transition. TxMux
+has no periodic polling fallback: startup, topology/config changes and socket
+updates explicitly request work. Its reactor binding also supports a CV reactor;
+App currently uses IO because the radio and management planes still use UDP.
+See [reactive-tx.md](reactive-tx.md) for pacing, lifecycle and shutdown.
 
 ### Data path: TX
 
 1. An application sends a UDP datagram to an upstream socket (`HostEndpoint`, IO reactor thread). Datagrams over 1445 bytes are dropped and counted (`app_rx_oversize_pkt`).
 2. With FEC enabled, the datagram goes into the encoder, which emits k systematic and n−k parity shards; otherwise it is queued as-is.
-3. The TX thread picks a primary upstream that has data, then fills the remaining room in the MPDU from other upstreams, up to 5 slots and 1448 body bytes.
+3. The TxMux reactor callback picks a primary upstream that has data, then fills the remaining room in the MPDU from other upstreams, up to 5 slots and 1448 body bytes.
 4. Each slot payload is prefixed with the LC header (upstream `tx_bus`, FEC flag, per-bus sequence).
 5. The MPDU header gets the domain in Address 3, the slot lengths in Address 1–2, and a 12-bit MPDU sequence.
 6. `WifiUdp::send` sends it as one UDP datagram to `radio.dplane`. Pacing decides when the next MPDU may go.

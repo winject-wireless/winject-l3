@@ -438,3 +438,34 @@ TEST_F(QueueEndpointTest, ReopenSwitchesBetweenQueueAndUdp)
     EXPECT_EQ(packet->u8()[0], p);
     endpoint.close();
 }
+
+TEST_F(QueueEndpointTest, StopInputPreservesPendingFecForDrain)
+{
+    cfg.fec_type = FecType::RsBlockErasure;
+    cfg.fec_k = 2;
+    cfg.fec_n = 3;
+    cfg.fec_timeout_ms = 0;
+    HostEndpoint endpoint;
+    ASSERT_TRUE(endpoint.open(io, cfg));
+    push_in({1});
+    ASSERT_TRUE(wait_until(
+        [&]()
+        {
+            return endpoint.app_tx_packets() == 1;
+        }));
+    endpoint.stop_input();
+    push_in({2});
+    endpoint.announce_down();
+    size_t shards = 0;
+    while (endpoint.has_tx())
+    {
+        bool fec = false;
+        EXPECT_FALSE(endpoint.pull_tx(k_stream_payload_max, &fec).empty());
+        EXPECT_TRUE(fec);
+        ++shards;
+    }
+    EXPECT_EQ(shards, 2u);
+    EXPECT_EQ(endpoint.app_tx_packets(), 1u);
+    EXPECT_TRUE(endpoint.is_open());
+    endpoint.close();
+}

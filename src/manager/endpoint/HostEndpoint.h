@@ -35,6 +35,8 @@ public:
     void announce_down() override;
 
     void close();
+    // Fence transport ingress while retaining pending TX/FEC for a timed drain.
+    void stop_input();
 
     bool set_fec(FecType type, int k, int n, std::string* error);
     void get_fec(FecType* type, int* k, int* n) const;

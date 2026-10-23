@@ -14,10 +14,6 @@
 #include <string.h>
 #include <utility>
 
-#if defined(ESP_PLATFORM)
-#include "esp_pthread.h"
-#endif
-
 namespace
 {
 struct TxMpduEntryPlan
@@ -41,22 +37,29 @@ TxMux::~TxMux()
 
 void TxMux::configure(uint16_t domain)
 {
-    domain_ = domain;
-    next_tx_at_ = std::chrono::steady_clock::now();
+    {
+        std::lock_guard<std::mutex> lock(table_.mutex());
+        domain_ = domain;
+        next_tx_at_ = std::chrono::steady_clock::now();
+    }
+    request_tick();
 }
 
 void TxMux::set_phy_mode(const PhyMode& mode)
 {
-    std::lock_guard<std::mutex> lock(table_.mutex());
-    phy_ = mode;
-    gap_us_ = phy_default_gap_us(mode);
-    pacing_credit_us_ = frame_interval_us(k_pacing_full_psdu_bytes) * 2;
-    next_tx_at_ = std::chrono::steady_clock::now();
-    LOG_INF("tx pacing: (%" PRIu32 "us+%" PRIu32 "us)/%" PRIu32 "%% = %" PRIu32
-            "us per full frame",
-            phy_txtime_us(phy_, k_pacing_full_psdu_bytes), gap_us_,
-            k_tx_airtime_share_pct,
-            frame_interval_us(k_pacing_full_psdu_bytes));
+    {
+        std::lock_guard<std::mutex> lock(table_.mutex());
+        phy_ = mode;
+        gap_us_ = phy_default_gap_us(mode);
+        pacing_credit_us_ = frame_interval_us(k_pacing_full_psdu_bytes) * 2;
+        next_tx_at_ = std::chrono::steady_clock::now();
+        LOG_INF("tx pacing: (%" PRIu32 "us+%" PRIu32 "us)/%" PRIu32
+                "%% = %" PRIu32 "us per full frame",
+                phy_txtime_us(phy_, k_pacing_full_psdu_bytes), gap_us_,
+                k_tx_airtime_share_pct,
+                frame_interval_us(k_pacing_full_psdu_bytes));
+    }
+    request_tick();
 }
 
 uint32_t TxMux::frame_interval_us(size_t psdu_bytes) const
@@ -282,6 +285,11 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
     {
         tx_send_fail_mpdu_.fetch_add(1, std::memory_order_relaxed);
         tx_send_fail_byt_.fetch_add(mpdu_len, std::memory_order_relaxed);
+        // Failed nonblocking submission consumed these SDUs. Pace further
+        // attempts instead of stalling the remaining backlog or spinning.
+        next_tx_at_ =
+            now + std::chrono::microseconds(frame_interval_us(mpdu_len + 4));
+        pacing_blocked_ = true;
         return false;
     }
     // Whole frame on air: MPDU + 4-byte FCS.
@@ -319,6 +327,8 @@ bool TxMux::tick_impl()
         return false;
     }
     std::vector<size_t> schedule_shares;
+    size_t emitted = 0;
+    constexpr size_t k_max_frames_per_turn = 8;
     // Each round gives every upstream its scheduler budget; budgets weight
     // upstreams against each other and do not cap the rate. Rounds repeat
     // until pacing closes or a round sends nothing.
@@ -339,6 +349,10 @@ bool TxMux::tick_impl()
                     progress = true;
                     sent = true;
                     next = (i + 1) % entries.size();
+                    if (++emitted == k_max_frames_per_turn)
+                    {
+                        return true;
+                    }
                 }
             }
         }
@@ -381,101 +395,106 @@ void TxMux::log_stats(double interval_sec)
             static_cast<unsigned long long>(total_lost));
 }
 
-bool TxMux::pop_event(TxEvent* out)
+struct TxMux::ReactorState
 {
-    return tx_events_.pop(out);
+    // A cancelled callback can already have been extracted by the reactor.
+    // The shared guard fences active callbacks and invalidates stale ones.
+    std::recursive_mutex gate;
+    TxMux* owner = nullptr;
+    Wake wake;
+    Arm arm;
+    Cancel cancel;
+    std::optional<TimerId> timer;
+    uint64_t generation = 0;
+    // Protected by TxMux::wake_mu_, independently of the callback gate.
+    bool wake_pending = false;
+};
+
+TxEventQueue TxMux::take_events()
+{
+    std::lock_guard<std::mutex> lock(wake_mu_);
+    TxEventQueue events = std::move(tx_events_);
+    tx_events_ = {};
+    return events;
 }
 
 void TxMux::handle_event(TxEvent& ev)
 {
-    if (std::holds_alternative<EventData>(ev))
+    if (auto* ctrl = std::get_if<EventCtrlSendSocketChange>(&ev))
     {
-        return;
-    }
-    auto& ctrl = std::get<EventCtrlSendSocketChange>(ev);
-    if (ctrl.radio)
-    {
-        std::lock_guard<std::mutex> lock(table_.mutex());
-        ctrl.radio->set_tx_dplane(ctrl.dplane);
-        LOG_INF("tx dplane -> %s",
-                console_format_ipv4_port(ctrl.dplane).c_str());
+        if (ctrl->radio)
+        {
+            std::lock_guard<std::mutex> lock(table_.mutex());
+            ctrl->radio->set_tx_dplane(ctrl->dplane);
+            LOG_INF("tx dplane -> %s",
+                    console_format_ipv4_port(ctrl->dplane).c_str());
+        }
     }
 }
 
-void TxMux::apply_queued_socket_changes()
+void TxMux::apply_events(TxEventQueue events)
 {
-    tx_events_.drop_data();
-    TxEvent ev;
-    while (pop_event(&ev))
+    TxEvent event;
+    while (events.pop(&event))
     {
-        handle_event(ev);
+        handle_event(event);
     }
 }
 
 void TxMux::post_send_socket_change(std::shared_ptr<WifiUdp> radio,
                                     const sockaddr_in& dplane)
 {
-    EventCtrlSendSocketChange ctrl;
-    ctrl.radio = std::move(radio);
-    ctrl.dplane = dplane;
     {
         std::lock_guard<std::mutex> lock(wake_mu_);
-        tx_events_.push(std::move(ctrl));
+        tx_events_.push(EventCtrlSendSocketChange{std::move(radio), dplane});
     }
-    wake_cv_.notify_one();
+    notify_reactor();
 }
 
-void TxMux::start()
+void TxMux::start_on(Wake wake, Arm arm, Cancel cancel)
 {
-    if (tx_thread_.joinable())
-    {
-        return;
-    }
-    tx_stop_ = false;
     {
         std::lock_guard<std::mutex> lock(wake_mu_);
-        apply_queued_socket_changes();
-    }
-#if defined(ESP_PLATFORM)
-    // std::thread gets CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT (3 KB by
-    // default), too small for the TX path; restore the caller's config after.
-    esp_pthread_cfg_t prev_cfg;
-    const bool had_cfg = esp_pthread_get_cfg(&prev_cfg) == ESP_OK;
-    esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
-    cfg.stack_size = k_tx_thread_stack_bytes;
-    cfg.thread_name = "winject_tx";
-    esp_pthread_set_cfg(&cfg);
-#endif
-    tx_thread_ = std::thread(
-        [this]()
+        if (reactor_state_)
         {
-            tx_thread_main();
-        });
-#if defined(ESP_PLATFORM)
-    if (had_cfg)
-    {
-        esp_pthread_set_cfg(&prev_cfg);
+            return;
+        }
+        auto state = std::make_shared<ReactorState>();
+        state->owner = this;
+        state->wake = std::move(wake);
+        state->arm = std::move(arm);
+        state->cancel = std::move(cancel);
+        reactor_state_ = std::move(state);
     }
-    else
-    {
-        const esp_pthread_cfg_t def = esp_pthread_get_default_config();
-        esp_pthread_set_cfg(&def);
-    }
-#endif
+    request_tick();  // also discovers data queued before the reactor was bound
 }
 
 void TxMux::stop()
 {
-    tx_stop_ = true;
-    wake_cv_.notify_all();
-    if (tx_thread_.joinable())
-    {
-        tx_thread_.join();
-    }
+    std::shared_ptr<ReactorState> state;
     {
         std::lock_guard<std::mutex> lock(wake_mu_);
-        apply_queued_socket_changes();
+        state = reactor_state_;
     }
+    if (state)
+    {
+        std::lock_guard<std::recursive_mutex> guard(state->gate);
+        state->owner = nullptr;
+        ++state->generation;
+        if (state->timer)
+        {
+            state->cancel(*state->timer);
+        }
+        state->timer.reset();
+        std::lock_guard<std::mutex> lock(wake_mu_);
+        if (reactor_state_ == state)
+        {
+            reactor_state_.reset();
+        }
+    }
+    auto events = take_events();
+    events.drop_data();
+    apply_events(std::move(events));
 }
 
 void TxMux::request_tick()
@@ -484,58 +503,103 @@ void TxMux::request_tick()
         std::lock_guard<std::mutex> lock(wake_mu_);
         tx_events_.push_data();
     }
-    wake_cv_.notify_one();
+    notify_reactor();
 }
 
-void TxMux::sync_tick()
+void TxMux::notify_reactor()
 {
-    std::lock_guard<std::mutex> lock(table_.mutex());
-    tick_impl();
+    std::shared_ptr<ReactorState> state;
+    {
+        std::lock_guard<std::mutex> lock(wake_mu_);
+        state = reactor_state_;
+        if (!state || state->wake_pending)
+        {
+            return;
+        }
+        state->wake_pending = true;
+    }
+    // Fence posting against stop too: no wake can be posted after stop returns.
+    std::lock_guard<std::recursive_mutex> guard(state->gate);
+    if (!state->owner)
+    {
+        return;
+    }
+    std::weak_ptr<ReactorState> weak = state;
+    state->wake(
+        [weak]()
+        {
+            if (auto current = weak.lock())
+            {
+                std::lock_guard<std::recursive_mutex> guard(current->gate);
+                if (current->owner)
+                {
+                    current->owner->on_reactor(current, true);
+                }
+            }
+        });
 }
 
-// Sleeps until an event (data queued on an idle upstream, d-plane change,
-// stop), until the next frame may go out while data waits on pacing, or for
-// at most k_tx_max_sleep.
-void TxMux::tx_thread_main()
+bool TxMux::has_pending_tx_locked() const
 {
-    auto woken = [this]()
+    if (domain_ == 0)
     {
-        return !tx_events_.empty() || tx_stop_.load();
-    };
-    auto wake_at = std::chrono::steady_clock::now();
-    std::unique_lock<std::mutex> wlock(wake_mu_);
-    while (!tx_stop_)
+        return false;
+    }
+    for (const auto& entry : table_.entries())
     {
-        wake_cv_.wait_until(wlock, wake_at, woken);
-        if (tx_stop_)
+        if (entry.up && entry.radio && entry.bus_tx && entry.budget &&
+            entry.up->get_tx_size())
         {
-            break;
-        }
-        TxEvent ev;
-        while (pop_event(&ev))
-        {
-            wlock.unlock();
-            handle_event(ev);
-            wlock.lock();
-        }
-        wlock.unlock();
-        bool paced = false;
-        std::chrono::steady_clock::time_point pacing_until;
-        {
-            std::lock_guard<std::mutex> lock(table_.mutex());
-            paced = tick_impl();
-            pacing_until = next_tx_at_;
-        }
-        wlock.lock();
-        // Data held back by pacing goes at the next slot (at once if the slot
-        // passed meanwhile). Data no upstream could send (e.g. no d-plane
-        // yet) waits for a wake or the cap, not a spin.
-        wake_at = std::chrono::steady_clock::now() + k_tx_max_sleep;
-        if (paced && pacing_until < wake_at)
-        {
-            wake_at = pacing_until;
+            return true;
         }
     }
+    return false;
+}
+
+void TxMux::on_reactor(const std::shared_ptr<ReactorState>& state, bool wake)
+{
+    if (wake)
+    {
+        std::lock_guard<std::mutex> lock(wake_mu_);
+        state->wake_pending = false;
+    }
+    ++state->generation;
+    if (state->timer)
+    {
+        state->cancel(*state->timer);
+    }
+    state->timer.reset();
+    apply_events(take_events());
+    bool again;
+    std::chrono::steady_clock::time_point deadline;
+    {
+        std::lock_guard<std::mutex> lock(table_.mutex());
+        again = tick_impl() && has_pending_tx_locked();
+        deadline = next_tx_at_;
+    }
+    if (!again)
+    {
+        return;  // no periodic polling and no timer while idle
+    }
+    const auto delay = std::chrono::duration_cast<std::chrono::microseconds>(
+                           deadline - std::chrono::steady_clock::now())
+                           .count();
+    const auto generation = state->generation;
+    std::weak_ptr<ReactorState> weak = state;
+    state->timer = state->arm(
+        std::max<int64_t>(0, delay),
+        [weak, generation]()
+        {
+            if (auto current = weak.lock())
+            {
+                std::lock_guard<std::recursive_mutex> guard(current->gate);
+                if (current->owner && current->generation == generation)
+                {
+                    current->timer.reset();
+                    current->owner->on_reactor(current, false);
+                }
+            }
+        });
 }
 
 }  // namespace winject

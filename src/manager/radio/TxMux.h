@@ -8,31 +8,26 @@
 #include "radio/TxEvent.h"
 
 #include <atomic>
+#include <bfc/function.hpp>
 #include <chrono>
-#include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <netinet/in.h>
+#include <optional>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/socket.h>
-#include <thread>
+#include <utility>
 #include <vector>
 
 namespace winject
 {
 
-#if defined(ESP_PLATFORM)
-inline constexpr size_t k_tx_thread_stack_bytes = 8192;
-#endif
 inline constexpr size_t k_pacing_full_psdu_bytes = 1504;
 // Share of the modulation's airtime (frame airtime + inter-frame gap) that
 // TX pacing uses.
 inline constexpr uint32_t k_tx_airtime_share_pct = 90;
-// Longest the TX thread sleeps without a wake: producers wake it only when a
-// queue goes from empty to non-empty, so this bounds any missed wake.
-inline constexpr std::chrono::milliseconds k_tx_max_sleep{5};
-
 class WifiUdp;
 
 class TxMux
@@ -47,29 +42,54 @@ public:
     uint32_t pacing_gap_us() const;
     // Spacing between full-size frames: (airtime + gap) / 90 %.
     uint32_t pacing_interval_full_us() const;
-    void start();
+    // Owner calls start/stop on the chosen reactor thread or while stopped.
+    // Producers request work after releasing their queue/table locks.
+    template <typename Reactor>
+    void start(Reactor& reactor)
+    {
+        start_on(
+            [&reactor](Callback fn)
+            {
+                reactor.wake_up(std::move(fn));
+            },
+            [&reactor](int64_t us, Callback fn)
+            {
+                return reactor.get_timer().wait_us(us, std::move(fn));
+            },
+            [&reactor](TimerId id)
+            {
+                reactor.get_timer().cancel(id);
+            });
+    }
     void stop();
     void request_tick();
     void post_send_socket_change(std::shared_ptr<WifiUdp> radio,
                                  const sockaddr_in& dplane);
-    void sync_tick();
     void log_stats(double interval_sec);
     uint64_t take_air_bytes();
     uint64_t tx_send_fail_mpdu() const;
     uint64_t tx_send_fail_byt() const;
 
 private:
-    // Returns true when it stopped because pacing closed (more data may be
-    // sendable at next_tx_at_).
+    // True when pacing or the bounded work budget requires another turn.
     bool tick_impl();
-    void tx_thread_main();
+    using TimerId = std::pair<int64_t, uint64_t>;
+    using Callback = bfc::light_function<void()>;
+    using Wake = std::function<void(Callback)>;
+    using Arm = std::function<TimerId(int64_t, Callback)>;
+    using Cancel = std::function<void(TimerId)>;
+    struct ReactorState;
+    void start_on(Wake wake, Arm arm, Cancel cancel);
+    void notify_reactor();
+    void on_reactor(const std::shared_ptr<ReactorState>& state, bool wake);
+    bool has_pending_tx_locked() const;
     void init_schedule_shares(std::vector<size_t>& shares) const;
     bool emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares);
     bool note_build_fail(size_t body_bytes);
     uint32_t frame_interval_us(size_t psdu_bytes) const;
-    bool pop_event(TxEvent* out);
     void handle_event(TxEvent& ev);
-    void apply_queued_socket_changes();
+    TxEventQueue take_events();
+    void apply_events(TxEventQueue events);
 
     RadioUpstreamTable& table_;
     PhyMode phy_{};
@@ -87,11 +107,9 @@ private:
     std::atomic<uint64_t> tx_send_fail_mpdu_{0};
     std::atomic<uint64_t> tx_send_fail_byt_{0};
 
-    std::thread tx_thread_;
     std::mutex wake_mu_;
-    std::condition_variable wake_cv_;
     TxEventQueue tx_events_;
-    std::atomic<bool> tx_stop_{false};
+    std::shared_ptr<ReactorState> reactor_state_;
 };
 
 }  // namespace winject

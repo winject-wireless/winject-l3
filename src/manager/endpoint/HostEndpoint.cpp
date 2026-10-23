@@ -39,6 +39,7 @@ struct HostEndpoint::Session : std::enable_shared_from_this<Session>
     std::recursive_mutex ingress_mu;
     mutable std::mutex transport_mu;
     bool opened = false;
+    bool accepting_input = false;
     bool registered = false;
     bool claimed = false;
     static std::mutex claims_mu;
@@ -167,6 +168,7 @@ struct HostEndpoint::Session : std::enable_shared_from_this<Session>
         {
             std::lock_guard<std::mutex> lock(transport_mu);
             opened = true;
+            accepting_input = true;
         }
         if (queue_mode())
         {
@@ -197,12 +199,12 @@ struct HostEndpoint::Session : std::enable_shared_from_this<Session>
         return registered;
     }
 
-    void close()
+    void stop_input()
     {
         std::lock_guard<std::recursive_mutex> ingress(ingress_mu);
         {
             std::lock_guard<std::mutex> lock(transport_mu);
-            opened = false;
+            accepting_input = false;
         }
         if (registered)
         {
@@ -220,6 +222,16 @@ struct HostEndpoint::Session : std::enable_shared_from_this<Session>
             {
                 io->rem_read_rdy(sock.fd());
             }
+        }
+    }
+
+    void close()
+    {
+        std::lock_guard<std::recursive_mutex> ingress(ingress_mu);
+        stop_input();
+        {
+            std::lock_guard<std::mutex> lock(transport_mu);
+            opened = false;
         }
         if (claimed)
         {
@@ -306,7 +318,7 @@ struct HostEndpoint::Session : std::enable_shared_from_this<Session>
             std::shared_ptr<Queue> in;
             {
                 std::lock_guard<std::mutex> lock(transport_mu);
-                if (!opened)
+                if (!opened || !accepting_input)
                 {
                     return;
                 }
@@ -323,7 +335,7 @@ struct HostEndpoint::Session : std::enable_shared_from_this<Session>
             }
         }
         std::lock_guard<std::mutex> lock(transport_mu);
-        if (opened && queue_in->has_data())
+        if (opened && accepting_input && queue_in->has_data())
         {
             cv->wake_up();
         }
@@ -337,7 +349,7 @@ struct HostEndpoint::Session : std::enable_shared_from_this<Session>
             ssize_t received;
             {
                 std::lock_guard<std::mutex> lock(transport_mu);
-                if (!opened)
+                if (!opened || !accepting_input)
                 {
                     return;
                 }
@@ -415,6 +427,14 @@ bool HostEndpoint::is_open() const
 {
     auto s = session();
     return s && s->is_open();
+}
+
+void HostEndpoint::stop_input()
+{
+    if (auto s = session())
+    {
+        s->stop_input();
+    }
 }
 
 void HostEndpoint::close()

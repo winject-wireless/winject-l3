@@ -76,7 +76,7 @@ private:
 
     IOReactor* reactor = nullptr;
     bfc::socket sock;
-    // TxMux TX thread only.
+    // TxMux reactor only.
     sockaddr_in tx_dplane_{};
     bool have_tx_dplane_ = false;
     // Reactor thread only.

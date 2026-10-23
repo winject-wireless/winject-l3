@@ -17,11 +17,24 @@
 #include <errno.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <thread>
 #include <time.h>
 
 namespace winject
 {
+
+App::~App()
+{
+    // The upstream table also owns endpoints and outlives TxMux. Fence their
+    // callbacks before member destruction, including a partially failed run().
+    for (auto& up : upstreams)
+    {
+        if (up)
+        {
+            up->close();
+        }
+    }
+    tx_mux_.stop();
+}
 
 bool App::load(Config config)
 {
@@ -53,6 +66,7 @@ bool App::add_upstream(const UpstreamConfig& uc)
     radio_upstream_table_.add(up, radio, uc.bus_tx, uc.bus_rx,
                               uc.scheduler_budget);
     upstreams.push_back(up);
+    tx_mux_.request_tick();
     LOG_INF("upstream-%zu type=%s bus_tx=%s bus_rx=%s", uc.index,
             up->type_name(), uc.bus_tx ? bus_to_string(uc.bus_tx).c_str() : "-",
             uc.bus_rx ? bus_to_string(uc.bus_rx).c_str() : "-");
@@ -201,6 +215,7 @@ bool App::set_upstream_scheduler_budget(size_t index, size_t budget,
     {
         cfg.upstreams[index].scheduler_budget = budget;
     }
+    tx_mux_.request_tick();
     LOG_INF("upstream-%zu scheduler_budget=%zu", index, budget);
     return true;
 }
@@ -347,6 +362,7 @@ bool App::console_remove_upstream(uint8_t id, std::string* error)
         }
     }
     upstreams.erase(upstreams.begin() + static_cast<ptrdiff_t>(index));
+    tx_mux_.request_tick();
     cfg.upstreams.erase(cfg.upstreams.begin() + static_cast<ptrdiff_t>(index));
     metrics_registry_.remove_prefix("upstream_" + std::to_string(id) + "_");
     return true;
@@ -1445,41 +1461,52 @@ void App::stop()
     reactor.stop();
 }
 
-void App::flush_shutdown()
+void App::begin_shutdown()
 {
+    mgr_console.stop();
+    shutdown_deadline_ =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
     for (auto& up : upstreams)
     {
         if (up)
         {
+            up->stop_input();
             up->announce_down();
         }
     }
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-    size_t queued_bytes = 0;
-    while (std::chrono::steady_clock::now() < deadline)
+    tx_mux_.request_tick();
+    poll_shutdown();
+}
+
+void App::poll_shutdown()
+{
+    uint64_t packets = 0, bytes = 0;
+    for (const auto& up : upstreams)
     {
-        bool pending = false;
-        for (const auto& up : upstreams)
+        if (up)
         {
-            if (up != nullptr && up->has_tx())
-            {
-                pending = true;
-                queued_bytes += up->get_tx_size();
-            }
+            uint64_t p = 0, b = 0;
+            up->tx_pending_stats(&p, &b);
+            packets += p;
+            bytes += b;
         }
-        if (!pending)
-        {
-            break;
-        }
-        tx_mux_.sync_tick();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    if (queued_bytes > 0)
+    if (packets == 0 || std::chrono::steady_clock::now() >= shutdown_deadline_)
     {
-        LOG_INF("shutdown flush ended with ~%zu bytes still queued",
-                queued_bytes);
+        if (packets)
+        {
+            LOG_INF("shutdown drain ended with %llu bytes queued",
+                    static_cast<unsigned long long>(bytes));
+        }
+        shutdown_complete_ = true;
+        reactor.stop();
+        return;
     }
+    shutdown_timer_.arm(std::chrono::milliseconds(1),
+                        [this]()
+                        {
+                            poll_shutdown();
+                        });
 }
 
 int App::run()
@@ -1492,6 +1519,7 @@ int App::run()
     reconnect_timer_.bind(&reactor);
     console_deadline_timer_.bind(&reactor);
     stats_timer_.bind(&reactor);
+    shutdown_timer_.bind(&reactor);
     console.set_on_deadline(
         [this](std::chrono::steady_clock::time_point deadline)
         {
@@ -1591,7 +1619,7 @@ int App::run()
             "stats logging every %u s (WINJECT_STATS_SEC or winject.stats_sec)",
             cfg.stats_sec);
     }
-    tx_mux_.start();
+    tx_mux_.start(reactor);
     arm_stats();
     // stop() before reactor.run() set it running would be lost; the first
     // loop pass runs this and stops then.
@@ -1604,8 +1632,15 @@ int App::run()
                                     }
                                 });
     reactor.run();
+    // stop() remains signal-safe (atomics + wake fd). Resume the same reactor
+    // only for a bounded, timer-driven drain after transport ingress is fenced.
+    begin_shutdown();
+    if (!shutdown_complete_)
+    {
+        reactor.run();
+    }
+    shutdown_timer_.cancel();
     tx_mux_.stop();
-    flush_shutdown();
     return 0;
 }
 

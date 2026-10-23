@@ -33,6 +33,7 @@ add_executable(winject-tests
     VendoredFecTest.cpp
     DatagramAirTest.cpp
     HostEndpointTest.cpp
+    AppShutdownTest.cpp
     NetUtilTest.cpp
     UdpEndpointTest.cpp
     QueueEndpointTest.cpp
@@ -54,6 +55,8 @@ add_executable(winject-tests
     TxMuxTest.cpp
     OneShotTimerTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/App.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Frame.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Mpdu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_block_erasure.cpp
