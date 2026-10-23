@@ -462,7 +462,7 @@ bool Config::load(const std::string& path, std::string* error)
                 return false;
             }
             u.mode = UpstreamMode::queue;
-            u.endpoint = UdpPeerEndpoint{std::move(rx), std::move(tx)};
+            u.endpoint = EndpointAddress{std::move(rx), std::move(tx)};
             u.reactor = queue_reactor;
             upstreams.push_back(std::move(u));
             continue;
@@ -479,14 +479,14 @@ bool Config::load(const std::string& path, std::string* error)
                      "(client)";
             return false;
         }
-        const UpstreamMode inferred = upstream_mode(UdpPeerEndpoint{rx, tx});
+        const UpstreamMode inferred = upstream_mode(EndpointAddress{rx, tx});
         if (mode != inferred)
         {
             *error = key_of(i, "mode") + " does not match rx/tx";
             return false;
         }
         u.mode = inferred;
-        u.endpoint = UdpPeerEndpoint{std::move(rx), std::move(tx)};
+        u.endpoint = EndpointAddress{std::move(rx), std::move(tx)};
         upstreams.push_back(std::move(u));
     }
     if (!validate_upstreams(upstreams, error))

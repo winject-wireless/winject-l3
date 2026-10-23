@@ -1,5 +1,5 @@
 #include "Config.h"
-#include "endpoint/UdpEndpoint.h"
+#include "endpoint/HostEndpoint.h"
 #include "fec/RsBlockErasure.h"
 #include "utils/IOReactor.h"
 #include "utils/NetUtil.h"
@@ -121,7 +121,7 @@ TEST(UdpEndpointTest, RawSlotIsNeverDecoded)
     AppPeer app;
 
     IOReactor reactor;
-    UdpEndpoint endpoint;
+    HostEndpoint endpoint;
     UpstreamConfig cfg;
     cfg.fec_type = FecType::RsBlockErasure;
     cfg.fec_k = 1;
@@ -156,7 +156,7 @@ TEST(UdpEndpointTest, FecSlotDecodesWithFecDisabled)
     AppPeer app;
 
     IOReactor reactor;
-    UdpEndpoint endpoint;
+    HostEndpoint endpoint;
     UpstreamConfig cfg;
     cfg.fec_type = FecType::none;
     cfg.endpoint.rx = "127.0.0.1:" + std::to_string(port);
@@ -190,7 +190,7 @@ TEST(UdpEndpointTest, PullTxTagsFecShards)
         ASSERT_NE(port, 0u);
 
         IOReactor reactor;
-        UdpEndpoint endpoint;
+        HostEndpoint endpoint;
         UpstreamConfig cfg;
         cfg.fec_type = use_fec ? FecType::RsBlockErasure : FecType::none;
         cfg.fec_k = 2;
@@ -241,7 +241,7 @@ TEST(UdpEndpointTest, ClientModeForwardsRadioToConnectAddress)
     AppPeer iperf_server;
 
     IOReactor reactor;
-    UdpEndpoint endpoint;
+    HostEndpoint endpoint;
     UpstreamConfig cfg;
     cfg.fec_type = FecType::none;
     cfg.endpoint.tx = iperf_server.addr();
@@ -260,7 +260,7 @@ TEST(UdpEndpointTest, DropsOversizeAppDatagram)
     ASSERT_NE(port, 0u);
 
     IOReactor reactor;
-    UdpEndpoint endpoint;
+    HostEndpoint endpoint;
     UpstreamConfig cfg;
     cfg.fec_type = FecType::none;
     cfg.endpoint.rx = "127.0.0.1:" + std::to_string(port);
@@ -302,7 +302,7 @@ TEST(UdpEndpointTest, RawAppDatagramWakesTx)
     ASSERT_NE(port, 0u);
 
     IOReactor reactor;
-    UdpEndpoint endpoint;
+    HostEndpoint endpoint;
     UpstreamConfig cfg;
     cfg.fec_type = FecType::none;
     cfg.endpoint.rx = "127.0.0.1:" + std::to_string(port);
@@ -346,7 +346,7 @@ TEST(UdpEndpointTest, DestroyFromCallbackWithPendingRead)
     ASSERT_NE(port, 0u);
 
     IOReactor reactor;
-    auto endpoint = std::make_unique<UdpEndpoint>();
+    auto endpoint = std::make_unique<HostEndpoint>();
     UpstreamConfig cfg;
     cfg.fec_type = FecType::none;
     cfg.endpoint.rx = "127.0.0.1:" + std::to_string(port);

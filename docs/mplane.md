@@ -139,6 +139,13 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `rx_drop_bus` | Slots whose LC bus matches no upstream `rx_bus` |
 | `upstream_<id>_air_rx_gap_loss` | Air RX sequence gaps on upstream `<id>` |
 | `upstream_<id>_app_rx_oversize_pkt` | Application datagrams over 1445 bytes dropped on upstream `<id>` |
+| `upstream_<id>_app_delivery_attempts` | Decoded/raw datagrams handed to the application transport, including local failures |
+| `upstream_<id>_app_delivery_accepted` | Datagrams accepted locally by the socket or output queue; does not prove peer receipt |
+| `upstream_<id>_app_delivery_errors` | Local send failures (or unavailable output queue capacity) |
+| `upstream_<id>_app_delivery_no_peer` | Datagram deliveries dropped because a UDP server has not learned a peer |
+| `upstream_<id>_app_delivery_closed` | Delivery attempts that raced transport close |
+| `upstream_<id>_app_delivery_evictions` | Old output-queue entries evicted while accepting new entries |
+| `upstream_<id>_tx_queue_drops` | Oldest raw datagrams or encoded shards evicted from the bounded 1024-packet upstream TX queue |
 | `upstream_<id>_air_rx_fec_unexpected` | FEC shards (LC header F flag) received on upstream `<id>` while its FEC is disabled; still decoded. Non-zero means the two ends disagree on `fec.type` |
 
 Example (replies arrive on the same UDP socket you send from):
@@ -221,7 +228,7 @@ TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airt
 | `upstream-N.scheduler_budget` | Scheduling share per TX pass, bytes (default 256; console `quanta`) |
 | `upstream-N.fec.type` | `NONE` or `RS_BLOCK_ERASURE` |
 | `upstream-N.fec.k`, `upstream-N.fec.n` | Data and total shards per block (`1 ≤ k < n ≤ 31`; 5-bit fields in the shard header) |
-| `upstream-N.fec.timeout_ms` | Close a partial block after this long (default 20) |
+| `upstream-N.fec.timeout_ms` | Close a partial block after this long (default 20; zero disables automatic closing) |
 
 Server mode has `rx` only, client mode `tx` only, static mode both. `QUEUE_FORWARDING` has `rx`, `tx`, and `reactor`: `rx` and `tx` are queue names. The host registers both queues (nonzero capacity, distinct objects) on `bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>` and the reactor on `bfc::cv_reactor_registry` before the manager opens the upstream. The manager does not create or stop them. Each queue has one consumer. `add_upstream` remains a UDP upstream. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).
 

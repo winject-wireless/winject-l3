@@ -30,6 +30,9 @@ add_executable(winject-tests
     MpduTest.cpp
     ConfigTest.cpp
     RsBlockErasureTest.cpp
+    VendoredFecTest.cpp
+    DatagramAirTest.cpp
+    HostEndpointTest.cpp
     NetUtilTest.cpp
     UdpEndpointTest.cpp
     QueueEndpointTest.cpp
@@ -53,13 +56,13 @@ add_executable(winject-tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Frame.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Mpdu.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/RsBlockErasure.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_block_erasure.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_block_erasure_rx.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_encode_scalar.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UpstreamStats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/Upstream.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/DatagramAir.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/HostEndpoint.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UdpEndpoint.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/QueueEndpoint.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleClient.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/MplaneCorrelation.cpp

@@ -51,10 +51,9 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | `TxMux` | [`TxMux.*`](../src/manager/radio/TxMux.cpp) | TX scheduler: picks upstreams, builds MPDUs, paces them at 90 % of the modulation's airtime |
 | `RxDemux` | [`RxDemux.*`](../src/manager/radio/RxDemux.cpp) | RX: validates domain, splits slots, routes each slot by its LC bus to upstreams |
 | `RadioUpstreamTable` | [`RadioUpstreamTable.*`](../src/manager/radio/RadioUpstreamTable.cpp) | Shared upstream list (`bus_tx`, `bus_rx`, upstream pointer), guarded by one mutex |
-| `Upstream` / `UdpEndpoint` | [`endpoint/`](../src/manager/endpoint/UdpEndpoint.cpp) | One application flow: UDP socket in `UDP_SERVER_FORWARDING`, `UDP_CLIENT_FORWARDING` or static mode; TX queue; optional FEC |
-| `Upstream` / `QueueEndpoint` | [`QueueEndpoint.*`](../src/manager/endpoint/QueueEndpoint.cpp) | Same SDU path through host-owned queues (`QUEUE_FORWARDING`; `rx` / `tx` are registry names) |
+| `Upstream` / `HostEndpoint` | [`HostEndpoint.*`](../src/manager/endpoint/HostEndpoint.cpp) | One configurable application flow: UDP socket or host-owned queues, with shared FEC, buffering, lifecycle and delivery metrics. See [upstream-endpoint.md](upstream-endpoint.md) |
 | `UpstreamStats` | [`UpstreamStats.*`](../src/manager/endpoint/UpstreamStats.cpp) | Stamps and checks the LC header (bus, sequence); duplicate drop and gap counting |
-| `RsBlockErasure` | [`fec/`](../src/manager/fec/RsBlockErasure.cpp) | Optional k-of-n Reed–Solomon erasure coding (ISA-L) |
+| `RsBlockErasure` | [`fec/`](../src/manager/fec/vendor/rs_block_erasure.cpp) | Optional k-of-n Reed–Solomon erasure coding (ISA-L) |
 | `Mpdu` / `Frame` / `LCHeader` | [`frames/`](../src/manager/frames/Mpdu.cpp) | On-air framing (see § Framing) |
 | `MetricsRegistry` | [`MetricsRegistry.*`](../src/manager/utils/MetricsRegistry.cpp) | Counters exported by `get_metrics` |
 
@@ -69,7 +68,7 @@ The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue 
 
 ### Data path: TX
 
-1. An application sends a UDP datagram to an upstream socket (`UdpEndpoint`, reactor thread). Datagrams over 1445 bytes are dropped and counted (`app_rx_oversize_pkt`).
+1. An application sends a UDP datagram to an upstream socket (`HostEndpoint`, IO reactor thread). Datagrams over 1445 bytes are dropped and counted (`app_rx_oversize_pkt`).
 2. With FEC enabled, the datagram goes into the encoder, which emits k systematic and n−k parity shards; otherwise it is queued as-is.
 3. The TX thread picks a primary upstream that has data, then fills the remaining room in the MPDU from other upstreams, up to 5 slots and 1448 body bytes.
 4. Each slot payload is prefixed with the LC header (upstream `tx_bus`, FEC flag, per-bus sequence).
@@ -198,10 +197,11 @@ Two sequence numbers exist: the 12-bit **MPDU sequence** in the 802.11 header (p
 
 Configured per upstream: `upstream-N.fec.type = RS_BLOCK_ERASURE` with `fec.k`, `fec.n` and `fec.timeout_ms` (default 20), or at runtime with `add_upstream` / `update_upstream fec=BLOCK k= n= fec_timeout=` ([mplane.md](mplane.md)). [`RsBlockErasure`](../src/manager/fec/RsBlockErasure.h) groups **k** datagrams into **n** shards (`1 ≤ k < n ≤ 31`); any k received shards recover the block (Reed–Solomon erasure, ISA-L).
 
-- **TX:** datagram → `push_app` → shards queued → `pull_tx` (tagged as FEC) → LC header with F set → slot. A partial block is closed after `fec.timeout_ms`.
+- **TX:** datagram → `push_app` → shards queued → `pull_tx` (tagged as FEC) → LC header with F set → slot. A partial block is closed after `fec.timeout_ms`; zero disables automatic closing. Encoded output shares one bounded 1024-packet TX queue with raw datagrams; overflow drops the oldest queued packet and increments `upstream_<id>_tx_queue_drops`.
+- **Codec:** vendored from vstreamer `5cd91b7`, with independent TX and RX state. See [upstream-fec.md](upstream-fec.md) for receive ordering, deadlines, runtime changes and provenance.
 - **RX:** a slot whose LC header has F set → `push_air` → zero or more recovered datagrams. Slots without F always pass straight to the application, whatever their bytes. The decoder reads k/n from each shard header, so peers can use different k/n, and it decodes F slots even on an upstream with FEC disabled; those are counted in `upstream_<id>_air_rx_fec_unexpected` because the two ends disagree on `fec.type`. A shard whose header is invalid is dropped and counted in the decode failures.
 
-Shard header (5 bytes, [`RsBlockErasure::pack_header`](../src/manager/fec/RsBlockErasure.cpp)); the same layout as vstreamer's FEC shard header:
+Shard header (5 bytes, [`RsBlockErasure::pack_header`](../src/manager/fec/vendor/rs_block_erasure.cpp)); the same layout as vstreamer's FEC shard header:
 
 ```
  0               1               2               3               4
@@ -219,7 +219,7 @@ Shard header (5 bytes, [`RsBlockErasure::pack_header`](../src/manager/fec/RsBloc
 | `sdu_n` | 5 | Datagrams in the block (`1 ≤ sdu_n ≤ k`). A block closed by `fec.timeout_ms` has `sdu_n < k`: data slots `sdu_n … k−1` are empty pads that are not sent, and the receiver rebuilds them, so any `sdu_n` received shards recover the block |
 | `s`, spare | 1 + 3 | Zero; a non-zero spare bit makes the header invalid |
 
-Shard body: 2-byte BE length + original datagram (parity shards are padded for the RS arithmetic). The largest datagram an FEC upstream carries is `k_stream_payload_max − 5 − 2` = **1438** bytes ([`max_original()`](../src/manager/fec/RsBlockErasure.cpp)).
+Shard body: 2-byte BE length + original datagram (parity shards are padded for the RS arithmetic). The largest datagram an FEC upstream carries is `k_stream_payload_max − 5 − 2` = **1438** bytes ([`max_original()`](../src/manager/fec/vendor/rs_block_erasure.cpp)).
 
 The encoder sends a block's shards back to back. On a link with bursty loss, spreading them over time recovers far more blocks; see [fec-spreading.md](fec-spreading.md).
 

@@ -1,5 +1,5 @@
 #include "ConsoleTestHelpers.h"
-#include "endpoint/UdpEndpoint.h"
+#include "endpoint/HostEndpoint.h"
 #include "radio/WifiFcs.h"
 #include "radio/RxEvent.h"
 #include "radio/WifiUdp.h"
@@ -28,7 +28,7 @@ TEST(ReactorDrainTest, UdpEndpointDrainDoesNotBlock)
     ASSERT_NE(port, 0u);
 
     IOReactor reactor;
-    UdpEndpoint endpoint;
+    HostEndpoint endpoint;
     UpstreamConfig cfg;
     cfg.fec_type = FecType::none;
     cfg.endpoint.rx = "127.0.0.1:" + std::to_string(port);
@@ -66,7 +66,7 @@ TEST(ReactorDrainTest, UdpEndpointDrainIsBounded)
     ASSERT_NE(port, 0u);
 
     IOReactor reactor;
-    UdpEndpoint endpoint;
+    HostEndpoint endpoint;
     UpstreamConfig cfg;
     cfg.fec_type = FecType::none;
     cfg.endpoint.rx = "127.0.0.1:" + std::to_string(port);

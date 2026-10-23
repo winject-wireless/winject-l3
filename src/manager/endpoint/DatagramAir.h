@@ -10,6 +10,7 @@
 #include <bfc/timer.hpp>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <stddef.h>
 #include <stdint.h>
@@ -53,9 +54,10 @@ public:
     bool set_fec(FecType type, int k, int n, std::string* error);
     void get_fec(FecType* type, int* k, int* n) const;
     bool set_fec_timeout_ms(int timeout_ms, std::string* error);
-    int fec_timeout_ms() const
+    int fec_timeout_ms() const;
+    uint64_t tx_queue_drops() const
     {
-        return fec_timeout_ms_;
+        return tx_queue_drops_.load();
     }
 
     uint64_t app_rx_bytes() const
@@ -114,12 +116,13 @@ private:
 
     void push_tx(bfc::sized_buffer pkt, bool is_fec);
     bool has_tx_locked() const;
-    void enqueue_air(bfc::sized_buffer pkt);
+    void enqueue_fec(const std::vector<std::vector<uint8_t>>& shards);
     void deliver(const uint8_t* data, size_t len);
-    void stage_fec_shard_for_tx(size_t max);
-    void arm_fec_timer();
+    void arm_rx_timer();
     void cancel_fec_timer_locked();
-    void on_fec_timer();
+    void on_fec_timer(uint64_t generation);
+    void on_rx_timer();
+    void flush_fec_locked();
     void sync_fec_timer_after_push();
 
     using FecTimerId = FecTimer::timer_id_t;
@@ -131,7 +134,21 @@ private:
     const char* log_name_ = "upstream";
     mutable std::mutex tx_mu_;
     std::deque<TxItem> txq_;
-    RsBlockErasure fec_;
+    RsBlockErasure fec_tx_;
+    RsBlockErasure fec_rx_;
+    bool running_ = false;
+    // Timers capture this shared guard, never an unguarded endpoint pointer.
+    // Lock order: guard mutex then tx_mu_. stop() fences an in-flight timer.
+    struct TimerGuard
+    {
+        std::mutex mutex;
+        DatagramAir* owner = nullptr;
+    };
+    std::shared_ptr<TimerGuard> timer_guard_;
+    uint64_t tx_timer_generation_ = 0;
+    bool rx_timer_armed_ = false;
+    FecTimerId rx_timer_id_{};
+    std::atomic<uint64_t> tx_queue_drops_{0};
     int fec_timeout_ms_ = RsBlockErasure::k_default_timeout_ms;
     std::atomic<uint64_t> app_rx_bytes_{0};
     std::atomic<uint64_t> app_rx_packets_{0};

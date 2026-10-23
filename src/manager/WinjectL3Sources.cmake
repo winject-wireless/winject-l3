@@ -13,7 +13,9 @@ set(WINJECT_L3_SOURCES
     console/ConsoleParse.cpp
     frames/Frame.cpp
     frames/Mpdu.cpp
-    fec/RsBlockErasure.cpp
+    fec/vendor/rs_block_erasure.cpp
+    fec/vendor/rs_block_erasure_rx.cpp
+    fec/vendor/rs_encode_scalar.cpp
     utils/NetUtil.cpp
     radio/WifiUdp.cpp
     radio/WifiQueue.cpp
@@ -28,6 +30,4 @@ set(WINJECT_L3_SOURCES
     endpoint/UpstreamStats.cpp
     endpoint/DatagramAir.cpp
     endpoint/HostEndpoint.cpp
-    endpoint/UdpEndpoint.cpp
-    endpoint/QueueEndpoint.cpp
 )

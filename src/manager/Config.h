@@ -15,7 +15,7 @@ enum class UpstreamMode
     udp_static,
     udp_client,
     udp_server,
-    // In-process datagrams via named lossy queues. See QueueEndpoint.
+    // In-process datagrams via named lossy queues. See HostEndpoint.
     queue,
 };
 
@@ -23,13 +23,13 @@ enum class UpstreamMode
 // UDP: both set = static; rx only = server bind; tx only = client connect.
 // Queue: both required and distinct. rx is consumed (app toward air);
 // tx is produced (air toward app).
-struct UdpPeerEndpoint
+struct EndpointAddress
 {
     std::string rx;
     std::string tx;
 };
 
-inline UpstreamMode upstream_mode(const UdpPeerEndpoint& endpoint)
+inline UpstreamMode upstream_mode(const EndpointAddress& endpoint)
 {
     const bool has_rx = !endpoint.rx.empty();
     const bool has_tx = !endpoint.tx.empty();
@@ -67,7 +67,7 @@ struct UpstreamConfig
     size_t index = 0;
     UpstreamMode mode = UpstreamMode::udp_static;
     // UDP host:port, or queue registry names when mode is queue.
-    UdpPeerEndpoint endpoint;
+    EndpointAddress endpoint;
     // QUEUE_FORWARDING: the host's running cv_reactor. Empty for UDP.
     std::string reactor;
     uint8_t bus_tx = 0;

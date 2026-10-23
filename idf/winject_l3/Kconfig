@@ -1,0 +1,8 @@
+menu "winject-l3"
+config WINJECT_RS_PIE
+    bool "Use ESP32-P4 PIE SIMD for Reed-Solomon encoding"
+    depends on SOC_CPU_HAS_PIE
+    default y
+    help
+        Use the vendored vstreamer encoder's PIE kernel, with portable fallback.
+endmenu

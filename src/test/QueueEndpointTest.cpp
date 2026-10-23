@@ -1,4 +1,4 @@
-#include "endpoint/QueueEndpoint.h"
+#include "endpoint/HostEndpoint.h"
 #include "utils/IOReactor.h"
 #include "utils/NetUtil.h"
 
@@ -134,7 +134,7 @@ protected:
 TEST_F(QueueEndpointTest, RawDatagramBecomesAirSduAndWakesOnce)
 {
     std::atomic<int> wakes{0};
-    QueueEndpoint endpoint;
+    HostEndpoint endpoint;
     ASSERT_TRUE(endpoint.open(io, cfg,
                               [&]()
                               {
@@ -173,7 +173,7 @@ TEST_F(QueueEndpointTest, RawDatagramBecomesAirSduAndWakesOnce)
 
 TEST_F(QueueEndpointTest, RadioRxIsDeliveredOnTheOutQueue)
 {
-    QueueEndpoint endpoint;
+    HostEndpoint endpoint;
     ASSERT_TRUE(endpoint.open(io, cfg));
     const std::vector<uint8_t> payload = {0xDE, 0xAD, 0xBE, 0xEF};
     endpoint.on_radio_rx(
@@ -184,14 +184,14 @@ TEST_F(QueueEndpointTest, RadioRxIsDeliveredOnTheOutQueue)
     ASSERT_EQ(got->size(), payload.size());
     EXPECT_EQ(0, memcmp(got->u8(), payload.data(), payload.size()));
     EXPECT_EQ(endpoint.app_rx_packets(), 1u);
-    EXPECT_EQ(endpoint.queue_out_drops(), 0u);
+    EXPECT_EQ(endpoint.transport_counters().queue_evictions, 0u);
     endpoint.close();
 }
 
 TEST_F(QueueEndpointTest, OutQueueDropsOldestWhenFull)
 {
     out_queue->set_capacity(1);
-    QueueEndpoint endpoint;
+    HostEndpoint endpoint;
     ASSERT_TRUE(endpoint.open(io, cfg));
     const std::vector<uint8_t> first = {1};
     const std::vector<uint8_t> second = {2};
@@ -200,7 +200,7 @@ TEST_F(QueueEndpointTest, OutQueueDropsOldestWhenFull)
     endpoint.on_radio_rx(
         bfc::shared_sized_buffer::copy_from(second.data(), second.size()),
         false);
-    EXPECT_EQ(endpoint.queue_out_drops(), 1u);
+    EXPECT_EQ(endpoint.transport_counters().queue_evictions, 1u);
     auto got = out_queue->pop();
     ASSERT_TRUE(got);
     ASSERT_EQ(got->size(), 1u);
@@ -214,7 +214,7 @@ TEST_F(QueueEndpointTest, FecShardsAreTagged)
     cfg.fec_k = 2;
     cfg.fec_n = 3;
     cfg.fec_timeout_ms = 0;
-    QueueEndpoint endpoint;
+    HostEndpoint endpoint;
     ASSERT_TRUE(endpoint.open(io, cfg));
     const std::vector<uint8_t> payload(50, 0xF1);
     push_in(payload);
@@ -248,7 +248,7 @@ TEST_F(QueueEndpointTest, PartialBlockFlushesOnManagerReactor)
     cfg.fec_k = 2;
     cfg.fec_n = 3;
     cfg.fec_timeout_ms = 20;
-    QueueEndpoint endpoint;
+    HostEndpoint endpoint;
     ASSERT_TRUE(endpoint.open(io, cfg));
     {
         IoRun run(io);
@@ -269,7 +269,7 @@ TEST_F(QueueEndpointTest, PartialBlockFlushesOnManagerReactor)
 
 TEST_F(QueueEndpointTest, DropsOversizeAppDatagram)
 {
-    QueueEndpoint endpoint;
+    HostEndpoint endpoint;
     ASSERT_TRUE(endpoint.open(io, cfg));
     push_in(std::vector<uint8_t>(k_stream_payload_max + 1, 0xAB));
     ASSERT_TRUE(wait_until(
@@ -287,7 +287,7 @@ TEST_F(QueueEndpointTest, DrainsDatagramsQueuedBeforeOpen)
     const std::vector<uint8_t> payload = {9, 8, 7};
     (void)in_queue->push(
         bfc::shared_sized_buffer::copy_from(payload.data(), payload.size()));
-    QueueEndpoint endpoint;
+    HostEndpoint endpoint;
     ASSERT_TRUE(endpoint.open(io, cfg));
     ASSERT_TRUE(wait_until(
         [&]()
@@ -305,7 +305,7 @@ TEST_F(QueueEndpointTest, DrainsDatagramsQueuedBeforeOpen)
 
 TEST_F(QueueEndpointTest, OpenRejectsMissingAndAliasedQueues)
 {
-    QueueEndpoint endpoint;
+    HostEndpoint endpoint;
     cfg.endpoint.rx = "missing";
     EXPECT_FALSE(endpoint.open(io, cfg));
 
@@ -337,7 +337,7 @@ TEST_F(QueueEndpointTest, CloseDetachesBeforeDestroy)
 {
     std::atomic<int> wakes{0};
     {
-        QueueEndpoint endpoint;
+        HostEndpoint endpoint;
         ASSERT_TRUE(endpoint.open(io, cfg,
                                   [&]()
                                   {
@@ -359,7 +359,7 @@ TEST_F(QueueEndpointTest, FecAirSlotDecodesToTheOutQueue)
     cfg.fec_k = 2;
     cfg.fec_n = 3;
     cfg.fec_timeout_ms = 0;
-    QueueEndpoint endpoint;
+    HostEndpoint endpoint;
     ASSERT_TRUE(endpoint.open(io, cfg));
     const std::vector<uint8_t> payload(40, 0x5A);
     push_in(payload);
@@ -402,5 +402,39 @@ TEST_F(QueueEndpointTest, FecAirSlotDecodesToTheOutQueue)
     }
     EXPECT_EQ(got, 2);
     EXPECT_GE(endpoint.fec_recovered(), 1u);
+    endpoint.close();
+}
+
+TEST_F(QueueEndpointTest, ReopenSwitchesBetweenQueueAndUdp)
+{
+    HostEndpoint endpoint;
+    ASSERT_TRUE(endpoint.open(io, cfg));
+    endpoint.close();
+    bfc::socket peer(bfc::create_udp4());
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(peer.bind(addr), 0);
+    socklen_t len = sizeof(addr);
+    ASSERT_EQ(getsockname(peer.fd(), reinterpret_cast<sockaddr*>(&addr), &len),
+              0);
+    UpstreamConfig udp;
+    udp.endpoint.tx = "127.0.0.1:" + std::to_string(ntohs(addr.sin_port));
+    ASSERT_TRUE(endpoint.open(io, udp));
+    EXPECT_STREQ(endpoint.type_name(), "UDP");
+    const uint8_t p = 7;
+    endpoint.on_radio_rx(bfc::shared_sized_buffer::copy_from(&p, 1), false);
+    uint8_t got = 0;
+    ASSERT_EQ(::recv(peer.fd(), &got, 1, MSG_DONTWAIT), 1);
+    EXPECT_EQ(got, p);
+    EXPECT_FALSE(out_queue->pop());
+    endpoint.close();
+    ASSERT_TRUE(endpoint.open(io, cfg));
+    EXPECT_STREQ(endpoint.type_name(), "QUEUE");
+    endpoint.on_radio_rx(bfc::shared_sized_buffer::copy_from(&p, 1), false);
+    auto packet = out_queue->pop();
+    ASSERT_TRUE(packet);
+    ASSERT_EQ(packet->size(), 1u);
+    EXPECT_EQ(packet->u8()[0], p);
     endpoint.close();
 }

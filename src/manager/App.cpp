@@ -4,8 +4,6 @@
 #include "console/ConsoleParse.h"
 #include "console/MplaneCorrelation.h"
 #include "console/MplaneErrno.h"
-#include "endpoint/QueueEndpoint.h"
-#include "endpoint/UdpEndpoint.h"
 #include "frames/Mpdu.h"
 #include "radio/RadioDefs.h"
 #include "radio/RadioMplaneParse.h"
@@ -47,24 +45,10 @@ bool App::add_upstream(const UpstreamConfig& uc)
     {
         tx_mux_.request_tick();
     };
-    std::shared_ptr<HostEndpoint> up;
-    if (uc.mode == UpstreamMode::queue)
+    auto up = std::make_shared<HostEndpoint>();
+    if (!up->open(reactor, uc, tx_wake))
     {
-        auto queue = std::make_shared<QueueEndpoint>();
-        if (!queue->open(reactor, uc, tx_wake))
-        {
-            return false;
-        }
-        up = std::move(queue);
-    }
-    else
-    {
-        auto udp = std::make_shared<UdpEndpoint>();
-        if (!udp->open(reactor, uc, tx_wake))
-        {
-            return false;
-        }
-        up = std::move(udp);
+        return false;
     }
     radio_upstream_table_.add(up, radio, uc.bus_tx, uc.bus_rx,
                               uc.scheduler_budget);
@@ -160,8 +144,8 @@ bool App::set_upstream_fec(size_t index, FecType type, int k, int n,
     {
         return fail("invalid upstream index");
     }
-    HostEndpoint* udp = upstreams[index].get();
-    if (!udp->set_fec(type, k, n, error))
+    HostEndpoint* endpoint = upstreams[index].get();
+    if (!endpoint->set_fec(type, k, n, error))
     {
         return false;
     }
@@ -189,8 +173,8 @@ bool App::get_upstream_fec(size_t index, FecType* type, int* k, int* n,
     {
         return fail("invalid upstream index");
     }
-    HostEndpoint* udp = upstreams[index].get();
-    udp->get_fec(type, k, n);
+    HostEndpoint* endpoint = upstreams[index].get();
+    endpoint->get_fec(type, k, n);
     return true;
 }
 
@@ -229,17 +213,17 @@ bool App::fill_upstream_view(size_t index, ManagerUpstreamView* out) const
         return false;
     }
     const UpstreamConfig& uc = cfg.upstreams[index];
-    const auto* udp = upstreams[index].get();
+    const auto* endpoint = upstreams[index].get();
     out->id = static_cast<uint8_t>(uc.index);
     out->bus_tx = uc.bus_tx;
     out->bus_rx = uc.bus_rx;
     out->type = uc.mode == UpstreamMode::queue ? "QUEUE" : "UDP";
-    if (udp != nullptr)
+    if (endpoint != nullptr)
     {
-        out->rx = udp->endpoint_rx();
-        out->tx = udp->endpoint_tx();
-        out->fec_timeout_ms = udp->fec_timeout_ms();
-        udp->get_fec(&out->fec, &out->fec_k, &out->fec_n);
+        out->rx = endpoint->endpoint_rx();
+        out->tx = endpoint->endpoint_tx();
+        out->fec_timeout_ms = endpoint->fec_timeout_ms();
+        endpoint->get_fec(&out->fec, &out->fec_k, &out->fec_n);
     }
     else
     {
@@ -308,7 +292,7 @@ bool App::console_add_upstream(const ManagerUpstreamView& spec,
     uc.bus_tx = spec.bus_tx;
     uc.bus_rx = spec.bus_rx;
     uc.scheduler_budget = spec.quanta;
-    uc.endpoint = UdpPeerEndpoint{spec.rx, spec.tx};
+    uc.endpoint = EndpointAddress{spec.rx, spec.tx};
     uc.mode = upstream_mode(uc.endpoint);
     uc.fec_type = spec.fec;
     uc.fec_k = spec.fec_k;
@@ -356,10 +340,10 @@ bool App::console_remove_upstream(uint8_t id, std::string* error)
     }
     if (upstreams[index])
     {
-        auto* udp = upstreams[index].get();
-        if (udp != nullptr)
+        auto* endpoint = upstreams[index].get();
+        if (endpoint != nullptr)
         {
-            udp->close();
+            endpoint->close();
         }
     }
     upstreams.erase(upstreams.begin() + static_cast<ptrdiff_t>(index));
@@ -456,11 +440,11 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
         return fail(error != nullptr && !error->empty() ? error->c_str()
                                                         : k_einval);
     }
-    auto* udp = upstreams[index].get();
+    auto* endpoint = upstreams[index].get();
     if (patch.have_fec_timeout)
     {
-        if (udp == nullptr ||
-            !udp->set_fec_timeout_ms(candidate.fec_timeout_ms, error))
+        if (endpoint == nullptr ||
+            !endpoint->set_fec_timeout_ms(candidate.fec_timeout_ms, error))
         {
             return fail(error != nullptr && !error->empty() ? error->c_str()
                                                             : k_einval);
@@ -501,16 +485,16 @@ std::vector<uint8_t> console_upstream_ids(const std::vector<uint8_t>& ids,
     return want;
 }
 
-void fill_upstream_fec_fields(const HostEndpoint* udp, FecType* fec, int* k,
+void fill_upstream_fec_fields(const HostEndpoint* endpoint, FecType* fec, int* k,
                               int* n)
 {
     if (fec == nullptr || k == nullptr || n == nullptr)
     {
         return;
     }
-    if (udp != nullptr)
+    if (endpoint != nullptr)
     {
-        udp->get_fec(fec, k, n);
+        endpoint->get_fec(fec, k, n);
         return;
     }
     *fec = FecType::none;
@@ -545,19 +529,19 @@ bool App::console_list_upstream_rx_stat(
             }
             return false;
         }
-        const auto* udp = upstreams[index].get();
+        const auto* endpoint = upstreams[index].get();
         ManagerUpstreamRxStatView row;
         row.id = id;
-        fill_upstream_fec_fields(udp, &row.fec, &row.fec_k, &row.fec_n);
-        if (udp != nullptr)
+        fill_upstream_fec_fields(endpoint, &row.fec, &row.fec_k, &row.fec_n);
+        if (endpoint != nullptr)
         {
-            row.rxbyt = udp->app_rx_bytes();
-            row.rxpkt = udp->app_rx_packets();
-            row.rx_oversize = udp->app_rx_oversize_pkt();
-            row.fec_rec = udp->fec_recovered();
-            row.fec_lost = udp->fec_decode_fail();
-            row.fec_rxbyt = udp->fec_air_rx_bytes();
-            row.fec_rxpkt = udp->fec_air_rx_packets();
+            row.rxbyt = endpoint->app_rx_bytes();
+            row.rxpkt = endpoint->app_rx_packets();
+            row.rx_oversize = endpoint->app_rx_oversize_pkt();
+            row.fec_rec = endpoint->fec_recovered();
+            row.fec_lost = endpoint->fec_decode_fail();
+            row.fec_rxbyt = endpoint->fec_air_rx_bytes();
+            row.fec_rxpkt = endpoint->fec_air_rx_packets();
         }
         uint64_t gap = 0;
         if (radio_upstream_table_.peek_seq_lost(index, &gap))
@@ -594,17 +578,17 @@ bool App::console_list_upstream_tx_stat(
             }
             return false;
         }
-        const auto* udp = upstreams[index].get();
+        const auto* endpoint = upstreams[index].get();
         ManagerUpstreamTxStatView row;
         row.id = id;
-        fill_upstream_fec_fields(udp, &row.fec, &row.fec_k, &row.fec_n);
-        if (udp != nullptr)
+        fill_upstream_fec_fields(endpoint, &row.fec, &row.fec_k, &row.fec_n);
+        if (endpoint != nullptr)
         {
-            row.txbyt = udp->app_tx_bytes();
-            row.txpkt = udp->app_tx_packets();
-            row.fec_txbyt = udp->fec_air_tx_bytes();
-            row.fec_txpkt = udp->fec_air_tx_packets();
-            udp->tx_pending_stats(&row.tx_pending_pkt, &row.tx_pending_byt);
+            row.txbyt = endpoint->app_tx_bytes();
+            row.txpkt = endpoint->app_tx_packets();
+            row.fec_txbyt = endpoint->fec_air_tx_bytes();
+            row.fec_txpkt = endpoint->fec_air_tx_packets();
+            endpoint->tx_pending_stats(&row.tx_pending_pkt, &row.tx_pending_byt);
         }
         out->push_back(row);
     }
@@ -668,6 +652,23 @@ void App::refresh_host_metrics()
             "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
         metrics_registry_.get_metrics<MetricU64>(oversize_key)
             ->store(up->app_rx_oversize_pkt());
+        metrics_registry_.get_metrics<MetricU64>(
+            "upstream_" + std::to_string(view.id) + "_tx_queue_drops")
+            ->store(up->tx_queue_drops());
+        const auto transport = up->transport_counters();
+        const std::string transport_prefix = "upstream_" + std::to_string(view.id) + "_";
+        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_attempts")
+            ->store(transport.delivery_attempts);
+        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_accepted")
+            ->store(transport.accepted_packets);
+        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_errors")
+            ->store(transport.send_errors);
+        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_no_peer")
+            ->store(transport.no_peer_drops);
+        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_closed")
+            ->store(transport.closed_drops);
+        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_evictions")
+            ->store(transport.queue_evictions);
         const std::string fec_unexpected_key =
             "upstream_" + std::to_string(view.id) + "_air_rx_fec_unexpected";
         metrics_registry_.get_metrics<MetricU64>(fec_unexpected_key)

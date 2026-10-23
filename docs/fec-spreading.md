@@ -130,7 +130,7 @@ run. Post-FEC loss is the receiver's lost-after-FEC count over application packe
   link report format change.
 - **L3 FEC.** The L3 encoder (`RsBlockErasure` in this repo) still sends a block's shards back
   to back. WireGuard over upstream 0 loses about 20–30 % of pings for that reason; the same
-  spreading in `TxMux` or `UdpEndpoint` would apply.
+  spreading in `TxMux` or `HostEndpoint` would apply.
 - **Raw loss.** About 15 % raw loss on the bench link at short range is high. During the 22–32 ms
   gaps the GS adapter received nothing while an ESP32 sniffer still heard 25–35 frames. This is
   a separate radio-side investigation.
