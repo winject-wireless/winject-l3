@@ -12,11 +12,14 @@ public:
                   std::shared_ptr<ReactiveLossyQueue> app_tx_queue,
                   std::shared_ptr<ReactiveLossyQueue> app_rx_queue);
     ~QueueUpstream() override;
+    // Also releases the app TX queue to a replacement consumer.
+    void teardown() override;
 
 private:
     void deliver_datagram(const uint8_t* data, size_t len) override;
+    void release_claim();
     std::shared_ptr<ReactiveLossyQueue> app_rx_queue;
-    std::shared_ptr<void> claim;
+    bool claimed = false;
 };
 }  // namespace winject
 #endif

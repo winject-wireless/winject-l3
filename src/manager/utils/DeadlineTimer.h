@@ -6,15 +6,18 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <stdint.h>
 #include <utility>
 
 namespace winject
 {
 
-// One CV reactor timer that follows a moving deadline. Arm and cancel only on
-// the reactor thread (or while it is not running): the reactor re-reads its
-// next deadline after every pass, so arming needs no wake_up.
+// One CV reactor timer that follows a moving deadline. Arm on the reactor
+// thread (or while it is not running): the reactor re-reads its next deadline
+// after every pass, so arming needs no wake_up. cancel() and unbind() may run
+// on any thread; they wait out a callback that is firing, and none fires
+// after they return.
 //
 // timer::schedule extracts every due callback before running any, so a
 // callback cancelled or destroyed by an earlier one in the same pass still
@@ -31,6 +34,7 @@ public:
     }
     ~DeadlineTimer()
     {
+        std::lock_guard<std::recursive_mutex> lock(token->mu);
         unbind();
         token->owner = nullptr;
     }
@@ -39,12 +43,14 @@ public:
 
     void bind(std::shared_ptr<Reactor> reactor, Fire fire)
     {
+        std::lock_guard<std::recursive_mutex> lock(token->mu);
         unbind();
         this->reactor = std::move(reactor);
         this->fire = std::move(fire);
     }
     void unbind()
     {
+        std::lock_guard<std::recursive_mutex> lock(token->mu);
         cancel();
         reactor.reset();
         fire = nullptr;
@@ -60,6 +66,7 @@ public:
     // Fires once at `at`; re-arming with the same deadline keeps the timer.
     void arm(std::chrono::steady_clock::time_point at)
     {
+        std::lock_guard<std::recursive_mutex> lock(token->mu);
         if (!reactor || (armed && at == armed_at))
         {
             return;
@@ -79,11 +86,15 @@ public:
                 {
                     return;
                 }
+                // Declared before the lock: a last-reference owner is released
+                // after the lock, so its destructor can take it.
                 auto lease = t->lifetime.lock();
                 if (t->managed && !lease)
                 {
                     return;
                 }
+                // Held while firing; fire() re-arms on this thread.
+                std::lock_guard<std::recursive_mutex> lock(t->mu);
                 DeadlineTimer* self = t->owner;
                 if (self && self->armed && self->generation == armed_generation)
                 {
@@ -96,6 +107,7 @@ public:
     }
     void cancel()
     {
+        std::lock_guard<std::recursive_mutex> lock(token->mu);
         ++generation;
         if (armed && reactor)
         {
@@ -105,12 +117,16 @@ public:
     }
     bool is_armed() const
     {
+        std::lock_guard<std::recursive_mutex> lock(token->mu);
         return armed;
     }
 
 private:
     struct Token
     {
+        // Serializes the timer's state with a firing callback; shared so it
+        // outlives a timer destroyed from inside its own callback.
+        std::recursive_mutex mu;
         DeadlineTimer* owner = nullptr;
         std::weak_ptr<void> lifetime;
         bool managed = false;

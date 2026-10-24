@@ -39,6 +39,15 @@ public:
     {
         return RsBlockErasure::max_original();
     }
+    // Next SDU id; a replacement continues it so the peer sees one stream.
+    uint16_t sdu_seq() const
+    {
+        return codec.tx_sdu_seq();
+    }
+    void set_sdu_seq(uint16_t seq)
+    {
+        codec.set_tx_sdu_seq(seq);
+    }
 
     void push(const uint8_t* data, size_t len);
 

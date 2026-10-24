@@ -1,8 +1,5 @@
 #include "endpoint/Upstream.h"
 
-#include "utils/Log.h"
-
-#include <condition_variable>
 #include <stdexcept>
 
 namespace winject
@@ -56,6 +53,7 @@ void Upstream::bind_callbacks()
     }
     air.set_lifetime(weak);
     bound = true;  // destructor also cleans up a partially failed registration
+    is_active.store(true, std::memory_order_release);
     reactor->add_read_rdy(*host_rx_queue,
                            [weak]
                            {
@@ -83,50 +81,39 @@ void Upstream::teardown()
     {
         return;
     }
+    // A handler of this instance on the reactor thread holds the data-path
+    // mutex that stop() takes.
     if (reactor->is_reactor_thread())
     {
         throw std::logic_error("upstream teardown on cv reactor thread");
     }
-    reactor->remove_read_rdy(*host_rx_queue);
-    reactor->remove_read_rdy(*app_tx_queue);
-    host_rx_queue->set_reactor(nullptr);
-    app_tx_queue->set_reactor(nullptr);
-    // The fence runs after any in-flight queue handler or FEC timer. A stopped
-    // reactor never runs it, so the wait is bounded and the closure must not
-    // borrow this once the wait gives up.
-    struct Fence
+    // No reactor fence: a stopped reactor never runs one. A handler already
+    // dispatched sees !active() or a stopped air; stop() waits out the one
+    // inside air and cancels FEC timers. Leases keep the queues alive past
+    // the reactor's raw-pointer snapshot.
+    unbind_callbacks();
+    air.stop();
+}
+
+Upstream::TxSequences Upstream::tx_sequences() const
+{
+    if (bound)
     {
-        std::mutex mutex;
-        std::condition_variable cv;
-        DatagramAir* air = nullptr;
-        bool done = false;
-    };
-    auto fence = std::make_shared<Fence>();
-    fence->air = &air;
-    reactor->wake_up(
-        [fence]()
-        {
-            std::lock_guard<std::mutex> lock(fence->mutex);
-            if (fence->air)
-            {
-                fence->air->stop();
-            }
-            fence->done = true;
-            fence->cv.notify_one();
-        });
-    std::unique_lock<std::mutex> lock(fence->mutex);
-    if (!fence->cv.wait_for(lock, k_fence_timeout,
-                            [&fence]
-                            {
-                                return fence->done;
-                            }))
-    {
-        fence->air = nullptr;
-        lock.unlock();
-        LOG_WRN("upstream teardown: cv reactor fence timed out, stopping inline");
-        air.stop();  // DatagramAir is reactor-only; assumes it no longer runs
+        throw std::logic_error("upstream sequences read while bound");
     }
-    bound = false;
+    std::lock_guard<std::mutex> lock(stats_mu);
+    return {upstream_stats.air_tx, air.fec_tx_sdu_seq()};
+}
+
+void Upstream::resume_tx_sequences(const TxSequences& sequences)
+{
+    if (bound)
+    {
+        throw std::logic_error("upstream sequences resumed while bound");
+    }
+    std::lock_guard<std::mutex> lock(stats_mu);
+    upstream_stats.air_tx = sequences.air;
+    air.set_fec_tx_sdu_seq(sequences.fec_sdu);
 }
 
 Upstream::~Upstream()
@@ -141,6 +128,7 @@ void Upstream::unbind_callbacks()
     {
         return;
     }
+    is_active.store(false, std::memory_order_release);
     reactor->remove_read_rdy(*host_rx_queue);
     reactor->remove_read_rdy(*app_tx_queue);
     host_rx_queue->set_reactor(nullptr);
@@ -161,6 +149,10 @@ void Upstream::drain_app_tx_queue()
 {
     for (int n = 0; n < 32; ++n)
     {
+        if (!active())
+        {
+            return;  // leave input to a replacement consumer
+        }
         auto packet = app_tx_queue->pop();
         if (!packet)
         {
@@ -177,6 +169,10 @@ void Upstream::drain_radio_rx()
 {
     for (int n = 0; n < 32; ++n)
     {
+        if (!active())
+        {
+            return;
+        }
         auto packet = host_rx_queue->pop();
         if (!packet)
         {
@@ -221,8 +217,9 @@ Upstream::RxCounters Upstream::rx_counters() const
 }
 Upstream::TxCounters Upstream::tx_counters() const
 {
-    return {air.app_tx_packets(), air.app_tx_bytes(),
-            air.app_rx_oversize_pkt(), air.tx_queue_drops()};
+    return {air.app_tx_packets(), air.app_tx_bytes(), air.app_rx_oversize_pkt(),
+            air.tx_queue_drops(),
+            app_tx_queue_evictions_acc.load(std::memory_order_relaxed)};
 }
 void Upstream::get_fec(FecType* type, int* k, int* n) const
 {

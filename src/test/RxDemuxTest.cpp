@@ -131,3 +131,24 @@ TEST(RxDemuxTest, DeliversLcFecFlag)
     ASSERT_TRUE(fec);
     EXPECT_TRUE(LCHeader::read_is_fec(fec->u8()));
 }
+
+TEST(RxDemuxTest, CountsInboxEvictions)
+{
+    RadioUpstreamTable table;
+    auto queue = std::make_shared<winject::ReactiveLossyQueue>();
+    queue->set_capacity(1);
+    table.add(queue, nullptr, nullptr, 1, 1, 1);
+    RxDemux demux(table);
+    demux.set_domain(0x1111);
+
+    const uint8_t first[] = {0x01};
+    const uint8_t second[] = {0x02};
+    demux.on_mpdu(make_slot_mpdu(0x1111, 1, first, sizeof(first)));
+    demux.on_mpdu(make_slot_mpdu(0x1111, 1, second, sizeof(second), false, 1));
+
+    ASSERT_EQ(queue->size(), 1u);
+    EXPECT_EQ(table.entries()[0].rx_queue_evictions->load(), 1u);
+    auto kept = queue->pop();
+    ASSERT_TRUE(kept);
+    EXPECT_EQ(kept->u8()[LCHeader::k_len], 0x02);
+}

@@ -23,8 +23,9 @@ namespace winject
 // Routes datagrams between an app and the air, shared by UDP and queue
 // upstreams. TX: app datagram -> FecTx or raw -> slot stamp -> tx_queue.
 // RX: air SDU -> FecRx when its LC FEC flag is set, else raw -> deliver.
-// Runs on the CV reactor thread (data path, FEC timers, start/stop while it
-// is not running); counters may be read from any thread.
+// The data path and FEC timers run on the CV reactor thread. stop() may run
+// on any other thread: it waits out an in-flight data-path call or FEC timer,
+// and neither runs after it returns. Counters may be read from any thread.
 class DatagramAir
 {
 public:
@@ -43,6 +44,16 @@ public:
                const UpstreamConfig& cfg, uint8_t route_bus,
                UpstreamStats* tx_stats, std::mutex* tx_stats_mu);
     void stop();
+    // Next FEC SDU id. Read or set it only while no data path runs (before
+    // the reactor sees this instance, or after stop()).
+    uint16_t fec_tx_sdu_seq() const
+    {
+        return fec_tx.sdu_seq();
+    }
+    void set_fec_tx_sdu_seq(uint16_t seq)
+    {
+        fec_tx.set_sdu_seq(seq);
+    }
     void set_lifetime(std::weak_ptr<void> owner)
     {
         fec_tx.set_lifetime(owner);
@@ -50,6 +61,8 @@ public:
     }
 
     // UDP truncation is known before enqueue; account it without touching FEC.
+    // Oversize datagrams come from the app (the app_rx_* name follows the
+    // console and metric keys: received from the app socket).
     void reject_oversize_datagram(size_t len)
     {
         app_tx_bytes_acc.fetch_add(len, std::memory_order_relaxed);
@@ -117,8 +130,13 @@ public:
     }
 
 private:
+    void stop_locked();
     void push_tx(const uint8_t* data, size_t len, bool is_fec);
     void deliver(const uint8_t* data, size_t len);
+
+    // Held by every data-path entry and by start/stop. FEC timers do not take
+    // it; stop() fences them through DeadlineTimer::unbind.
+    std::mutex mu;
 
     std::shared_ptr<BoundedLossyQueue> tx_queue;
     uint8_t route_bus = 0;

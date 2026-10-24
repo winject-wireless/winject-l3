@@ -138,6 +138,7 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `rx_drop_domain` | Forwarded frames that are not winject frames of this domain |
 | `rx_drop_bus` | Slots whose LC bus matches no upstream `rx_bus` |
 | `upstream_<id>_air_rx_gap_loss` | Air RX sequence gaps on upstream `<id>` |
+| `upstream_<id>_air_rx_resyncs` | Air RX sequence jumped back more than 64 (peer restart); taken as the new reference, no loss counted |
 | `upstream_<id>_app_rx_oversize_pkt` | Application datagrams over 1445 bytes dropped on upstream `<id>` |
 | `upstream_<id>_app_delivery_attempts` | Decoded/raw datagrams handed to the application transport, including local failures |
 | `upstream_<id>_app_delivery_accepted` | Datagrams accepted locally by the socket or output queue; does not prove peer receipt |
@@ -146,6 +147,8 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `upstream_<id>_app_delivery_closed` | Delivery attempts that raced transport close |
 | `upstream_<id>_app_delivery_evictions` | Old output-queue entries evicted while accepting new entries |
 | `upstream_<id>_tx_queue_drops` | Oldest raw datagrams or encoded shards evicted from the bounded 1024-packet upstream TX queue |
+| `upstream_<id>_rx_queue_evictions` | Oldest air payloads evicted from the upstream's radio RX inbox by the demux |
+| `upstream_<id>_app_tx_queue_evictions` | Oldest app datagrams evicted from the app TX queue by a UDP receive (queue upstreams: counted by the app) |
 | `upstream_<id>_air_rx_fec_unexpected` | FEC shards (LC header F flag) received on upstream `<id>` while its FEC is disabled; still decoded. Non-zero means the two ends disagree on `fec.type` |
 
 Example (replies arrive on the same UDP socket you send from):

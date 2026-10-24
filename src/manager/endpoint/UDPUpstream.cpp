@@ -1,10 +1,8 @@
 #include "endpoint/UDPUpstream.h"
 
-#include "utils/Log.h"
 #include "utils/NetUtil.h"
 
 #include <errno.h>
-#include <future>
 #include <stdexcept>
 #include <sys/socket.h>
 namespace winject
@@ -15,18 +13,19 @@ UDPUpstream::UDPUpstream(std::shared_ptr<Reactor> reactor,
                          std::shared_ptr<BoundedLossyQueue> radio_tx_queue)
     : Upstream(std::move(reactor), config, std::move(radio_tx_queue)),
       io(std::move(io)),
-      socket(bfc::create_udp4())
+      socket(std::make_shared<bfc::socket>(bfc::create_udp4()))
 {
     if (!this->io || config.mode == UpstreamMode::queue || !config.reactor.empty() ||
         (config.endpoint.rx.empty() && config.endpoint.tx.empty()) ||
-        socket.fd() < 0)
+        socket->fd() < 0)
     {
         throw std::invalid_argument("invalid UDP upstream configuration");
     }
+    // rx_queue_capacity sizes both inbound queues: radio RX and app TX.
     app_tx_queue->set_capacity(config.rx_queue_capacity);
     upstream_config.mode = upstream_mode(config.endpoint);
     const int one = 1;
-    socket.set_sock_opt(SOL_SOCKET, SO_REUSEADDR, one);
+    socket->set_sock_opt(SOL_SOCKET, SO_REUSEADDR, one);
     sockaddr_in bind{};
     bind.sin_family = AF_INET;
     bind.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -43,7 +42,7 @@ UDPUpstream::UDPUpstream(std::shared_ptr<Reactor> reactor,
         }
         have_destination = true;
     }
-    if (socket.bind(bind) != 0)
+    if (socket->bind(bind) != 0)
     {
         throw std::runtime_error("UDP upstream bind failed");
     }
@@ -57,7 +56,7 @@ void UDPUpstream::bind_callbacks()
     Upstream::bind_callbacks();
     const auto weak = weak_from_this();
     registered = io->add_read_rdy(
-        socket.fd(),
+        socket->fd(),
         [weak]
         {
             if (auto self = weak.lock())
@@ -77,44 +76,30 @@ void UDPUpstream::teardown()
     {
         throw std::logic_error("upstream teardown on cv reactor thread");
     }
-    if (registered)
-    {
-        const int fd = socket.fd();
-        if (io->is_reactor_thread())
-        {
-            io->rem_read_rdy(fd);
-        }
-        else
-        {
-            // Shared: a stopped IO reactor runs done_cb late or never.
-            auto io_done = std::make_shared<std::promise<void>>();
-            auto removed = io_done->get_future();
-            io->rem_read_rdy(fd,
-                             [io_done]()
-                             {
-                                 io_done->set_value();
-                             });
-            if (removed.wait_for(k_fence_timeout) != std::future_status::ready)
-            {
-                LOG_WRN("udp upstream teardown: io reactor fence timed out");
-            }
-        }
-        registered = false;
-    }
+    unregister_socket();
     Upstream::teardown();
 }
 
 UDPUpstream::~UDPUpstream()
 {
-    if (registered)
+    unregister_socket();
+}
+
+void UDPUpstream::unregister_socket()
+{
+    if (!registered)
     {
-        io->rem_read_rdy(socket.fd());
-        registered = false;
+        return;
     }
+    registered = false;
+    // Inline on the IO thread; otherwise deferred, and the closure keeps the
+    // fd open until then. A handler dispatched before the removal finds the
+    // endpoint inactive or gone.
+    io->rem_read_rdy(socket->fd(), [keep = socket] {});
 }
 void UDPUpstream::on_socket_readable()
 {
-    for (int n = 0; n < 8; ++n)
+    for (int n = 0; n < 8 && active(); ++n)
     {
         bfc::sized_buffer buffer(2048);
         sockaddr_in from{};
@@ -123,7 +108,7 @@ void UDPUpstream::on_socket_readable()
         {
             std::lock_guard<std::mutex> lock(socket_mu);
             received =
-                socket.recv(buffer, MSG_DONTWAIT | MSG_TRUNC,
+                socket->recv(buffer, MSG_DONTWAIT | MSG_TRUNC,
                              reinterpret_cast<sockaddr*>(&from), &from_size);
             if (received > 0 && upstream_config.mode == UpstreamMode::udp_server)
             {
@@ -150,8 +135,10 @@ void UDPUpstream::on_socket_readable()
             }
             else
             {
-                app_tx_queue->push(
-                    bfc::shared_sized_buffer::copy_from(buffer.data(), size));
+                count_app_tx_queue_push(
+                    app_tx_queue->push(
+                        bfc::shared_sized_buffer::copy_from(buffer.data(), size)),
+                    app_tx_queue->capacity());
             }
         }
     }
@@ -168,7 +155,7 @@ void UDPUpstream::deliver_datagram(const uint8_t* data, size_t len)
     }
     const bfc::const_buffer_view view(reinterpret_cast<const std::byte*>(data),
                                       len);
-    const auto sent = this->socket.send(
+    const auto sent = socket->send(
         view, MSG_DONTWAIT, reinterpret_cast<const sockaddr*>(&destination),
         sizeof(destination));
     if (sent < 0 || static_cast<size_t>(sent) != len)

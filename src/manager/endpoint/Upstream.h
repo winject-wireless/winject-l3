@@ -6,8 +6,8 @@
 #include "endpoint/UpstreamQueues.h"
 #include "endpoint/UpstreamStats.h"
 
+#include <atomic>
 #include <bfc/cv_reactor.hpp>
-#include <chrono>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -15,7 +15,8 @@
 namespace winject
 {
 // After make_shared, call bind_callbacks before publishing the instance.
-// Hot-swap calls teardown() on the IO thread before dropping the last ref.
+// Hot-swap calls teardown() on the IO thread before dropping the last ref;
+// once it returns no handler or FEC timer of this instance runs.
 class Upstream : public std::enable_shared_from_this<Upstream>
 {
 public:
@@ -33,18 +34,44 @@ public:
 
     struct TxCounters
     {
+        // Datagrams taken from the app, including oversize drops.
         uint64_t packets = 0;
         uint64_t bytes = 0;
         uint64_t oversize_drops = 0;
+        // Oldest shard dropped from the radio TX queue.
         uint64_t queue_evictions = 0;
+        // Oldest datagram dropped from the app TX queue by a UDP receive. A
+        // queue upstream's app pushes that queue itself and counts its own.
+        uint64_t app_queue_evictions = 0;
+    };
+
+    // Next air and FEC SDU sequence numbers, carried into a replacement.
+    struct TxSequences
+    {
+        uint16_t air = 0;
+        uint16_t fec_sdu = 0;
     };
 
     virtual void bind_callbacks();
+    // Any thread but the CV reactor's; returns without waiting for the reactor.
     virtual void teardown();
     virtual ~Upstream();
+    // Only while unbound: after teardown(), and before bind_callbacks().
+    TxSequences tx_sequences() const;
+    void resume_tx_sequences(const TxSequences& sequences);
     std::shared_ptr<ReactiveLossyQueue> rx_queue() const
     {
         return host_rx_queue;
+    }
+    // Shared with the radio demux, which counts oldest packets it evicts from
+    // rx_queue().
+    std::shared_ptr<std::atomic<uint64_t>> rx_queue_eviction_counter() const
+    {
+        return rx_queue_evictions_acc;
+    }
+    uint64_t rx_queue_evictions() const
+    {
+        return rx_queue_evictions_acc->load(std::memory_order_relaxed);
     }
     const UpstreamConfig& config() const
     {
@@ -133,9 +160,18 @@ protected:
     // Executed only by the supplied CV reactor, including FEC timer delivery.
     virtual void deliver_datagram(const uint8_t* data, size_t len) = 0;
     void unbind_callbacks();
-    // Caller-side bound on teardown fence waits; a reactor that is not running
-    // never runs them. A running reactor reaches the fence within one pass.
-    static constexpr std::chrono::milliseconds k_fence_timeout{100};
+    // False once teardown starts: a handler already dispatched stops early.
+    bool active() const
+    {
+        return is_active.load(std::memory_order_acquire);
+    }
+    void count_app_tx_queue_push(size_t before, size_t capacity)
+    {
+        if (capacity != 0 && before >= capacity)
+        {
+            app_tx_queue_evictions_acc.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     void submit_datagram(const uint8_t* data, size_t len);
     void reject_oversize_datagram(size_t len)
     {
@@ -152,9 +188,13 @@ private:
     void drain_app_tx_queue();
     std::shared_ptr<ReactiveLossyQueue> host_rx_queue;
     std::shared_ptr<BoundedLossyQueue> radio_tx_queue;
+    std::shared_ptr<std::atomic<uint64_t>> rx_queue_evictions_acc =
+        std::make_shared<std::atomic<uint64_t>>(0);
+    std::atomic<uint64_t> app_tx_queue_evictions_acc{0};
     DatagramAir air;
     mutable std::mutex stats_mu;
     UpstreamStats upstream_stats;
+    std::atomic<bool> is_active{false};
     bool bound = false;
 };
 }  // namespace winject

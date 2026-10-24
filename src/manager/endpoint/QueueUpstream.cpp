@@ -1,13 +1,14 @@
 #include "endpoint/QueueUpstream.h"
 
 #include <stdexcept>
-#include <unordered_map>
+#include <unordered_set>
 namespace winject
 {
 namespace
 {
+// App TX queues that have a consumer; one consumer per queue.
 std::mutex claims_mutex;
-std::unordered_map<ReactiveLossyQueue*, std::weak_ptr<void>> claims;
+std::unordered_set<ReactiveLossyQueue*> claims;
 std::shared_ptr<ReactiveLossyQueue> validate_app_queues(
     const std::shared_ptr<ReactiveLossyQueue>& app_tx_queue,
     const std::shared_ptr<ReactiveLossyQueue>& app_rx_queue)
@@ -34,19 +35,31 @@ QueueUpstream::QueueUpstream(std::shared_ptr<Reactor> reactor,
     {
         throw std::invalid_argument("queue upstream requires queue mode");
     }
-    claim = std::make_shared<int>(0);
     std::lock_guard<std::mutex> lock(claims_mutex);
-    if (!claims[app_tx_queue.get()].expired())
+    if (!claims.insert(this->app_tx_queue.get()).second)
     {
         throw std::invalid_argument("upstream queue already has a consumer");
     }
-    claims[app_tx_queue.get()] = claim;
+    claimed = true;
 }
 QueueUpstream::~QueueUpstream()
 {
     unbind_callbacks();
+    release_claim();
+}
+void QueueUpstream::teardown()
+{
+    Upstream::teardown();
+    release_claim();
+}
+void QueueUpstream::release_claim()
+{
     std::lock_guard<std::mutex> lock(claims_mutex);
-    claims.erase(app_tx_queue.get());
+    if (claimed)
+    {
+        claims.erase(app_tx_queue.get());
+        claimed = false;
+    }
 }
 void QueueUpstream::deliver_datagram(const uint8_t* data, size_t len)
 {

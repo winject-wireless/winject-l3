@@ -3,11 +3,14 @@
 #include "endpoint/UDPUpstream.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
+#include "radio/RadioUpstreamTable.h"
 #include "radio/RxDemux.h"
 #include "radio/TxMux.h"
 #include "utils/NetUtil.h"
 
+#include <atomic>
 #include <bfc/socket.hpp>
+#include <chrono>
 #include <future>
 #include <gtest/gtest.h>
 #include <poll.h>
@@ -177,6 +180,68 @@ TEST_F(UpstreamTest, RadioSequenceFilteringRunsInUpstream)
     EXPECT_EQ(up->collect_air_seq_loss_delta(), 2u);
     EXPECT_EQ(up->collect_air_seq_loss_delta(), 0u);
 }
+// A peer restart restarts its air seq. Landing well behind the last seq
+// resyncs without counting loss, and gap accounting resumes from there.
+TEST_F(UpstreamTest, AirRestartLandingBehindResyncsWithoutLoss)
+{
+    create_queue();
+    rx(packet({1}), false, 1000);
+    rx(packet({2}), false, 1001);
+    rx(packet({3}), false, 0);  // restarted sender
+    rx(packet({4}), false, 1);
+    rx(packet({5}), false, 3);  // seq 2 lost
+    pump_cv();
+    EXPECT_EQ(app_rx_queue->size(), 5u);
+    EXPECT_EQ(up->stats().air_rx_resyncs, 1u);
+    EXPECT_EQ(up->stats().air_rx_gap_loss, 1u);
+}
+// Late packets inside the reorder window are delivered but keep the reference.
+TEST_F(UpstreamTest, AirLateWithinReorderWindowKeepsReference)
+{
+    create_queue();
+    rx(packet({1}), false, 100);
+    rx(packet({2}), false, 101);
+    rx(packet({3}), false, uint16_t(101 - k_air_rx_reorder_window));
+    rx(packet({4}), false, 102);
+    pump_cv();
+    EXPECT_EQ(app_rx_queue->size(), 4u);
+    EXPECT_EQ(up->stats().air_rx_resyncs, 0u);
+    EXPECT_EQ(up->stats().air_rx_gap_loss, 0u);
+}
+TEST_F(UpstreamTest, AirSeqWrapIsNotARestart)
+{
+    create_queue();
+    rx(packet({1}), false, 32766);
+    rx(packet({2}), false, 32767);
+    rx(packet({3}), false, 0);
+    rx(packet({4}), false, 1);
+    pump_cv();
+    EXPECT_EQ(app_rx_queue->size(), 4u);
+    EXPECT_EQ(up->stats().air_rx_resyncs, 0u);
+    EXPECT_EQ(up->stats().air_rx_gap_loss, 0u);
+}
+TEST_F(UpstreamTest, AirRestartBehindAcrossWrapResyncs)
+{
+    create_queue();
+    rx(packet({1}), false, 10);
+    rx(packet({2}), false, 32000);  // 778 behind across the wrap
+    rx(packet({3}), false, 32001);
+    pump_cv();
+    EXPECT_EQ(app_rx_queue->size(), 3u);
+    EXPECT_EQ(up->stats().air_rx_resyncs, 1u);
+    EXPECT_EQ(up->stats().air_rx_gap_loss, 0u);
+}
+// A restart that lands ahead is indistinguishable from an outage: loss.
+TEST_F(UpstreamTest, AirRestartLandingAheadCountsAsLoss)
+{
+    create_queue();
+    rx(packet({1}), false, 10);
+    rx(packet({2}), false, 5000);
+    pump_cv();
+    EXPECT_EQ(app_rx_queue->size(), 2u);
+    EXPECT_EQ(up->stats().air_rx_resyncs, 0u);
+    EXPECT_EQ(up->stats().air_rx_gap_loss, 4989u);
+}
 TEST_F(UpstreamTest, ShortLcPacketIsRejected)
 {
     create_queue();
@@ -310,9 +375,114 @@ TEST_F(UpstreamTest, TeardownReleasesInputClaim)
     cv_worker.join();
     EXPECT_EQ(tx->size(), 3u);
 }
-// teardown() waits out a handler that is mid-pass and cancels an armed FEC
-// timer; nothing of the old upstream runs after it returns.
-TEST_F(UpstreamTest, TeardownWaitsForInFlightPassAndCancelsFecTimer)
+// Runs the reactor on a worker thread for one test.
+struct CvWorker
+{
+    std::shared_ptr<Upstream::Reactor> cv;
+    std::thread thread;
+    explicit CvWorker(std::shared_ptr<Upstream::Reactor> reactor)
+        : cv(std::move(reactor)),
+          thread(
+              [cv = cv]
+              {
+                  cv->run();
+              })
+    {
+    }
+    ~CvWorker()
+    {
+        cv->stop();
+        thread.join();
+    }
+};
+// Blocks the first radio TX push until released.
+struct PushGate
+{
+    std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released = release.get_future().share();
+    std::atomic<bool> armed{true};
+    void on_push()
+    {
+        if (armed.exchange(false))
+        {
+            entered.set_value();
+            released.wait();
+        }
+    }
+};
+// Longer than any fixed fence timeout teardown could have used.
+constexpr auto k_held = std::chrono::milliseconds(200);
+
+// teardown() waits out this upstream's own data-path call however long it
+// runs, and none of its handlers runs afterwards.
+TEST_F(UpstreamTest, TeardownWaitsForInFlightDataPath)
+{
+    PushGate gate;
+    tx = std::make_shared<BoundedLossyQueue>(1024,
+                                             [g = &gate]
+                                             {
+                                                 g->on_push();
+                                             });
+    create_queue();
+    CvWorker worker(cv);
+    app_tx_queue->push(packet({1}));
+    ASSERT_EQ(gate.entered.get_future().wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    auto torn_down = std::async(std::launch::async,
+                                [this]
+                                {
+                                    up->teardown();
+                                });
+    EXPECT_EQ(torn_down.wait_for(k_held), std::future_status::timeout);
+    gate.release.set_value();
+    ASSERT_EQ(torn_down.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    torn_down.get();
+    EXPECT_EQ(tx->size(), 1u);
+    app_tx_queue->push(packet({2}));
+    cv->wake_up();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT_EQ(tx->size(), 1u);
+    EXPECT_TRUE(app_tx_queue->has_data());  // left for a replacement
+}
+// teardown() waits out a firing FEC timer and none fires afterwards.
+TEST_F(UpstreamTest, TeardownWaitsForFiringFecTimer)
+{
+    PushGate gate;
+    tx = std::make_shared<BoundedLossyQueue>(1024,
+                                             [g = &gate]
+                                             {
+                                                 g->on_push();
+                                             });
+    cfg.fec_type = FecType::RsBlockErasure;
+    cfg.fec_k = 3;
+    cfg.fec_n = 4;
+    cfg.fec_timeout_ms = 5;
+    create_queue();
+    CvWorker worker(cv);
+    app_tx_queue->push(packet({1}));  // partial block; the timer flushes it
+    ASSERT_EQ(gate.entered.get_future().wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    auto torn_down = std::async(std::launch::async,
+                                [this]
+                                {
+                                    up->teardown();
+                                });
+    EXPECT_EQ(torn_down.wait_for(k_held), std::future_status::timeout);
+    gate.release.set_value();
+    ASSERT_EQ(torn_down.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    torn_down.get();
+    EXPECT_EQ(tx->size(), 2u);  // the flush that was firing completes
+    app_tx_queue->push(packet({2}));
+    cv->wake_up();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(tx->size(), 2u);
+}
+// A reactor stuck in another handler does not hold up teardown, and nothing
+// of the old upstream runs once it resumes.
+TEST_F(UpstreamTest, TeardownDoesNotWaitForBusyReactor)
 {
     cfg.fec_type = FecType::RsBlockErasure;
     cfg.fec_k = 3;
@@ -331,21 +501,7 @@ TEST_F(UpstreamTest, TeardownWaitsForInFlightPassAndCancelsFecTimer)
                          entered.set_value();
                          released.wait();
                      });
-    std::thread cv_worker(
-        [this]()
-        {
-            cv->run();
-        });
-    struct Join
-    {
-        std::shared_ptr<Upstream::Reactor> cv;
-        std::thread& worker;
-        ~Join()
-        {
-            cv->stop();
-            worker.join();
-        }
-    } join{cv, cv_worker};
+    CvWorker worker(cv);
     auto wait_for = [](auto pred)
     {
         auto deadline =
@@ -365,18 +521,16 @@ TEST_F(UpstreamTest, TeardownWaitsForInFlightPassAndCancelsFecTimer)
     cv->wake_up();
     ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(2)),
               std::future_status::ready);
-
     auto torn_down = std::async(std::launch::async,
                                 [this]
                                 {
                                     up->teardown();
                                 });
-    EXPECT_EQ(torn_down.wait_for(std::chrono::milliseconds(20)),
-              std::future_status::timeout);
-    release.set_value();
-    ASSERT_EQ(torn_down.wait_for(std::chrono::seconds(2)),
+    EXPECT_EQ(torn_down.wait_for(std::chrono::seconds(2)),
               std::future_status::ready);
     torn_down.get();
+    up.reset();
+    release.set_value();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     EXPECT_FALSE(tx->has_data());  // FEC timeout never flushed the block
@@ -387,9 +541,9 @@ TEST_F(UpstreamTest, TeardownWaitsForInFlightPassAndCancelsFecTimer)
     cv->remove_read_rdy(*blocker);
 }
 
-// A reactor that is not running never runs the fence; teardown gives up after
-// the timeout, and the abandoned fence is harmless when the reactor runs later.
-TEST_F(UpstreamTest, TeardownWithStoppedReactorTimesOut)
+// A reactor that is not running never blocks teardown; when it runs later,
+// nothing of the old upstream runs.
+TEST_F(UpstreamTest, TeardownWithStoppedReactorReturnsAtOnce)
 {
     cfg.fec_type = FecType::RsBlockErasure;
     cfg.fec_k = 3;
@@ -398,12 +552,57 @@ TEST_F(UpstreamTest, TeardownWithStoppedReactorTimesOut)
     create_queue();
     app_tx_queue->push(packet({1}));
     pump_cv(1);  // arms the FEC timer, then the reactor stops
+    const auto begin = std::chrono::steady_clock::now();
     up->teardown();
+    EXPECT_LT(std::chrono::steady_clock::now() - begin,
+              std::chrono::milliseconds(50));
     up.reset();
     app_tx_queue->push(packet({2}));
-    pump_cv(20);  // runs the abandoned fence; the FEC timer was cancelled
+    pump_cv(20);  // the FEC timer was cancelled
     EXPECT_FALSE(tx->has_data());
     EXPECT_TRUE(app_tx_queue->has_data());
+}
+
+// A replacement continues the air and FEC SDU sequences, so the peer's
+// sequencers see one stream across a hot-swap.
+TEST_F(UpstreamTest, ReplacementContinuesTxSequences)
+{
+    cfg.fec_type = FecType::RsBlockErasure;
+    cfg.fec_k = 2;
+    cfg.fec_n = 3;
+    cfg.fec_timeout_ms = 0;
+    auto sdu_base = [](const Packet& p)
+    {
+        const uint8_t* shard = p.u8() + LCHeader::k_len;
+        return uint16_t((shard[0] << 8) | shard[1]);
+    };
+    create_queue();
+    app_tx_queue->push(packet({1}));
+    app_tx_queue->push(packet({2}));
+    pump_cv();
+    ASSERT_EQ(tx->size(), 3u);
+    const uint16_t first_base = sdu_base(*tx->pop());
+    while (tx->pop())
+    {
+    }
+    EXPECT_THROW(up->tx_sequences(), std::logic_error);
+    up->teardown();
+    const auto sequences = up->tx_sequences();
+    EXPECT_EQ(sequences.air, 3u);
+    up.reset();
+
+    up = std::make_shared<QueueUpstream>(cv, cfg, tx, app_tx_queue,
+                                         app_rx_queue);
+    up->resume_tx_sequences(sequences);
+    up->bind_callbacks();
+    EXPECT_THROW(up->resume_tx_sequences(sequences), std::logic_error);
+    app_tx_queue->push(packet({3}));
+    app_tx_queue->push(packet({4}));
+    pump_cv();
+    ASSERT_EQ(tx->size(), 3u);
+    const auto next = *tx->pop();
+    EXPECT_EQ(LCHeader::read_seq(next.u8()), 3u);
+    EXPECT_EQ(sdu_base(next), uint16_t(first_base + 2));
 }
 
 TEST_F(UpstreamTest, ReconstructionReleasesInputClaim)
@@ -577,6 +776,51 @@ TEST_F(UpstreamTest, UdpTeardownOnIoThreadKeepsReplacementArmed)
     cv_worker.join();
     ASSERT_EQ(tx->size(), 1u);
     EXPECT_EQ(bytes(*tx->pop()), bytes(lc_packet(packet({5}), false, 0)));
+}
+// Off the IO thread the old socket's epoll removal is deferred. The old fd
+// stays open until it runs, so the replacement never gets the same fd number
+// and the deferred removal cannot unregister it.
+TEST_F(UpstreamTest, UdpTeardownOffIoThreadKeepsReplacementArmed)
+{
+    uint16_t port = test::reserve_free_udp_port();
+    ASSERT_NE(port, 0);
+    const auto rx_addr = "127.0.0.1:" + std::to_string(port);
+    create_udp(rx_addr);
+    up->teardown();  // IO reactor not running: removal is deferred
+    up.reset();
+    create_udp(rx_addr);
+    pump_io();  // runs the old removal, then closes the old socket
+    bfc::socket peer(bfc::create_udp4());
+    send_to(peer, port, packet({5}));
+    pump_io();
+    pump_cv();
+    ASSERT_EQ(tx->size(), 1u);
+    EXPECT_EQ(bytes(*tx->pop()), bytes(lc_packet(packet({5}), false, 0)));
+}
+TEST_F(UpstreamTest, UdpInputEvictionIsCounted)
+{
+    cfg.rx_queue_capacity = 1;
+    uint16_t port = test::reserve_free_udp_port();
+    ASSERT_NE(port, 0);
+    create_udp("127.0.0.1:" + std::to_string(port));
+    bfc::socket peer(bfc::create_udp4());
+    send_to(peer, port, packet({1}));
+    send_to(peer, port, packet({2}));
+    pump_io();
+    EXPECT_EQ(up->tx_counters().app_queue_evictions, 1u);
+    pump_cv();
+    ASSERT_EQ(tx->size(), 1u);
+    EXPECT_EQ(bytes(*tx->pop()), bytes(lc_packet(packet({2}), false, 0)));
+}
+TEST_F(UpstreamTest, RadioTableSharesInboxEvictionCounter)
+{
+    create_queue();
+    RadioUpstreamTable table;
+    table.add(up, tx, nullptr, 7, 7, 1);
+    EXPECT_EQ(table.entries()[0].rx_queue_evictions,
+              up->rx_queue_eviction_counter());
+    table.entries()[0].rx_queue_evictions->fetch_add(1);
+    EXPECT_EQ(up->rx_queue_evictions(), 1u);
 }
 TEST_F(UpstreamTest, UdpSendFailureIsAccounted)
 {

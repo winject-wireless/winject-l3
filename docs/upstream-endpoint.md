@@ -18,21 +18,34 @@ There are no public open, close, stop-input, drain or FEC reconfiguration method
 Reconfigure by replacing the instance. Management FEC updates do this; invalid
 configuration is rejected before replacement. An instance replacement resets
 learned UDP peers, receive sequence state, codec state and per-instance counters.
+The TX air sequence and FEC SDU sequence carry over (`tx_sequences()` after
+`teardown()`, `resume_tx_sequences()` before `bind_callbacks()`), so the peer's
+duplicate filter and FEC sequencer see one unbroken stream.
 Scheduler-budget updates alone do not require replacement.
 
 ### Teardown and destruction
 
 Call `teardown()` from the **IO reactor thread** (manager console path) before
-dropping the last `shared_ptr` on hot-swap (`App::replace_upstream`). It
-synchronously deregisters CV queue handlers, then runs `DatagramAir::stop()` on
-the CV reactor thread inside a `wake_up` fence so in-flight handlers and FEC
-timers cannot overlap the replacement. `UDPUpstream::teardown()` removes the
-application UDP socket from the IO reactor first (with a `done_cb` wait when
-called off-thread), then calls the base implementation.
+dropping the last `shared_ptr` on hot-swap (`App::replace_upstream`). It never
+waits for the CV reactor, which may be stopped or busy in another handler:
 
-Do not call `teardown()` on the CV reactor thread (it blocks waiting for that
-thread). When the CV reactor is already stopped (`App` shutdown), rely on the
-destructor fallback only: non-blocking `unbind_callbacks()` plus `air.stop()`.
+- It marks the instance inactive and synchronously deregisters the CV queue
+  handlers. A handler already dispatched sees `!active()` and returns without
+  popping, so input stays for the replacement. A lease `wake_up` keeps both
+  queues alive past the reactor's raw-pointer snapshot.
+- `DatagramAir::stop()` runs on the calling thread. It takes the data-path
+  mutex, so it waits out an in-flight data-path call, and `DeadlineTimer::unbind`
+  waits out a firing FEC timer. Neither runs after `teardown()` returns.
+
+`UDPUpstream::teardown()` first removes the application socket from the IO
+reactor. Off the IO thread that removal is deferred; the `done_cb` holds the
+shared socket, so its fd stays open until the removal ran and a replacement
+cannot be given the same fd number. `QueueUpstream::teardown()` also releases
+the app TX queue claim.
+
+Do not call `teardown()` on the CV reactor thread: a handler of this instance
+holds the data-path mutex there. The destructor does the same work
+(`unbind_callbacks()` plus `air.stop()`) for paths that never call `teardown()`.
 
 See [reactor-teardown.md](reactor-teardown.md) for BFC ordering rules.
 
@@ -97,7 +110,11 @@ is dropped and counted. No output backlog waits for a peer.
 `rx_counters()` tracks application delivery attempts, accepted packets/bytes, missing-peer
 drops, send errors and output-queue evictions. Local acceptance does not prove
 peer consumption. `tx_counters()` tracks application input packets/bytes,
-oversize rejection and radio TX queue evictions separately. FEC TX counters
+oversize rejection, radio TX queue evictions and (UDP) app TX queue evictions
+separately; a queue upstream's app pushes the app TX queue itself and must count
+its own evictions. Radio RX inbox evictions are counted by the radio demux
+(`rx_queue_evictions()`). Metrics: `upstream_<id>_tx_queue_drops`,
+`_rx_queue_evictions`, `_app_tx_queue_evictions`, `_app_delivery_evictions`. FEC TX counters
 count shards submitted to the supplied TX
 queue, including shards that can later be evicted. TX pending statistics include
 partial encoder input and queued output. Overflow retains the newest packets.

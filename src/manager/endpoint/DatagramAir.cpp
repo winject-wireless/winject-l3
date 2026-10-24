@@ -18,7 +18,8 @@ bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
                         const UpstreamConfig& cfg, uint8_t route_bus,
                         UpstreamStats* tx_stats, std::mutex* tx_stats_mu)
 {
-    stop();
+    std::lock_guard<std::mutex> lock(mu);
+    stop_locked();
     if (!reactor || !tx_queue || tx_queue->capacity() == 0 || route_bus == 0 ||
         tx_stats == nullptr || tx_stats_mu == nullptr ||
         cfg.fec_timeout_ms < 0 ||
@@ -50,6 +51,12 @@ bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
 }
 
 void DatagramAir::stop()
+{
+    std::lock_guard<std::mutex> lock(mu);
+    stop_locked();
+}
+
+void DatagramAir::stop_locked()
 {
     fec_tx.stop();
     fec_rx.stop();
@@ -105,6 +112,7 @@ void DatagramAir::deliver(const uint8_t* data, size_t len)
 
 void DatagramAir::accept_app_datagram(const uint8_t* data, size_t len)
 {
+    std::lock_guard<std::mutex> lock(mu);
     if (data == nullptr || len == 0 || !tx_queue)
     {
         return;
@@ -130,6 +138,7 @@ void DatagramAir::accept_app_datagram(const uint8_t* data, size_t len)
 
 void DatagramAir::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
 {
+    std::lock_guard<std::mutex> lock(mu);
     if (pkt.empty() || pkt.size() > k_stream_payload_max || !tx_queue)
     {
         return;

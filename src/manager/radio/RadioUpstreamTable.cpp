@@ -23,8 +23,9 @@ void RadioUpstreamTable::add(const std::shared_ptr<Upstream>& up,
                              uint8_t bus_tx, uint8_t bus_rx, size_t budget)
 {
     std::lock_guard<std::mutex> lock(mu);
-    upstream_entries.push_back(RadioUpstreamEntry{up, up->rx_queue(), tx_queue, radio,
-                                          bus_tx, bus_rx, budget});
+    upstream_entries.push_back(RadioUpstreamEntry{
+        up, up->rx_queue(), up->rx_queue_eviction_counter(), tx_queue, radio,
+        bus_tx, bus_rx, budget});
 }
 
 void RadioUpstreamTable::add(std::shared_ptr<ReactiveLossyQueue> rx_queue,
@@ -33,8 +34,10 @@ void RadioUpstreamTable::add(std::shared_ptr<ReactiveLossyQueue> rx_queue,
                              uint8_t bus_tx, uint8_t bus_rx, size_t budget)
 {
     std::lock_guard<std::mutex> lock(mu);
-    upstream_entries.push_back(RadioUpstreamEntry{{},
+    upstream_entries.push_back(RadioUpstreamEntry{
+                                          {},
                                           std::move(rx_queue),
+                                          std::make_shared<std::atomic<uint64_t>>(0),
                                           std::move(tx_queue),
                                           radio,
                                           bus_tx,

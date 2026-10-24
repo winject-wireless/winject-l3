@@ -59,9 +59,11 @@ private:
     void begin_shutdown();
     void refresh_host_metrics();
 
+    // resume continues a predecessor's TX sequences (hot-swap).
     std::shared_ptr<Upstream> construct_upstream(
         const UpstreamConfig& config,
-        const std::shared_ptr<BoundedLossyQueue>& tx_queue);
+        const std::shared_ptr<BoundedLossyQueue>& tx_queue,
+        const Upstream::TxSequences* resume = nullptr);
     bool replace_upstream(size_t index, const UpstreamConfig& config,
                           std::string* error);
     bool set_upstream_scheduler_budget(size_t index, size_t budget,

@@ -3,6 +3,7 @@
 
 #include "endpoint/UpstreamQueues.h"
 
+#include <atomic>
 #include <memory>
 #include <stddef.h>
 #include <stdint.h>
@@ -19,6 +20,8 @@ struct RadioUpstreamEntry
     std::weak_ptr<Upstream>
         up;  // statistics only; registration does not own endpoint
     std::shared_ptr<ReactiveLossyQueue> rx_queue;
+    // Oldest packets the demux evicted from rx_queue.
+    std::shared_ptr<std::atomic<uint64_t>> rx_queue_evictions;
     std::shared_ptr<BoundedLossyQueue> tx_queue;
     std::shared_ptr<WifiUdp> radio;
     uint8_t bus_tx = 0;

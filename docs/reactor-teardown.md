@@ -100,7 +100,7 @@ Most manager code runs on one reactor thread ([`IOReactor`](../src/manager/utils
 
 | Component | Register | Teardown today |
 |-----------|----------|----------------|
-| [`UDPUpstream`](../src/manager/endpoint/UDPUpstream.cpp) | `add_read_rdy` on app UDP socket | `teardown()` / `rem_read_rdy` then close socket |
+| [`UDPUpstream`](../src/manager/endpoint/UDPUpstream.cpp) | `add_read_rdy` on app UDP socket | `teardown()` / `rem_read_rdy(fd, done_cb)`; `done_cb` holds the socket, so it closes after removal |
 | [`WifiUdp`](../src/manager/radio/WifiUdp.cpp) | d-plane forward socket | `rem_read_rdy` then close in `close()` |
 | [`ConsoleService`](../src/manager/console/ConsoleService.cpp) | manager m-plane socket | `rem_read_rdy` on shutdown |
 | [`App`](../src/manager/App.cpp) | console client fd | `rem_read_rdy` when dropping console |
@@ -124,18 +124,21 @@ does for d-plane address changes.
 
 When queue upstreams are enabled, `App` runs a dedicated `cv_reactor` thread for
 UDP/CV processing while queue upstreams may use a host-registered CV reactor from
-BFC's registry. `Upstream::teardown()` follows the sync remove + `wake_up` fence
-pattern above and calls `DatagramAir::stop()` inside the fence, on the CV reactor
-thread, so no FEC timer can be running or re-armed. The destructor keeps the
-non-blocking lease `wake_up` plus `air.stop()` for paths that never call
-`teardown()`. Every teardown fence wait (CV fence, and the IO `done_cb` in
-`UDPUpstream::teardown()`) is bounded by `Upstream::k_fence_timeout`, since a
-reactor that is not running never runs it; on timeout the CV path stops `air`
-inline and the abandoned closure no longer touches the endpoint.
+BFC's registry. That reactor may be stopped or stuck in a long app handler, so
+`Upstream::teardown()` never waits for a reactor fence. It uses the sync remove
+plus lease `wake_up` above for queue storage. It then calls `DatagramAir::stop()`
+on the calling thread, which is safe from any thread except the CV reactor's:
+a data-path mutex waits out an in-flight call, and `DeadlineTimer::unbind`
+waits out a firing FEC timer (its token mutex is held while firing). A handler
+already dispatched for a removed queue sees `!active()` and returns. The
+destructor does the same for paths that never call `teardown()`.
+
+`reactive_circular_lossy_queue::notify_callback` copies the callback and runs
+it without `cb_mtx`, so a sync `remove_read_rdy` does **not** wait for a running
+handler; the data-path mutex is what fences it.
 
 Instance replacement (`replace_upstream`) calls `Upstream::teardown()` on the IO
-thread before `reset()`; queue claims are released in `~QueueUpstream` when the
-last `shared_ptr` is dropped.
+thread before `reset()`; `QueueUpstream::teardown()` releases the queue claim.
 
 ## Rules for new code
 
@@ -150,15 +153,15 @@ last `shared_ptr` is dropped.
    from a foreign thread or a `wake_up` callback.
 4. Never block shutdown on a `wake_up` `done` if the reactor may already be
    stopped.
-5. `wake_up` alone is not a timer fence. Cancel timers inside the fence on the
-   reactor thread (as `Upstream::teardown()` does with `air.stop()`), so none is
-   running and no handler can re-arm one.
+5. `wake_up` alone is not a timer fence. Cancel timers on the reactor thread,
+   or through a cancel that waits out a firing callback (`DeadlineTimer`), so
+   none is running and no handler can re-arm one.
 
 ## Known issues
 
-- **UDP upstream replace:** if the socket is closed before deferred epoll `rem`
-  completes, fd reuse can drop the new registration; `UDPUpstream::teardown()`
-  waits on IO `done_cb` when off-thread. Legacy path: `close` calls `rem_read_rdy` then closes
+- **UDP upstream replace:** fixed: `UDPUpstream` closes its socket from the
+  removal `done_cb`, so the fd number is not reused before the deferred `rem`.
+  Legacy path: `close` calls `rem_read_rdy` then closes
   the socket immediately. If `close` runs off the I/O reactor thread, epoll
   removal is deferred while the fd is already closed; a new endpoint can obtain
   the same fd number and lose its registration when the deferred `rem` runs.

@@ -35,6 +35,14 @@ void note_air_rx_seq(UpstreamStats* stats, uint16_t seq)
     {
         stats->air_rx_gap_loss += ahead;
         stats->air_rx = seq;
+        return;
+    }
+    const uint16_t behind = static_cast<uint16_t>((stats->air_rx - seq) &
+                                                  UpstreamAirHeader::k_seq_mask);
+    if (behind > k_air_rx_reorder_window)
+    {
+        ++stats->air_rx_resyncs;
+        stats->air_rx = seq;
     }
 }
 

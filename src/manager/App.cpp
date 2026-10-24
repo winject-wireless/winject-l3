@@ -16,6 +16,7 @@
 #include <cinttypes>
 #include <errno.h>
 #include <future>
+#include <optional>
 #include <stdexcept>
 #include <string.h>
 #include <sys/socket.h>
@@ -146,12 +147,17 @@ bool App::setup_upstreams()
 }
 
 std::shared_ptr<Upstream> App::construct_upstream(
-    const UpstreamConfig& uc, const std::shared_ptr<BoundedLossyQueue>& tx_queue)
+    const UpstreamConfig& uc, const std::shared_ptr<BoundedLossyQueue>& tx_queue,
+    const Upstream::TxSequences* resume)
 {
     if (uc.mode != UpstreamMode::queue)
     {
         auto up = std::make_shared<UDPUpstream>(upstream_reactor, reactor, uc,
                                                 tx_queue);
+        if (resume)
+        {
+            up->resume_tx_sequences(*resume);
+        }
         up->bind_callbacks();
         return up;
     }
@@ -162,6 +168,10 @@ std::shared_ptr<Upstream> App::construct_upstream(
     auto app_rx_queue = Registry::get_instance().get(uc.endpoint.tx);
     auto up = std::make_shared<QueueUpstream>(cv, uc, tx_queue, app_tx_queue,
                                               app_rx_queue);
+    if (resume)
+    {
+        up->resume_tx_sequences(*resume);
+    }
     up->bind_callbacks();
     return up;
 }
@@ -174,20 +184,25 @@ bool App::replace_upstream(size_t index, const UpstreamConfig& uc,
         std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
         radio_upstream_table.entries()[index] = {};
     }
+    // The peer's sequencers see one unbroken stream across the swap.
+    std::optional<Upstream::TxSequences> sequences;
     if (upstreams[index])
     {
         upstreams[index]->teardown();
+        sequences = upstreams[index]->tx_sequences();
     }
     upstreams[index].reset();
     auto install = [&](const UpstreamConfig& config)
     {
         auto queue = tx_mux.make_tx_queue();
-        auto up = construct_upstream(config, queue);
+        auto up = construct_upstream(config, queue,
+                                     sequences ? &*sequences : nullptr);
         {
             std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
             radio_upstream_table.entries()[index] =
                 RadioUpstreamEntry{up,
                                    up->rx_queue(),
+                                   up->rx_queue_eviction_counter(),
                                    queue,
                                    radio,
                                    config.bus_tx,
@@ -671,8 +686,13 @@ void App::refresh_host_metrics()
         }
         const std::string gap_key =
             "upstream_" + std::to_string(view.id) + "_air_rx_gap_loss";
+        const UpstreamStats air = up->stats();
         metrics_registry.get_metrics<MetricU64>(gap_key)->store(
-            up->stats().air_rx_gap_loss);
+            air.air_rx_gap_loss);
+        metrics_registry
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_air_rx_resyncs")
+            ->store(air.air_rx_resyncs);
         const std::string oversize_key =
             "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
         metrics_registry.get_metrics<MetricU64>(oversize_key)
@@ -681,6 +701,14 @@ void App::refresh_host_metrics()
             .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
                                     "_tx_queue_drops")
             ->store(up->tx_queue_drops());
+        metrics_registry
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_rx_queue_evictions")
+            ->store(up->rx_queue_evictions());
+        metrics_registry
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_app_tx_queue_evictions")
+            ->store(up->tx_counters().app_queue_evictions);
         const auto transport = up->rx_counters();
         const std::string transport_prefix =
             "upstream_" + std::to_string(view.id) + "_";

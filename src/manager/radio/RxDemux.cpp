@@ -34,6 +34,7 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
     struct Delivery
     {
         std::shared_ptr<ReactiveLossyQueue> queue;
+        std::shared_ptr<std::atomic<uint64_t>> evictions;
         bfc::shared_sized_buffer view;
     };
     std::array<Delivery, WIFI_PDU_SLOTS * 8> pending{};
@@ -106,6 +107,7 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
                     return;
                 }
                 pending[pending_count].queue = s.rx_queue;
+                pending[pending_count].evictions = s.rx_queue_evictions;
                 pending[pending_count].view =
                     mpdu_owned.subview(payload_off, pdu.size());
                 ++pending_count;
@@ -115,7 +117,13 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
 
     for (size_t i = 0; i < pending_count; ++i)
     {
-        pending[i].queue->push(std::move(pending[i].view));
+        Delivery& d = pending[i];
+        const size_t before = d.queue->push(std::move(d.view));
+        const size_t capacity = d.queue->capacity();
+        if (capacity != 0 && before >= capacity && d.evictions)
+        {
+            d.evictions->fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 
