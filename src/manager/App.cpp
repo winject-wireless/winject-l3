@@ -158,9 +158,10 @@ std::shared_ptr<Upstream> App::construct_upstream(
     using Registry =
         bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>;
     auto cv = bfc::cv_reactor_registry::get_instance().get(uc.reactor);
-    auto in = Registry::get_instance().get(uc.endpoint.rx);
-    auto out = Registry::get_instance().get(uc.endpoint.tx);
-    auto up = std::make_shared<QueueUpstream>(cv, uc, tx_queue, in, out);
+    auto app_tx_queue = Registry::get_instance().get(uc.endpoint.rx);
+    auto app_rx_queue = Registry::get_instance().get(uc.endpoint.tx);
+    auto up = std::make_shared<QueueUpstream>(cv, uc, tx_queue, app_tx_queue,
+                                              app_rx_queue);
     up->bind_callbacks();
     return up;
 }

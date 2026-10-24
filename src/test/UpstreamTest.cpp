@@ -38,16 +38,18 @@ class UpstreamTest : public ::testing::Test
 protected:
     std::shared_ptr<Upstream::Reactor> cv =
         std::make_shared<Upstream::Reactor>();
-    std::shared_ptr<ReactiveLossyQueue> in = std::make_shared<ReactiveLossyQueue>();
-    std::shared_ptr<ReactiveLossyQueue> out = std::make_shared<ReactiveLossyQueue>();
+    std::shared_ptr<ReactiveLossyQueue> app_tx_queue =
+        std::make_shared<ReactiveLossyQueue>();
+    std::shared_ptr<ReactiveLossyQueue> app_rx_queue =
+        std::make_shared<ReactiveLossyQueue>();
     std::shared_ptr<BoundedLossyQueue> tx = std::make_shared<BoundedLossyQueue>();
     UpstreamConfig cfg;
     std::shared_ptr<IOReactor> io = std::make_shared<IOReactor>();
     std::shared_ptr<Upstream> up;
     void SetUp() override
     {
-        in->set_capacity(64);
-        out->set_capacity(64);
+        app_tx_queue->set_capacity(64);
+        app_rx_queue->set_capacity(64);
         cfg.mode = UpstreamMode::queue;
         cfg.endpoint = {"in", "out"};
         cfg.bus_tx = cfg.bus_rx = 7;
@@ -58,7 +60,8 @@ protected:
     }
     void create_queue()
     {
-        up = std::make_shared<QueueUpstream>(cv, cfg, tx, in, out);
+        up = std::make_shared<QueueUpstream>(cv, cfg, tx, app_tx_queue,
+                                             app_rx_queue);
         up->bind_callbacks();
     }
     void create_udp(const std::string& rx, const std::string& dest = {})
@@ -130,10 +133,10 @@ TEST_F(UpstreamTest, SharedOwnershipAndQueueOnlyRadioInterface)
     EXPECT_EQ(up->shared_from_this(), up);
     auto queue = up->rx_queue();
     rx(packet({1, 2, 3}));
-    EXPECT_FALSE(out->has_data());  // producer does no decoding or delivery
+    EXPECT_FALSE(app_rx_queue->has_data());  // producer does no decoding or delivery
     EXPECT_EQ(queue->size(), 1u);
     pump_cv();
-    auto received = out->pop();
+    auto received = app_rx_queue->pop();
     ASSERT_TRUE(received);
     EXPECT_EQ(bytes(*received), (std::vector<uint8_t>{1, 2, 3}));
     EXPECT_EQ(up->rx_counters().accepted_packets, 1u);
@@ -141,7 +144,7 @@ TEST_F(UpstreamTest, SharedOwnershipAndQueueOnlyRadioInterface)
 TEST_F(UpstreamTest, AppInputImmediatelyPushesSuppliedTxQueue)
 {
     create_queue();
-    in->push(packet({4, 5}));  // no explicit wake
+    app_tx_queue->push(packet({4, 5}));  // no explicit wake
     EXPECT_FALSE(tx->has_data());
     pump_cv();
     auto sent = tx->pop();
@@ -155,7 +158,7 @@ TEST_F(UpstreamTest, AppInputImmediatelyPushesSuppliedTxQueue)
 }
 TEST_F(UpstreamTest, ConstructorDiscoversPrequeuedInput)
 {
-    in->push(packet({8}));
+    app_tx_queue->push(packet({8}));
     create_queue();
     pump_cv();
     ASSERT_TRUE(tx->has_data());
@@ -169,7 +172,7 @@ TEST_F(UpstreamTest, RadioSequenceFilteringRunsInUpstream)
     rx(packet({3}), false, 4);  // two missing
     EXPECT_EQ(up->stats().air_rx_gap_loss, 0u);
     pump_cv();
-    EXPECT_EQ(out->size(), 2u);
+    EXPECT_EQ(app_rx_queue->size(), 2u);
     EXPECT_EQ(up->stats().air_rx_gap_loss, 2u);
     EXPECT_EQ(up->collect_air_seq_loss_delta(), 2u);
     EXPECT_EQ(up->collect_air_seq_loss_delta(), 0u);
@@ -179,7 +182,7 @@ TEST_F(UpstreamTest, ShortLcPacketIsRejected)
     create_queue();
     up->rx_queue()->push(packet({1, 2}));
     pump_cv();
-    EXPECT_FALSE(out->has_data());
+    EXPECT_FALSE(app_rx_queue->has_data());
 }
 TEST_F(UpstreamTest, FecEncodePushesShardsWithoutSchedulerPull)
 {
@@ -188,8 +191,8 @@ TEST_F(UpstreamTest, FecEncodePushesShardsWithoutSchedulerPull)
     cfg.fec_n = 3;
     cfg.fec_timeout_ms = 0;
     create_queue();
-    in->push(packet({1}));
-    in->push(packet({2}));
+    app_tx_queue->push(packet({1}));
+    app_tx_queue->push(packet({2}));
     pump_cv();
     EXPECT_EQ(tx->size(), 3u);
     while (auto p = tx->pop())
@@ -205,7 +208,7 @@ TEST_F(UpstreamTest, TxFecTimeoutUsesSuppliedCvReactor)
     cfg.fec_n = 4;
     cfg.fec_timeout_ms = 5;
     create_queue();
-    in->push(packet({9}));
+    app_tx_queue->push(packet({9}));
     pump_cv(1);
     EXPECT_FALSE(tx->has_data());
     pump_cv(15);
@@ -220,11 +223,11 @@ TEST_F(UpstreamTest, RxFecRecoversMissingShardOnCvReactor)
     ASSERT_TRUE(encoder.encode_block({{1, 2}, {3, 4}}, 100, &shards));
     rx(Packet::copy_from(shards[2].data(), shards[2].size()), true, 0);
     rx(Packet::copy_from(shards[1].data(), shards[1].size()), true, 1);
-    EXPECT_FALSE(out->has_data());
+    EXPECT_FALSE(app_rx_queue->has_data());
     pump_cv();
-    ASSERT_EQ(out->size(), 2u);
-    EXPECT_EQ(bytes(*out->pop()), (std::vector<uint8_t>{1, 2}));
-    EXPECT_EQ(bytes(*out->pop()), (std::vector<uint8_t>{3, 4}));
+    ASSERT_EQ(app_rx_queue->size(), 2u);
+    EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{1, 2}));
+    EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{3, 4}));
     EXPECT_GE(up->fec_recovered(), 1u);
 }
 TEST_F(UpstreamTest, RxFecTimerSalvagesWithoutNewRadioPackets)
@@ -236,10 +239,10 @@ TEST_F(UpstreamTest, RxFecTimerSalvagesWithoutNewRadioPackets)
     ASSERT_TRUE(encoder.encode_block({{1}, {2}, {3}}, 100, &shards));
     rx(Packet::copy_from(shards[1].data(), shards[1].size()), true);
     pump_cv(1);
-    EXPECT_FALSE(out->has_data());
+    EXPECT_FALSE(app_rx_queue->has_data());
     pump_cv(300);
-    ASSERT_EQ(out->size(), 1u);
-    EXPECT_EQ(bytes(*out->pop()), (std::vector<uint8_t>{2}));
+    ASSERT_EQ(app_rx_queue->size(), 1u);
+    EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{2}));
 }
 TEST_F(UpstreamTest, DestructorDropsPartialFecAndPendingRx)
 {
@@ -248,7 +251,7 @@ TEST_F(UpstreamTest, DestructorDropsPartialFecAndPendingRx)
     cfg.fec_n = 4;
     cfg.fec_timeout_ms = 10;
     create_queue();
-    in->push(packet({1}));
+    app_tx_queue->push(packet({1}));
     pump_cv(1);
     auto inbox = up->rx_queue();
     inbox->push(lc_packet(packet({7})));
@@ -257,11 +260,11 @@ TEST_F(UpstreamTest, DestructorDropsPartialFecAndPendingRx)
     EXPECT_TRUE(weak.expired());
     pump_cv(20);
     EXPECT_FALSE(tx->has_data());
-    EXPECT_FALSE(out->has_data());
+    EXPECT_FALSE(app_rx_queue->has_data());
     // Producer can safely retain a shared queue after endpoint destruction.
     inbox->push(lc_packet(packet({8})));
     pump_cv();
-    EXPECT_FALSE(out->has_data());
+    EXPECT_FALSE(app_rx_queue->has_data());
 }
 TEST_F(UpstreamTest, ExtractedFecTimerCannotUseDestroyedEndpoint)
 {
@@ -275,7 +278,7 @@ TEST_F(UpstreamTest, ExtractedFecTimerCannotUseDestroyedEndpoint)
                             {
                                 up.reset();
                             });
-    in->push(packet({1}));
+    app_tx_queue->push(packet({1}));
     pump_cv(1);
     cv->get_timer().schedule(Upstream::Reactor::timer_t::current_time_us() +
                              1000000);
@@ -285,15 +288,16 @@ TEST_F(UpstreamTest, ExtractedFecTimerCannotUseDestroyedEndpoint)
 TEST_F(UpstreamTest, ReconstructionReleasesInputClaim)
 {
     create_queue();
-    EXPECT_THROW(std::make_shared<QueueUpstream>(cv, cfg, tx, in, out),
+    EXPECT_THROW(std::make_shared<QueueUpstream>(cv, cfg, tx, app_tx_queue,
+                                                 app_rx_queue),
                  std::invalid_argument);
     up.reset();
     cfg.fec_type = FecType::RsBlockErasure;
     cfg.fec_k = 2;
     cfg.fec_n = 3;
     create_queue();
-    in->push(packet({1}));
-    in->push(packet({2}));
+    app_tx_queue->push(packet({1}));
+    app_tx_queue->push(packet({2}));
     pump_cv();
     EXPECT_EQ(tx->size(), 3u);
 }
@@ -304,27 +308,30 @@ TEST_F(UpstreamTest, InvalidConstructionDoesNotClaimInputOrLeaveCallbacks)
     EXPECT_THROW(create_queue(), std::invalid_argument);
     cfg.fec_type = FecType::none;
     create_queue();
-    in->push(packet({1}));
+    app_tx_queue->push(packet({1}));
     pump_cv();
     EXPECT_EQ(tx->size(), 1u);
 }
 TEST_F(UpstreamTest, RejectsMissingAndAliasedQueues)
 {
-    EXPECT_THROW(std::make_shared<QueueUpstream>(cv, cfg, tx, in, in),
+    EXPECT_THROW(std::make_shared<QueueUpstream>(cv, cfg, tx, app_tx_queue,
+                                                 app_tx_queue),
                  std::invalid_argument);
-    EXPECT_THROW(std::make_shared<QueueUpstream>(cv, cfg, tx, in, nullptr),
+    EXPECT_THROW(std::make_shared<QueueUpstream>(cv, cfg, tx, app_tx_queue,
+                                                 nullptr),
                  std::invalid_argument);
-    EXPECT_THROW(std::make_shared<QueueUpstream>(nullptr, cfg, tx, in, out),
+    EXPECT_THROW(std::make_shared<QueueUpstream>(nullptr, cfg, tx, app_tx_queue,
+                                                 app_rx_queue),
                  std::invalid_argument);
 }
 TEST_F(UpstreamTest, OutputEvictionCountsAcceptedNewPacket)
 {
-    out->set_capacity(1);
+    app_rx_queue->set_capacity(1);
     create_queue();
     rx(packet({1}), false, 0);
     rx(packet({2}), false, 1);
     pump_cv();
-    EXPECT_EQ(bytes(*out->pop()), (std::vector<uint8_t>{2}));
+    EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{2}));
     auto counters = up->rx_counters();
     EXPECT_EQ(counters.accepted_packets, 2u);
     EXPECT_EQ(counters.queue_evictions, 1u);
@@ -333,8 +340,8 @@ TEST_F(UpstreamTest, TxOverflowKeepsNewestAndCountsDrops)
 {
     tx = std::make_shared<BoundedLossyQueue>(1);
     create_queue();
-    in->push(packet({1}));
-    in->push(packet({2, 3}));
+    app_tx_queue->push(packet({1}));
+    app_tx_queue->push(packet({2, 3}));
     pump_cv();
     EXPECT_EQ(up->tx_queue_drops(), 1u);
     EXPECT_EQ(up->tx_counters().queue_evictions, 1u);
@@ -350,22 +357,22 @@ TEST_F(UpstreamTest, RxOverflowIsLossyAndKeepsNewest)
     cfg.rx_queue_capacity = 1;
     create_queue();
     EXPECT_EQ(up->rx_queue()->capacity(), 1u);
-    EXPECT_EQ(in->capacity(), 64u);
+    EXPECT_EQ(app_tx_queue->capacity(), 64u);
     rx(packet({1}), false, 0);
     rx(packet({2}), false, 1);
     pump_cv();
-    EXPECT_EQ(out->size(), 1u);
-    EXPECT_EQ(bytes(*out->pop()), (std::vector<uint8_t>{2}));
+    EXPECT_EQ(app_rx_queue->size(), 1u);
+    EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{2}));
 }
 TEST_F(UpstreamTest, QueueBurstIsRescheduledAfterBoundedTurn)
 {
     create_queue();
     for (int i = 0; i < 60; ++i)
     {
-        in->push(packet({uint8_t(i)}));
+        app_tx_queue->push(packet({uint8_t(i)}));
     }
     pump_cv(5);
-    EXPECT_FALSE(in->has_data());
+    EXPECT_FALSE(app_tx_queue->has_data());
     EXPECT_EQ(tx->size(), 60u);
 }
 TEST_F(UpstreamTest, UdpInputOnlyEnqueuesUntilCvReactorRuns)
@@ -448,7 +455,7 @@ TEST_F(UpstreamTest, UdpRetainsSharedIoReactorUntilDestruction)
 }
 TEST_F(UpstreamTest, BindingRequiresSharedOwnership)
 {
-    QueueUpstream local(cv, cfg, tx, in, out);
+    QueueUpstream local(cv, cfg, tx, app_tx_queue, app_rx_queue);
     EXPECT_THROW(local.bind_callbacks(), std::logic_error);
 }
 TEST_F(UpstreamTest, UdpExtractedSocketCallbackIsSafeAfterDestruction)

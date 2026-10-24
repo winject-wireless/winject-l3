@@ -8,7 +8,8 @@ Air framing is unchanged.
 ## Construction and ownership
 
 Construct with `std::make_shared<UDPUpstream>(cv, io, config, radio_tx_queue)` or
-`std::make_shared<QueueUpstream>(cv, config, radio_tx_queue, input, output)`,
+`std::make_shared<QueueUpstream>(cv, config, radio_tx_queue, app_tx_queue,
+app_rx_queue)`,
 then call `bind_callbacks()` before publishing the instance. `Upstream` inherits
 `enable_shared_from_this`; binding requires shared ownership so callbacks can
 retain weak references. Repeated binding is harmless.
