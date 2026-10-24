@@ -26,7 +26,7 @@ public:
     ~ConsoleService();
 
     bool start(IOReactor& reactor, const sockaddr_in& console_in,
-               ManagerConsoleHandlers handlers, std::string* error);
+               ManagerConsoleHandlers bound_handlers, std::string* error);
     void stop();
 
 private:
@@ -54,11 +54,11 @@ private:
 
     IOReactor* reactor = nullptr;
     bfc::socket sock;
-    ManagerConsoleHandlers handlers_;
+    ManagerConsoleHandlers handlers;
     bfc::sized_buffer rx_buf;
-    uint32_t next_l3_id_ = 1;
-    std::unordered_map<uint32_t, Route> routes_;
-    std::map<std::pair<PeerKey, uint8_t>, uint32_t> in_flight_;
+    uint32_t next_l3_id = 1;
+    std::unordered_map<uint32_t, Route> routes;
+    std::map<std::pair<PeerKey, uint8_t>, uint32_t> in_flight;
 };
 
 }  // namespace winject

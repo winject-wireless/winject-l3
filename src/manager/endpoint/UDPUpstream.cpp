@@ -12,19 +12,19 @@ UDPUpstream::UDPUpstream(std::shared_ptr<Reactor> reactor,
                          const UpstreamConfig& config,
                          std::shared_ptr<BoundedLossyQueue> radio_tx_queue)
     : Upstream(std::move(reactor), config, std::move(radio_tx_queue)),
-      io_(std::move(io)),
-      socket_(bfc::create_udp4())
+      io(std::move(io)),
+      socket(bfc::create_udp4())
 {
-    if (!io_ || config.mode == UpstreamMode::queue || !config.reactor.empty() ||
+    if (!this->io || config.mode == UpstreamMode::queue || !config.reactor.empty() ||
         (config.endpoint.rx.empty() && config.endpoint.tx.empty()) ||
-        socket_.fd() < 0)
+        socket.fd() < 0)
     {
         throw std::invalid_argument("invalid UDP upstream configuration");
     }
-    app_tx_queue_->set_capacity(config.rx_queue_capacity);
-    config_.mode = upstream_mode(config.endpoint);
+    app_tx_queue->set_capacity(config.rx_queue_capacity);
+    upstream_config.mode = upstream_mode(config.endpoint);
     const int one = 1;
-    socket_.set_sock_opt(SOL_SOCKET, SO_REUSEADDR, one);
+    socket.set_sock_opt(SOL_SOCKET, SO_REUSEADDR, one);
     sockaddr_in bind{};
     bind.sin_family = AF_INET;
     bind.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -35,27 +35,27 @@ UDPUpstream::UDPUpstream(std::shared_ptr<Reactor> reactor,
     }
     if (!config.endpoint.tx.empty())
     {
-        if (!parse_host_port(config.endpoint.tx, &destination_))
+        if (!parse_host_port(config.endpoint.tx, &destination))
         {
             throw std::invalid_argument("invalid UDP destination");
         }
-        have_destination_ = true;
+        have_destination = true;
     }
-    if (socket_.bind(bind) != 0)
+    if (socket.bind(bind) != 0)
     {
         throw std::runtime_error("UDP upstream bind failed");
     }
 }
 void UDPUpstream::bind_callbacks()
 {
-    if (registered_)
+    if (registered)
     {
         return;
     }
     Upstream::bind_callbacks();
     const auto weak = weak_from_this();
-    registered_ = io_->add_read_rdy(
-        socket_.fd(),
+    registered = io->add_read_rdy(
+        socket.fd(),
         [weak]
         {
             if (auto self = weak.lock())
@@ -63,7 +63,7 @@ void UDPUpstream::bind_callbacks()
                 static_cast<UDPUpstream&>(*self).on_socket_readable();
             }
         });
-    if (!registered_)
+    if (!registered)
     {
         throw std::runtime_error("UDP upstream reactor registration failed");
     }
@@ -71,9 +71,9 @@ void UDPUpstream::bind_callbacks()
 UDPUpstream::~UDPUpstream()
 {
     unbind_callbacks();
-    if (registered_)
+    if (registered)
     {
-        io_->rem_read_rdy(socket_.fd());
+        io->rem_read_rdy(socket.fd());
     }
 }
 void UDPUpstream::on_socket_readable()
@@ -85,14 +85,14 @@ void UDPUpstream::on_socket_readable()
         socklen_t from_size = sizeof(from);
         ssize_t received;
         {
-            std::lock_guard<std::mutex> lock(socket_mu_);
+            std::lock_guard<std::mutex> lock(socket_mu);
             received =
-                socket_.recv(buffer, MSG_DONTWAIT | MSG_TRUNC,
+                socket.recv(buffer, MSG_DONTWAIT | MSG_TRUNC,
                              reinterpret_cast<sockaddr*>(&from), &from_size);
-            if (received > 0 && config_.mode == UpstreamMode::udp_server)
+            if (received > 0 && upstream_config.mode == UpstreamMode::udp_server)
             {
-                destination_ = from;
-                have_destination_ = true;
+                destination = from;
+                have_destination = true;
             }
         }
         if (received < 0)
@@ -114,7 +114,7 @@ void UDPUpstream::on_socket_readable()
             }
             else
             {
-                app_tx_queue_->push(
+                app_tx_queue->push(
                     bfc::shared_sized_buffer::copy_from(buffer.data(), size));
             }
         }
@@ -122,25 +122,25 @@ void UDPUpstream::on_socket_readable()
 }
 void UDPUpstream::deliver_datagram(const uint8_t* data, size_t len)
 {
-    std::lock_guard<std::mutex> counters(rx_counters_mu_);
-    ++rx_counters_.delivery_attempts;
-    std::lock_guard<std::mutex> socket(socket_mu_);
-    if (!have_destination_)
+    std::lock_guard<std::mutex> counters(rx_counters_mu);
+    ++stored_rx_counters.delivery_attempts;
+    std::lock_guard<std::mutex> socket_lock(socket_mu);
+    if (!have_destination)
     {
-        ++rx_counters_.no_peer_drops;
+        ++stored_rx_counters.no_peer_drops;
         return;
     }
     const bfc::const_buffer_view view(reinterpret_cast<const std::byte*>(data),
                                       len);
-    const auto sent = socket_.send(
-        view, MSG_DONTWAIT, reinterpret_cast<const sockaddr*>(&destination_),
-        sizeof(destination_));
+    const auto sent = this->socket.send(
+        view, MSG_DONTWAIT, reinterpret_cast<const sockaddr*>(&destination),
+        sizeof(destination));
     if (sent < 0 || static_cast<size_t>(sent) != len)
     {
-        ++rx_counters_.send_errors;
+        ++stored_rx_counters.send_errors;
         return;
     }
-    ++rx_counters_.accepted_packets;
-    rx_counters_.accepted_bytes += len;
+    ++stored_rx_counters.accepted_packets;
+    stored_rx_counters.accepted_bytes += len;
 }
 }  // namespace winject

@@ -18,12 +18,12 @@ public:
 private:
     void on_socket_readable();
     void deliver_datagram(const uint8_t* data, size_t len) override;
-    std::shared_ptr<IOReactor> io_;
-    bfc::socket socket_;
-    std::mutex socket_mu_;
-    sockaddr_in destination_{};
-    bool have_destination_ = false;
-    bool registered_ = false;
+    std::shared_ptr<IOReactor> io;
+    bfc::socket socket;
+    std::mutex socket_mu;
+    sockaddr_in destination{};
+    bool have_destination = false;
+    bool registered = false;
 };
 }  // namespace winject
 #endif

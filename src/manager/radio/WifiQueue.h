@@ -67,11 +67,11 @@ public:
 
     void set_fcs_mode(RadioFcsMode mode)
     {
-        fcs_mode_.store(mode, std::memory_order_release);
+        fcs_mode_acc.store(mode, std::memory_order_release);
     }
     RadioFcsMode fcs_mode() const
     {
-        return fcs_mode_.load(std::memory_order_acquire);
+        return fcs_mode_acc.load(std::memory_order_acquire);
     }
 
     struct counters_s
@@ -87,13 +87,13 @@ public:
     counters_s peek_counters() const
     {
         counters_s c;
-        c.tx_byte = tx_byte_.load(std::memory_order_relaxed);
-        c.rx_byte = rx_byte_.load(std::memory_order_relaxed);
-        c.tx_pkt = tx_pkt_.load(std::memory_order_relaxed);
-        c.rx_pkt = rx_pkt_.load(std::memory_order_relaxed);
-        c.fcs_error_pkt = fcs_error_pkt_.load(std::memory_order_relaxed);
-        c.fcs_unknown_pkt = fcs_unknown_pkt_.load(std::memory_order_relaxed);
-        c.wifi_tx_drops = wifi_tx_drops_.load(std::memory_order_relaxed);
+        c.tx_byte = tx_byte_acc.load(std::memory_order_relaxed);
+        c.rx_byte = rx_byte_acc.load(std::memory_order_relaxed);
+        c.tx_pkt = tx_pkt_acc.load(std::memory_order_relaxed);
+        c.rx_pkt = rx_pkt_acc.load(std::memory_order_relaxed);
+        c.fcs_error_pkt = fcs_error_pkt_acc.load(std::memory_order_relaxed);
+        c.fcs_unknown_pkt = fcs_unknown_pkt_acc.load(std::memory_order_relaxed);
+        c.wifi_tx_drops = wifi_tx_drops_acc.load(std::memory_order_relaxed);
         return c;
     }
 
@@ -105,23 +105,23 @@ private:
     bool push_wifi_tx(const uint8_t* data, size_t len);
     void on_wifi_rx();
 
-    IOReactor* reactor_ = nullptr;
-    rx on_rx_;
-    idle on_idle_;
-    std::atomic<RadioFcsMode> fcs_mode_{RadioFcsMode::unknown};
-    std::atomic<uint64_t> tx_byte_{0};
-    std::atomic<uint64_t> rx_byte_{0};
-    std::atomic<uint64_t> tx_pkt_{0};
-    std::atomic<uint64_t> rx_pkt_{0};
-    std::atomic<uint64_t> fcs_error_pkt_{0};
-    std::atomic<uint64_t> fcs_unknown_pkt_{0};
-    std::atomic<uint64_t> wifi_tx_drops_{0};
-    mutable std::mutex transport_mu_;
-    bool opened_ = false;
-    bool dplane_bound_ = false;
-    std::shared_ptr<DplaneQueue> wifi_tx_;
-    std::shared_ptr<DplaneQueue> wifi_rx_;
-    std::shared_ptr<DplaneReactor> cv_reactor_;
+    IOReactor* reactor = nullptr;
+    rx on_rx;
+    idle on_idle;
+    std::atomic<RadioFcsMode> fcs_mode_acc{RadioFcsMode::unknown};
+    std::atomic<uint64_t> tx_byte_acc{0};
+    std::atomic<uint64_t> rx_byte_acc{0};
+    std::atomic<uint64_t> tx_pkt_acc{0};
+    std::atomic<uint64_t> rx_pkt_acc{0};
+    std::atomic<uint64_t> fcs_error_pkt_acc{0};
+    std::atomic<uint64_t> fcs_unknown_pkt_acc{0};
+    std::atomic<uint64_t> wifi_tx_drops_acc{0};
+    mutable std::mutex transport_mu;
+    bool opened = false;
+    bool dplane_bound = false;
+    std::shared_ptr<DplaneQueue> wifi_tx;
+    std::shared_ptr<DplaneQueue> wifi_rx;
+    std::shared_ptr<DplaneReactor> cv_reactor;
 };
 
 }  // namespace winject

@@ -83,7 +83,7 @@ bool ConsoleClient::finish_connect(std::string* error)
     socklen_t len = sizeof(local);
     if (getsockname(sock.fd(), reinterpret_cast<sockaddr*>(&local), &len) == 0)
     {
-        local_ip_ = local.sin_addr;
+        bound_local_ip = local.sin_addr;
     }
     return true;
 }
@@ -121,11 +121,11 @@ bool ConsoleClient::send_wire(const std::string& wire, std::string* error)
 
 // Callbacks may drop the console, which calls back into cancel_pending(), or
 // issue new requests. Take the pending set out first so each callback runs once
-// and no iterator into pending_reqs_ is live while they run.
+// and no iterator into pending_reqs is live while they run.
 void ConsoleClient::cancel_pending()
 {
     std::map<uint8_t, Pending> reqs;
-    reqs.swap(pending_reqs_);
+    reqs.swap(pending_reqs);
     for (auto& entry : reqs)
     {
         if (entry.second.done)
@@ -140,13 +140,13 @@ void ConsoleClient::cancel_pending()
 
 void ConsoleClient::complete(uint8_t id, MplaneResult result)
 {
-    auto it = pending_reqs_.find(id);
-    if (it == pending_reqs_.end())
+    auto it = pending_reqs.find(id);
+    if (it == pending_reqs.end())
     {
         return;
     }
     DoneFn done = std::move(it->second.done);
-    pending_reqs_.erase(it);
+    pending_reqs.erase(it);
     if (done)
     {
         done(std::move(result));
@@ -155,7 +155,7 @@ void ConsoleClient::complete(uint8_t id, MplaneResult result)
 
 bool ConsoleClient::request(const std::string& mplane_line, DoneFn done)
 {
-    return request(mplane_line, default_timeout_, std::move(done));
+    return request(mplane_line, default_timeout, std::move(done));
 }
 
 bool ConsoleClient::request(const std::string& mplane_line,
@@ -172,10 +172,10 @@ bool ConsoleClient::request(const std::string& mplane_line,
         done(std::move(r));
         return false;
     }
-    const uint8_t id = next_req_id_++;
-    if (next_req_id_ == 0)
+    const uint8_t id = next_req_id++;
+    if (next_req_id == 0)
     {
-        next_req_id_ = 1;
+        next_req_id = 1;
     }
     const std::string wire = format_mplane_cmd(id, mplane_line);
     LOG_INF(">> %s", wire.c_str());
@@ -192,10 +192,10 @@ bool ConsoleClient::request(const std::string& mplane_line,
     p.deadline = std::chrono::steady_clock::now() + timeout;
     p.done = std::move(done);
     const auto deadline = p.deadline;
-    pending_reqs_[id] = std::move(p);
-    if (on_deadline_)
+    pending_reqs[id] = std::move(p);
+    if (on_deadline)
     {
-        on_deadline_(deadline);
+        on_deadline(deadline);
     }
     return true;
 }
@@ -241,8 +241,8 @@ void ConsoleClient::handle_line(const std::string& line, bool last_for_id)
     {
         return;
     }
-    auto it = pending_reqs_.find(id);
-    if (it == pending_reqs_.end())
+    auto it = pending_reqs.find(id);
+    if (it == pending_reqs.end())
     {
         LOG_WRN("mplane reply for unknown id %u: %s", static_cast<unsigned>(id),
                 line.c_str());
@@ -283,9 +283,9 @@ void ConsoleClient::handle_line(const std::string& line, bool last_for_id)
 void ConsoleClient::poll_deadlines(std::chrono::steady_clock::time_point now)
 {
     // Collect first: a timeout callback may drop the console and clear
-    // pending_reqs_ (see cancel_pending).
+    // pending_reqs (see cancel_pending).
     std::vector<DoneFn> expired;
-    for (auto it = pending_reqs_.begin(); it != pending_reqs_.end();)
+    for (auto it = pending_reqs.begin(); it != pending_reqs.end();)
     {
         if (now < it->second.deadline)
         {
@@ -293,7 +293,7 @@ void ConsoleClient::poll_deadlines(std::chrono::steady_clock::time_point now)
             continue;
         }
         expired.push_back(std::move(it->second.done));
-        it = pending_reqs_.erase(it);
+        it = pending_reqs.erase(it);
     }
     for (auto& done : expired)
     {
@@ -311,7 +311,7 @@ std::optional<std::chrono::steady_clock::time_point>
 ConsoleClient::next_deadline() const
 {
     std::optional<std::chrono::steady_clock::time_point> next;
-    for (const auto& entry : pending_reqs_)
+    for (const auto& entry : pending_reqs)
     {
         if (!next || entry.second.deadline < *next)
         {

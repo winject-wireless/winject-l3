@@ -32,11 +32,9 @@ add_executable(winject-tests
     RsBlockErasureTest.cpp
     VendoredFecTest.cpp
     DatagramAirTest.cpp
-    HostEndpointTest.cpp
+    UpstreamTest.cpp
     AppShutdownTest.cpp
     NetUtilTest.cpp
-    UdpEndpointTest.cpp
-    QueueEndpointTest.cpp
     LCHeaderTest.cpp
     PhyAirtimeTest.cpp
     RxDemuxTest.cpp
@@ -65,7 +63,8 @@ add_executable(winject-tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UpstreamStats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/Upstream.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/DatagramAir.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/HostEndpoint.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UDPUpstream.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/QueueUpstream.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleClient.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/MplaneCorrelation.cpp

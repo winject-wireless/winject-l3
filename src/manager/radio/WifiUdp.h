@@ -40,11 +40,11 @@ public:
 
     void set_fcs_mode(RadioFcsMode mode)
     {
-        fcs_mode_.store(mode, std::memory_order_release);
+        fcs_mode_acc.store(mode, std::memory_order_release);
     }
     RadioFcsMode fcs_mode() const
     {
-        return fcs_mode_.load(std::memory_order_acquire);
+        return fcs_mode_acc.load(std::memory_order_acquire);
     }
 
     struct counters_s
@@ -59,12 +59,12 @@ public:
     counters_s peek_counters() const
     {
         counters_s c;
-        c.tx_byte = tx_byte_.load(std::memory_order_relaxed);
-        c.rx_byte = rx_byte_.load(std::memory_order_relaxed);
-        c.tx_pkt = tx_pkt_.load(std::memory_order_relaxed);
-        c.rx_pkt = rx_pkt_.load(std::memory_order_relaxed);
-        c.fcs_error_pkt = fcs_error_pkt_.load(std::memory_order_relaxed);
-        c.fcs_unknown_pkt = fcs_unknown_pkt_.load(std::memory_order_relaxed);
+        c.tx_byte = tx_byte_acc.load(std::memory_order_relaxed);
+        c.rx_byte = rx_byte_acc.load(std::memory_order_relaxed);
+        c.tx_pkt = tx_pkt_acc.load(std::memory_order_relaxed);
+        c.rx_pkt = rx_pkt_acc.load(std::memory_order_relaxed);
+        c.fcs_error_pkt = fcs_error_pkt_acc.load(std::memory_order_relaxed);
+        c.fcs_unknown_pkt = fcs_unknown_pkt_acc.load(std::memory_order_relaxed);
         return c;
     }
 
@@ -77,22 +77,22 @@ private:
     IOReactor* reactor = nullptr;
     bfc::socket sock;
     // TxMux reactor only.
-    sockaddr_in tx_dplane_{};
-    bool have_tx_dplane_ = false;
+    sockaddr_in tx_dplane{};
+    bool have_tx_dplane = false;
     // Reactor thread only.
-    sockaddr_in rx_dplane_{};
-    bool have_rx_dplane_ = false;
+    sockaddr_in rx_dplane{};
+    bool have_rx_dplane = false;
     rx on_rx;
     idle on_idle;
-    std::atomic<RadioFcsMode> fcs_mode_{RadioFcsMode::unknown};
-    std::atomic<uint64_t> tx_byte_{0};
-    std::atomic<uint64_t> rx_byte_{0};
-    std::atomic<uint64_t> tx_pkt_{0};
-    std::atomic<uint64_t> rx_pkt_{0};
-    std::atomic<uint64_t> fcs_error_pkt_{0};
-    std::atomic<uint64_t> fcs_unknown_pkt_{0};
+    std::atomic<RadioFcsMode> fcs_mode_acc{RadioFcsMode::unknown};
+    std::atomic<uint64_t> tx_byte_acc{0};
+    std::atomic<uint64_t> rx_byte_acc{0};
+    std::atomic<uint64_t> tx_pkt_acc{0};
+    std::atomic<uint64_t> rx_pkt_acc{0};
+    std::atomic<uint64_t> fcs_error_pkt_acc{0};
+    std::atomic<uint64_t> fcs_unknown_pkt_acc{0};
     static constexpr size_t k_recv_capacity = 2048;
-    bfc::shared_sized_buffer rx_buf_;
+    bfc::shared_sized_buffer rx_buf;
 };
 
 }  // namespace winject

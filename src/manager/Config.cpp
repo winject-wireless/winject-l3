@@ -392,6 +392,17 @@ bool Config::load(const std::string& path, std::string* error)
             return false;
         }
         u.scheduler_budget = *budget;
+        const auto capacity_key = key_of(i, "rx_queue_capacity");
+        if (parser.arg(capacity_key))
+        {
+            const auto capacity = parser.as<unsigned>(capacity_key);
+            if (!capacity || *capacity == 0)
+            {
+                *error = "invalid " + capacity_key;
+                return false;
+            }
+            u.rx_queue_capacity = *capacity;
+        }
         const std::string rx_key = key_of(i, "rx");
         const std::string tx_key = key_of(i, "tx");
         const std::string legacy_bind = key_of(i, "bind_address");
@@ -557,6 +568,11 @@ bool Config::validate(std::string* error) const
     for (size_t i = 0; i < upstreams.size(); ++i)
     {
         const UpstreamConfig& u = upstreams[i];
+        if (u.rx_queue_capacity == 0)
+        {
+            return fail("invalid upstream-" + std::to_string(i) +
+                        ".rx_queue_capacity");
+        }
         if (u.scheduler_budget == 0)
         {
             return fail("invalid upstream-" + std::to_string(i) +

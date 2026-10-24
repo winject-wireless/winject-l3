@@ -12,21 +12,21 @@
 namespace winject
 {
 
-RxDemux::RxDemux(RadioUpstreamTable& table) : table_(table) {}
+RxDemux::RxDemux(RadioUpstreamTable& table) : table(table) {}
 
 void RxDemux::set_domain(uint16_t domain)
 {
-    domain_ = domain;
+    this->domain = domain;
 }
 
 uint64_t RxDemux::rx_drop_domain() const
 {
-    return rx_drop_domain_.load(std::memory_order_relaxed);
+    return rx_drop_domain_total.load(std::memory_order_relaxed);
 }
 
 uint64_t RxDemux::rx_drop_bus() const
 {
-    return rx_drop_bus_.load(std::memory_order_relaxed);
+    return rx_drop_bus_total.load(std::memory_order_relaxed);
 }
 
 void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
@@ -40,7 +40,7 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
     size_t pending_count = 0;
 
     {
-        std::lock_guard<std::mutex> lock(table_.mutex());
+        std::lock_guard<std::mutex> lock(table.mutex());
         const size_t len = mpdu_owned.size();
         if (mpdu_owned.empty() || len > WIFI_RADIO_RX_MAX)
         {
@@ -52,14 +52,14 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
         {
             return;
         }
-        if (!view.is_valid_winject_frame() || view.get_domain() != domain_)
+        if (!view.is_valid_winject_frame() || view.get_domain() != domain)
         {
-            rx_drop_domain_.fetch_add(1, std::memory_order_relaxed);
+            rx_drop_domain_total.fetch_add(1, std::memory_order_relaxed);
             return;
         }
 
         std::array<std::vector<size_t>, 256> rx_by_bus;
-        const auto& entries = table_.entries();
+        const auto& entries = table.entries();
         for (size_t i = 0; i < entries.size(); ++i)
         {
             const uint8_t bus = entries[i].bus_rx;
@@ -93,12 +93,12 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
             const auto& targets = rx_by_bus[bus];
             if (targets.empty())
             {
-                rx_drop_bus_.fetch_add(1, std::memory_order_relaxed);
+                rx_drop_bus_total.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
             for (size_t idx : targets)
             {
-                RadioUpstreamEntry& s = table_.entries()[idx];
+                RadioUpstreamEntry& s = table.entries()[idx];
                 const size_t payload_off = static_cast<size_t>(
                     reinterpret_cast<const uint8_t*>(pdu.data()) - mpdu_bytes);
                 if (pending_count >= pending.size())

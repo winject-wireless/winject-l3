@@ -94,24 +94,24 @@ private:
     void apply_events(TxEventQueue events);
 
     struct QueueWake;
-    std::shared_ptr<QueueWake> queue_wake_;
-    RadioUpstreamTable& table_;
-    PhyMode phy_{};
-    uint32_t gap_us_ = 96;
-    uint32_t pacing_credit_us_ = 0;
-    // Set by emit_mpdu when pacing (next_tx_at_) refused a frame.
-    bool pacing_blocked_ = false;
-    uint16_t domain_ = 0;
-    std::chrono::steady_clock::time_point next_tx_at_{};
+    std::shared_ptr<QueueWake> queue_wake;
+    RadioUpstreamTable& table;
+    PhyMode phy{};
+    uint32_t gap_us = 96;
+    uint32_t pacing_credit_us = 0;
+    // Set by emit_mpdu when pacing (next_tx_at) refused a frame.
+    bool pacing_blocked = false;
+    uint16_t domain = 0;
+    std::chrono::steady_clock::time_point next_tx_at{};
     size_t next = 0;
     uint8_t mpdu_buf[WIFI_RADIO_INJECT_MAX]{};
     uint64_t air_bytes_interval = 0;
-    std::atomic<uint64_t> tx_send_fail_mpdu_{0};
-    std::atomic<uint64_t> tx_send_fail_byt_{0};
+    std::atomic<uint64_t> tx_send_fail_mpdu_total{0};
+    std::atomic<uint64_t> tx_send_fail_byt_total{0};
 
-    std::mutex wake_mu_;
-    TxEventQueue tx_events_;
-    std::shared_ptr<ReactorState> reactor_state_;
+    std::mutex wake_mu;
+    TxEventQueue tx_events;
+    std::shared_ptr<ReactorState> reactor_state;
 };
 
 }  // namespace winject

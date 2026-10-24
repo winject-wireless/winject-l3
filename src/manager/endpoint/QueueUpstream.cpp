@@ -28,43 +28,42 @@ QueueUpstream::QueueUpstream(std::shared_ptr<Reactor> reactor,
                              std::shared_ptr<ReactiveLossyQueue> app_rx_queue)
     : Upstream(std::move(reactor), config, std::move(radio_tx_queue),
                validate_app_queues(app_tx_queue, app_rx_queue)),
-      app_rx_queue_(std::move(app_rx_queue))
+      app_rx_queue(std::move(app_rx_queue))
 {
     if (config.mode != UpstreamMode::queue)
     {
         throw std::invalid_argument("queue upstream requires queue mode");
     }
-    auto claim = std::make_shared<int>(0);
+    claim = std::make_shared<int>(0);
     std::lock_guard<std::mutex> lock(claims_mutex);
-    if (!claims[app_tx_queue_.get()].expired())
+    if (!claims[app_tx_queue.get()].expired())
     {
         throw std::invalid_argument("upstream queue already has a consumer");
     }
-    claims[app_tx_queue_.get()] = claim;
-    claim_ = std::move(claim);
+    claims[app_tx_queue.get()] = claim;
 }
 QueueUpstream::~QueueUpstream()
 {
     unbind_callbacks();
     std::lock_guard<std::mutex> lock(claims_mutex);
-    claims.erase(app_tx_queue_.get());
+    claims.erase(app_tx_queue.get());
 }
 void QueueUpstream::deliver_datagram(const uint8_t* data, size_t len)
 {
-    std::lock_guard<std::mutex> lock(rx_counters_mu_);
-    ++rx_counters_.delivery_attempts;
-    const auto capacity = app_rx_queue_->capacity();
+    std::lock_guard<std::mutex> lock(rx_counters_mu);
+    ++stored_rx_counters.delivery_attempts;
+    const auto capacity = app_rx_queue->capacity();
     if (!capacity)
     {
-        ++rx_counters_.send_errors;
+        ++stored_rx_counters.send_errors;
         return;
     }
-    if (app_rx_queue_->push(bfc::shared_sized_buffer::copy_from(data, len)) >=
+    if (app_rx_queue->push(bfc::shared_sized_buffer::copy_from(data, len)) >=
         capacity)
     {
-        ++rx_counters_.queue_evictions;
+        ++stored_rx_counters.queue_evictions;
     }
-    ++rx_counters_.accepted_packets;
-    rx_counters_.accepted_bytes += len;
+    ++stored_rx_counters.accepted_packets;
+    stored_rx_counters.accepted_bytes += len;
 }
 }  // namespace winject

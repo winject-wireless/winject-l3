@@ -42,23 +42,23 @@ public:
     virtual ~Upstream();
     std::shared_ptr<ReactiveLossyQueue> rx_queue() const
     {
-        return rx_queue_;
+        return host_rx_queue;
     }
     const UpstreamConfig& config() const
     {
-        return config_;
+        return upstream_config;
     }
     const char* type_name() const
     {
-        return config_.mode == UpstreamMode::queue ? "QUEUE" : "UDP";
+        return config().mode == UpstreamMode::queue ? "QUEUE" : "UDP";
     }
     std::string endpoint_rx() const
     {
-        return config_.endpoint.rx;
+        return config().endpoint.rx;
     }
     std::string endpoint_tx() const
     {
-        return config_.endpoint.tx;
+        return config().endpoint.tx;
     }
     RxCounters rx_counters() const;
     TxCounters tx_counters() const;
@@ -67,61 +67,61 @@ public:
     void get_fec(FecType* type, int* k, int* n) const;
     int fec_timeout_ms() const
     {
-        return config_.fec_timeout_ms;
+        return config().fec_timeout_ms;
     }
     void tx_pending_stats(uint64_t* packets, uint64_t* bytes) const;
 
     uint64_t app_rx_bytes() const
     {
-        return air_.app_rx_bytes();
+        return air.app_rx_bytes();
     }
     uint64_t app_rx_packets() const
     {
-        return air_.app_rx_packets();
+        return air.app_rx_packets();
     }
     uint64_t app_rx_oversize_pkt() const
     {
-        return air_.app_rx_oversize_pkt();
+        return air.app_rx_oversize_pkt();
     }
     uint64_t app_tx_bytes() const
     {
-        return air_.app_tx_bytes();
+        return air.app_tx_bytes();
     }
     uint64_t app_tx_packets() const
     {
-        return air_.app_tx_packets();
+        return air.app_tx_packets();
     }
     uint64_t fec_air_rx_bytes() const
     {
-        return air_.fec_air_rx_bytes();
+        return air.fec_air_rx_bytes();
     }
     uint64_t fec_air_rx_packets() const
     {
-        return air_.fec_air_rx_packets();
+        return air.fec_air_rx_packets();
     }
     uint64_t fec_air_rx_unexpected() const
     {
-        return air_.fec_air_rx_unexpected();
+        return air.fec_air_rx_unexpected();
     }
     uint64_t fec_air_tx_bytes() const
     {
-        return air_.fec_air_tx_bytes();
+        return air.fec_air_tx_bytes();
     }
     uint64_t fec_air_tx_packets() const
     {
-        return air_.fec_air_tx_packets();
+        return air.fec_air_tx_packets();
     }
     uint64_t fec_recovered() const
     {
-        return air_.fec_recovered();
+        return air.fec_recovered();
     }
     uint64_t fec_decode_fail() const
     {
-        return air_.fec_decode_fail();
+        return air.fec_decode_fail();
     }
     uint64_t tx_queue_drops() const
     {
-        return air_.tx_queue_drops();
+        return air.tx_queue_drops();
     }
 
 protected:
@@ -134,27 +134,27 @@ protected:
     void submit_datagram(const uint8_t* data, size_t len);
     void reject_oversize_datagram(size_t len)
     {
-        air_.reject_oversize_datagram(len);
+        air.reject_oversize_datagram(len);
     }
-    std::shared_ptr<ReactiveLossyQueue> app_tx_queue_;
-    std::shared_ptr<Reactor> reactor_;
-    UpstreamConfig config_;
-    mutable std::mutex rx_counters_mu_;
-    RxCounters rx_counters_;
+    std::shared_ptr<ReactiveLossyQueue> app_tx_queue;
+    std::shared_ptr<Reactor> reactor;
+    UpstreamConfig upstream_config;
+    mutable std::mutex rx_counters_mu;
+    RxCounters stored_rx_counters;
 
 private:
     friend class App;
     // App waits for destructor completion when replacing an in-flight callback.
-    std::promise<void> destroyed_;
-    std::shared_future<void> destruction_ = destroyed_.get_future().share();
+    std::promise<void> destroyed;
+    std::shared_future<void> destruction = destroyed.get_future().share();
     void drain_radio_rx();
     void drain_app_tx_queue();
-    std::shared_ptr<ReactiveLossyQueue> rx_queue_;
-    std::shared_ptr<BoundedLossyQueue> radio_tx_queue_;
-    DatagramAir air_;
-    mutable std::mutex stats_mu_;
-    UpstreamStats stats_;
-    bool bound_ = false;
+    std::shared_ptr<ReactiveLossyQueue> host_rx_queue;
+    std::shared_ptr<BoundedLossyQueue> radio_tx_queue;
+    DatagramAir air;
+    mutable std::mutex stats_mu;
+    UpstreamStats upstream_stats;
+    bool bound = false;
 };
 }  // namespace winject
 #endif

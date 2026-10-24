@@ -29,5 +29,6 @@ set(WINJECT_L3_SOURCES
     endpoint/Upstream.cpp
     endpoint/UpstreamStats.cpp
     endpoint/DatagramAir.cpp
-    endpoint/HostEndpoint.cpp
+    endpoint/UDPUpstream.cpp
+    endpoint/QueueUpstream.cpp
 )

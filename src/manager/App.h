@@ -106,30 +106,30 @@ private:
     std::shared_ptr<IOReactor> reactor = std::make_shared<IOReactor>();
     ConsoleClient console;
     ConsoleService mgr_console;
-    RadioUpstreamTable radio_upstream_table_;
-    TxMux tx_mux_{radio_upstream_table_};
-    RadioManager radio_manager_;
-    RxDemux rx_demux_{radio_upstream_table_};
+    RadioUpstreamTable radio_upstream_table;
+    TxMux tx_mux{radio_upstream_table};
+    RadioManager radio_manager;
+    RxDemux rx_demux{radio_upstream_table};
     std::shared_ptr<WifiUdp> radio;
     std::vector<std::shared_ptr<Upstream>> upstreams;
-    std::shared_ptr<Upstream::Reactor> upstream_reactor_ =
+    std::shared_ptr<Upstream::Reactor> upstream_reactor =
         std::make_shared<Upstream::Reactor>();
-    std::thread upstream_reactor_thread_;
-    OneShotTimer reconnect_timer_;
+    std::thread upstream_reactor_thread;
+    OneShotTimer reconnect_timer;
     // Runs ConsoleClient::poll_deadlines() at the earliest request deadline.
-    OneShotTimer console_deadline_timer_;
-    std::chrono::steady_clock::time_point console_deadline_at_{};
-    OneShotTimer stats_timer_;
+    OneShotTimer console_deadline_timer;
+    std::chrono::steady_clock::time_point console_deadline_at{};
+    OneShotTimer stats_timer;
     // Set by stop(); checked once the reactor runs, in case stop() came
     // before reactor.run() set it running.
-    std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> stop_requested{false};
     bool console_ok = false;
-    bool radio_version_known_ = false;
-    WinjectVersion radio_version_{};
-    bool radio_proto_ok_ = false;
-    bool proto_mismatch_logged_ = false;
+    bool radio_version_known = false;
+    WinjectVersion radio_version{};
+    bool radio_proto_ok = false;
+    bool proto_mismatch_logged = false;
     std::chrono::steady_clock::time_point last_stats{};
-    MetricsRegistry metrics_registry_;
+    MetricsRegistry metrics_registry;
 };
 
 }  // namespace winject

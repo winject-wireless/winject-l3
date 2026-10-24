@@ -45,10 +45,10 @@ private:
     size_t frame_body_bytes() const;
 
     mutable uint16_t slot_cache_[WIFI_PDU_SLOTS] = {};
-    bool bound_80211_ = false;
-    bool data_frame_ready_ = false;
+    bool bound_80211 = false;
+    bool data_frame_ready = false;
 
-    ieee_802_11::Frame ieee_{};
+    ieee_802_11::Frame wlan_frame{};
 };
 
 uint16_t next_tx_sequence();

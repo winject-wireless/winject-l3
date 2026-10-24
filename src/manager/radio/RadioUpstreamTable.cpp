@@ -8,12 +8,12 @@ namespace winject
 
 bool RadioUpstreamTable::remove(size_t index)
 {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (index >= entries_.size())
+    std::lock_guard<std::mutex> lock(mu);
+    if (index >= upstream_entries.size())
     {
         return false;
     }
-    entries_.erase(entries_.begin() + static_cast<ptrdiff_t>(index));
+    upstream_entries.erase(upstream_entries.begin() + static_cast<ptrdiff_t>(index));
     return true;
 }
 
@@ -22,8 +22,8 @@ void RadioUpstreamTable::add(const std::shared_ptr<Upstream>& up,
                              const std::shared_ptr<WifiUdp>& radio,
                              uint8_t bus_tx, uint8_t bus_rx, size_t budget)
 {
-    std::lock_guard<std::mutex> lock(mu_);
-    entries_.push_back(RadioUpstreamEntry{up, up->rx_queue(), tx_queue, radio,
+    std::lock_guard<std::mutex> lock(mu);
+    upstream_entries.push_back(RadioUpstreamEntry{up, up->rx_queue(), tx_queue, radio,
                                           bus_tx, bus_rx, budget});
 }
 
@@ -32,8 +32,8 @@ void RadioUpstreamTable::add(std::shared_ptr<ReactiveLossyQueue> rx_queue,
                              const std::shared_ptr<WifiUdp>& radio,
                              uint8_t bus_tx, uint8_t bus_rx, size_t budget)
 {
-    std::lock_guard<std::mutex> lock(mu_);
-    entries_.push_back(RadioUpstreamEntry{{},
+    std::lock_guard<std::mutex> lock(mu);
+    upstream_entries.push_back(RadioUpstreamEntry{{},
                                           std::move(rx_queue),
                                           std::move(tx_queue),
                                           radio,
@@ -43,40 +43,40 @@ void RadioUpstreamTable::add(std::shared_ptr<ReactiveLossyQueue> rx_queue,
 }
 void RadioUpstreamTable::clear()
 {
-    std::lock_guard<std::mutex> lock(mu_);
-    entries_.clear();
+    std::lock_guard<std::mutex> lock(mu);
+    upstream_entries.clear();
 }
 
 bool RadioUpstreamTable::set_budget(size_t index, size_t budget)
 {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (index >= entries_.size() || budget == 0)
+    std::lock_guard<std::mutex> lock(mu);
+    if (index >= upstream_entries.size() || budget == 0)
     {
         return false;
     }
-    entries_[index].budget = budget;
+    upstream_entries[index].budget = budget;
     return true;
 }
 
 bool RadioUpstreamTable::get_budget(size_t index, size_t* budget) const
 {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (index >= entries_.size() || budget == nullptr)
+    std::lock_guard<std::mutex> lock(mu);
+    if (index >= upstream_entries.size() || budget == nullptr)
     {
         return false;
     }
-    *budget = entries_[index].budget;
+    *budget = upstream_entries[index].budget;
     return true;
 }
 
 bool RadioUpstreamTable::peek_seq_lost(size_t index, uint64_t* lost) const
 {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (lost == nullptr || index >= entries_.size())
+    std::lock_guard<std::mutex> lock(mu);
+    if (lost == nullptr || index >= upstream_entries.size())
     {
         return false;
     }
-    auto up = entries_[index].up.lock();
+    auto up = upstream_entries[index].up.lock();
     if (!up)
     {
         return false;
@@ -87,11 +87,11 @@ bool RadioUpstreamTable::peek_seq_lost(size_t index, uint64_t* lost) const
 
 uint64_t RadioUpstreamTable::collect_seq_loss_delta()
 {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> lock(mu);
     uint64_t total_lost = 0;
-    for (size_t i = 0; i < entries_.size(); i++)
+    for (size_t i = 0; i < upstream_entries.size(); i++)
     {
-        auto up = entries_[i].up.lock();
+        auto up = upstream_entries[i].up.lock();
         if (!up)
         {
             continue;

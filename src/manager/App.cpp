@@ -26,14 +26,14 @@ namespace winject
 
 App::~App()
 {
-    radio_upstream_table_.clear();
+    radio_upstream_table.clear();
     upstreams.clear();
-    upstream_reactor_->stop();
-    if (upstream_reactor_thread_.joinable())
+    upstream_reactor->stop();
+    if (upstream_reactor_thread.joinable())
     {
-        upstream_reactor_thread_.join();
+        upstream_reactor_thread.join();
     }
-    tx_mux_.stop();
+    tx_mux.stop();
 }
 
 bool App::load(Config config)
@@ -54,7 +54,7 @@ bool App::add_upstream(const UpstreamConfig& uc)
     {
         return false;
     }
-    auto tx_queue = tx_mux_.make_tx_queue();
+    auto tx_queue = tx_mux.make_tx_queue();
     std::shared_ptr<Upstream> up;
     try
     {
@@ -65,10 +65,10 @@ bool App::add_upstream(const UpstreamConfig& uc)
         LOG_ERR("upstream construction failed: %s", e.what());
         return false;
     }
-    radio_upstream_table_.add(up, tx_queue, radio, uc.bus_tx, uc.bus_rx,
+    radio_upstream_table.add(up, tx_queue, radio, uc.bus_tx, uc.bus_rx,
                               uc.scheduler_budget);
     upstreams.push_back(up);
-    tx_mux_.request_tick();
+    tx_mux.request_tick();
     LOG_INF("upstream-%zu type=%s bus_tx=%s bus_rx=%s", uc.index,
             up->type_name(), uc.bus_tx ? bus_to_string(uc.bus_tx).c_str() : "-",
             uc.bus_rx ? bus_to_string(uc.bus_rx).c_str() : "-");
@@ -81,7 +81,7 @@ bool App::setup_radio()
     if (!radio->open(*reactor,
                      [this](bfc::shared_sized_buffer mpdu)
                      {
-                         rx_demux_.on_mpdu(std::move(mpdu));
+                         rx_demux.on_mpdu(std::move(mpdu));
                      }))
     {
         return false;
@@ -101,7 +101,7 @@ void App::apply_radio_dplane()
     {
         return;
     }
-    tx_mux_.post_send_socket_change(radio, d.dplane);
+    tx_mux.post_send_socket_change(radio, d.dplane);
     radio->post_rx_event(EventCtrlRecvSocketChange{d.dplane});
 }
 
@@ -132,9 +132,9 @@ bool App::setup_upstreams()
     {
         return false;
     }
-    radio_manager_.bind(&cfg, &tx_mux_, radio.get(), reactor.get());
-    radio_manager_.configure_tx_mux();
-    rx_demux_.set_domain(cfg.domain);
+    radio_manager.bind(&cfg, &tx_mux, radio.get(), reactor.get());
+    radio_manager.configure_tx_mux();
+    rx_demux.set_domain(cfg.domain);
     for (const auto& uc : cfg.upstreams)
     {
         if (!add_upstream(uc))
@@ -150,7 +150,7 @@ std::shared_ptr<Upstream> App::construct_upstream(
 {
     if (uc.mode != UpstreamMode::queue)
     {
-        auto up = std::make_shared<UDPUpstream>(upstream_reactor_, reactor, uc,
+        auto up = std::make_shared<UDPUpstream>(upstream_reactor, reactor, uc,
                                                 tx_queue);
         up->bind_callbacks();
         return up;
@@ -175,11 +175,11 @@ bool App::replace_upstream(size_t index, const UpstreamConfig& uc,
     std::shared_future<void> destroyed;
     if (upstreams[index])
     {
-        destroyed = upstreams[index]->destruction_;
+        destroyed = upstreams[index]->destruction;
     }
     {
-        std::lock_guard<std::mutex> lock(radio_upstream_table_.mutex());
-        radio_upstream_table_.entries()[index] = {};
+        std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
+        radio_upstream_table.entries()[index] = {};
     }
     upstreams[index].reset();
     if (destroyed.valid())
@@ -188,11 +188,11 @@ bool App::replace_upstream(size_t index, const UpstreamConfig& uc,
     }
     auto install = [&](const UpstreamConfig& config)
     {
-        auto queue = tx_mux_.make_tx_queue();
+        auto queue = tx_mux.make_tx_queue();
         auto up = construct_upstream(config, queue);
         {
-            std::lock_guard<std::mutex> lock(radio_upstream_table_.mutex());
-            radio_upstream_table_.entries()[index] =
+            std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
+            radio_upstream_table.entries()[index] =
                 RadioUpstreamEntry{up,
                                    up->rx_queue(),
                                    queue,
@@ -242,7 +242,7 @@ bool App::set_upstream_scheduler_budget(size_t index, size_t budget,
     {
         return fail("invalid index or budget");
     }
-    if (!radio_upstream_table_.set_budget(index, budget))
+    if (!radio_upstream_table.set_budget(index, budget))
     {
         return fail("failed to set budget");
     }
@@ -250,7 +250,7 @@ bool App::set_upstream_scheduler_budget(size_t index, size_t budget,
     {
         cfg.upstreams[index].scheduler_budget = budget;
     }
-    tx_mux_.request_tick();
+    tx_mux.request_tick();
     LOG_INF("upstream-%zu scheduler_budget=%zu", index, budget);
     return true;
 }
@@ -285,7 +285,7 @@ bool App::fill_upstream_view(size_t index, ManagerUpstreamView* out) const
         out->fec_timeout_ms = uc.fec_timeout_ms;
     }
     size_t budget = 0;
-    if (radio_upstream_table_.get_budget(index, &budget))
+    if (radio_upstream_table.get_budget(index, &budget))
     {
         out->quanta = budget;
     }
@@ -384,14 +384,14 @@ bool App::console_remove_upstream(uint8_t id, std::string* error)
     {
         return fail(k_enoent);
     }
-    if (!radio_upstream_table_.remove(index))
+    if (!radio_upstream_table.remove(index))
     {
         return fail(k_enoent);
     }
     upstreams.erase(upstreams.begin() + static_cast<ptrdiff_t>(index));
-    tx_mux_.request_tick();
+    tx_mux.request_tick();
     cfg.upstreams.erase(cfg.upstreams.begin() + static_cast<ptrdiff_t>(index));
-    metrics_registry_.remove_prefix("upstream_" + std::to_string(id) + "_");
+    metrics_registry.remove_prefix("upstream_" + std::to_string(id) + "_");
     return true;
 }
 
@@ -575,7 +575,7 @@ bool App::console_list_upstream_rx_stat(
             row.fec_rxpkt = endpoint->fec_air_rx_packets();
         }
         uint64_t gap = 0;
-        if (radio_upstream_table_.peek_seq_lost(index, &gap))
+        if (radio_upstream_table.peek_seq_lost(index, &gap))
         {
             row.rxgap = gap;
         }
@@ -629,41 +629,41 @@ bool App::console_list_upstream_tx_stat(
 
 void App::refresh_host_metrics()
 {
-    metrics_registry_.get_metrics<MetricU64>("rx_drop_domain")
-        ->store(rx_demux_.rx_drop_domain());
-    metrics_registry_.get_metrics<MetricU64>("rx_drop_bus")
-        ->store(rx_demux_.rx_drop_bus());
-    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_mpdu")
-        ->store(tx_mux_.tx_send_fail_mpdu());
-    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_byt")
-        ->store(tx_mux_.tx_send_fail_byt());
-    metrics_registry_.get_metrics<MetricU64>("tx_pacing_txtime_us")
-        ->store(tx_mux_.pacing_txtime_full_us());
-    metrics_registry_.get_metrics<MetricU64>("tx_pacing_gap_us")
-        ->store(tx_mux_.pacing_gap_us());
-    metrics_registry_.get_metrics<MetricU64>("tx_pacing_interval_us")
-        ->store(tx_mux_.pacing_interval_full_us());
+    metrics_registry.get_metrics<MetricU64>("rx_drop_domain")
+        ->store(rx_demux.rx_drop_domain());
+    metrics_registry.get_metrics<MetricU64>("rx_drop_bus")
+        ->store(rx_demux.rx_drop_bus());
+    metrics_registry.get_metrics<MetricU64>("tx_send_fail_mpdu")
+        ->store(tx_mux.tx_send_fail_mpdu());
+    metrics_registry.get_metrics<MetricU64>("tx_send_fail_byt")
+        ->store(tx_mux.tx_send_fail_byt());
+    metrics_registry.get_metrics<MetricU64>("tx_pacing_txtime_us")
+        ->store(tx_mux.pacing_txtime_full_us());
+    metrics_registry.get_metrics<MetricU64>("tx_pacing_gap_us")
+        ->store(tx_mux.pacing_gap_us());
+    metrics_registry.get_metrics<MetricU64>("tx_pacing_interval_us")
+        ->store(tx_mux.pacing_interval_full_us());
     if (radio != nullptr)
     {
         const WifiUdp::counters_s rc = radio->peek_counters();
-        metrics_registry_.get_metrics<MetricU64>("radio_rx_pkt")
+        metrics_registry.get_metrics<MetricU64>("radio_rx_pkt")
             ->store(rc.rx_pkt);
-        metrics_registry_.get_metrics<MetricU64>("radio_rx_byt")
+        metrics_registry.get_metrics<MetricU64>("radio_rx_byt")
             ->store(rc.rx_byte);
-        metrics_registry_.get_metrics<MetricU64>("radio_tx_pkt")
+        metrics_registry.get_metrics<MetricU64>("radio_tx_pkt")
             ->store(rc.tx_pkt);
-        metrics_registry_.get_metrics<MetricU64>("radio_tx_byt")
+        metrics_registry.get_metrics<MetricU64>("radio_tx_byt")
             ->store(rc.tx_byte);
-        metrics_registry_.get_metrics<MetricU64>("radio_fcs_err_pkt")
+        metrics_registry.get_metrics<MetricU64>("radio_fcs_err_pkt")
             ->store(rc.fcs_error_pkt);
-        metrics_registry_.get_metrics<MetricU64>("radio_fcs_unknown_pkt")
+        metrics_registry.get_metrics<MetricU64>("radio_fcs_unknown_pkt")
             ->store(rc.fcs_unknown_pkt);
         const RadioFcsMode fcs = radio->fcs_mode();
-        metrics_registry_.get_metrics<MetricU64>("radio_fcs_mode")
+        metrics_registry.get_metrics<MetricU64>("radio_fcs_mode")
             ->store(static_cast<uint64_t>(fcs));
     }
-    metrics_registry_.get_metrics<MetricU64>("radio_proto_ok")
-        ->store(radio_proto_ok_ ? 1u : 0u);
+    metrics_registry.get_metrics<MetricU64>("radio_proto_ok")
+        ->store(radio_proto_ok ? 1u : 0u);
     for (size_t i = 0; i < upstreams.size(); ++i)
     {
         const Upstream* up = upstreams[i].get();
@@ -678,40 +678,40 @@ void App::refresh_host_metrics()
         }
         const std::string gap_key =
             "upstream_" + std::to_string(view.id) + "_air_rx_gap_loss";
-        metrics_registry_.get_metrics<MetricU64>(gap_key)->store(
+        metrics_registry.get_metrics<MetricU64>(gap_key)->store(
             up->stats().air_rx_gap_loss);
         const std::string oversize_key =
             "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
-        metrics_registry_.get_metrics<MetricU64>(oversize_key)
+        metrics_registry.get_metrics<MetricU64>(oversize_key)
             ->store(up->app_rx_oversize_pkt());
-        metrics_registry_
+        metrics_registry
             .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
                                     "_tx_queue_drops")
             ->store(up->tx_queue_drops());
         const auto transport = up->rx_counters();
         const std::string transport_prefix =
             "upstream_" + std::to_string(view.id) + "_";
-        metrics_registry_
+        metrics_registry
             .get_metrics<MetricU64>(transport_prefix + "app_delivery_attempts")
             ->store(transport.delivery_attempts);
-        metrics_registry_
+        metrics_registry
             .get_metrics<MetricU64>(transport_prefix + "app_delivery_accepted")
             ->store(transport.accepted_packets);
-        metrics_registry_
+        metrics_registry
             .get_metrics<MetricU64>(transport_prefix + "app_delivery_errors")
             ->store(transport.send_errors);
-        metrics_registry_
+        metrics_registry
             .get_metrics<MetricU64>(transport_prefix + "app_delivery_no_peer")
             ->store(transport.no_peer_drops);
-        metrics_registry_
+        metrics_registry
             .get_metrics<MetricU64>(transport_prefix + "app_delivery_closed")
             ->store(transport.closed_drops);
-        metrics_registry_
+        metrics_registry
             .get_metrics<MetricU64>(transport_prefix + "app_delivery_evictions")
             ->store(transport.queue_evictions);
         const std::string fec_unexpected_key =
             "upstream_" + std::to_string(view.id) + "_air_rx_fec_unexpected";
-        metrics_registry_.get_metrics<MetricU64>(fec_unexpected_key)
+        metrics_registry.get_metrics<MetricU64>(fec_unexpected_key)
             ->store(up->fec_air_rx_unexpected());
     }
 }
@@ -730,7 +730,7 @@ bool App::console_get_metrics(const std::vector<std::string>& keys,
     }
     refresh_host_metrics();
     const std::map<std::string, Metrics> snapshot =
-        metrics_registry_.getMetrics(keys);
+        metrics_registry.getMetrics(keys);
     out->clear();
     const auto want_key = [&](const std::string& k) -> bool
     {
@@ -741,11 +741,11 @@ bool App::console_get_metrics(const std::vector<std::string>& keys,
     {
         ManagerMetricView row;
         row.key = "radio_version";
-        if (radio_version_known_)
+        if (radio_version_known)
         {
-            row.value = "v" + std::to_string(radio_version_.x) + "." +
-                        std::to_string(radio_version_.y) + "." +
-                        std::to_string(radio_version_.z);
+            row.value = "v" + std::to_string(radio_version.x) + "." +
+                        std::to_string(radio_version.y) + "." +
+                        std::to_string(radio_version.z);
         }
         else
         {
@@ -827,7 +827,7 @@ void App::apply_radio_caps_mplane(const MplaneResult& r)
 
 void App::send_radio_unavailable_nok(ManagerConsoleReply reply) const
 {
-    if (radio_version_known_ && !radio_proto_ok_)
+    if (radio_version_known && !radio_proto_ok)
     {
         reply.send_nok(k_eproto);
         return;
@@ -837,26 +837,26 @@ void App::send_radio_unavailable_nok(ManagerConsoleReply reply) const
 
 void App::on_radio_version(bool known, const WinjectVersion& v)
 {
-    radio_version_known_ = known;
-    radio_version_ = v;
-    radio_proto_ok_ = known && protocol_compatible(v, own_version());
-    if (known && !radio_proto_ok_)
+    radio_version_known = known;
+    radio_version = v;
+    radio_proto_ok = known && protocol_compatible(v, own_version());
+    if (known && !radio_proto_ok)
     {
         log_proto_mismatch_once(v);
     }
-    if (known && radio_proto_ok_)
+    if (known && radio_proto_ok)
     {
-        proto_mismatch_logged_ = false;
+        proto_mismatch_logged = false;
     }
 }
 
 void App::log_proto_mismatch_once(const WinjectVersion& radio_ver)
 {
-    if (proto_mismatch_logged_)
+    if (proto_mismatch_logged)
     {
         return;
     }
-    proto_mismatch_logged_ = true;
+    proto_mismatch_logged = true;
     const WinjectVersion mgr = own_version();
     LOG_ERR(
         "radio is v%u.%u.%u, manager is v%u.%u.%u: protocol %u.%u != %u.%u, "
@@ -912,8 +912,8 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
     if (mplane_changed)
     {
         drop_console();
-        radio_version_known_ = false;
-        radio_proto_ok_ = false;
+        radio_version_known = false;
+        radio_proto_ok = false;
         apply_configured_fcs();
         schedule_reconnect(std::chrono::milliseconds(0));
     }
@@ -959,7 +959,7 @@ void App::console_radio_info(ManagerConsoleReply reply)
             ManagerRadioView view;
             if (parse_radio_info_body(body, &view))
             {
-                radio_manager_.set_actual_phy(view);
+                radio_manager.set_actual_phy(view);
             }
             reply.send_text(body);
         });
@@ -1090,7 +1090,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
             if (patch.have_modulation)
             {
                 cfg.modulation = Config::canonical_modulation(patch.modulation);
-                radio_manager_.sync_pacing_for_modulation(cfg.modulation);
+                radio_manager.sync_pacing_for_modulation(cfg.modulation);
             }
             if (patch.have_cca)
             {
@@ -1100,7 +1100,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
             ManagerRadioView view;
             if (parse_radio_info_body(mplane_join_body(r1), &view))
             {
-                radio_manager_.set_actual_phy(view);
+                radio_manager.set_actual_phy(view);
             }
             console.send_save_slot(
                 cfg.config_slot,
@@ -1276,7 +1276,7 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
             {
                 if (r.error == "EPROTO")
                 {
-                    radio_proto_ok_ = false;
+                    radio_proto_ok = false;
                 }
                 if (done)
                 {
@@ -1284,7 +1284,7 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
                 }
                 return;
             }
-            radio_manager_.on_phy_programmed();
+            radio_manager.on_phy_programmed();
             if (done)
             {
                 done(true);
@@ -1315,7 +1315,7 @@ bool App::apply_console()
                 drop_console();
                 return;
             }
-            radio_manager_.on_phy_programmed();
+            radio_manager.on_phy_programmed();
         });
     return true;
 }
@@ -1333,8 +1333,8 @@ bool App::hold_console()
         LOG_ERR("console epoll add failed");
         return false;
     }
-    reconnect_timer_.cancel();
-    radio_manager_.on_console_up();
+    reconnect_timer.cancel();
+    radio_manager.on_console_up();
     return true;
 }
 
@@ -1346,12 +1346,12 @@ void App::drop_console()
         reactor->rem_read_rdy(fd);
         reactor->rem_write_rdy(fd);
     }
-    radio_manager_.on_console_down();
+    radio_manager.on_console_down();
     console.cancel_pending();
     console.close();
-    console_deadline_timer_.cancel();
+    console_deadline_timer.cancel();
     console_ok = false;
-    if (!reconnect_timer_.armed())
+    if (!reconnect_timer.armed())
     {
         schedule_reconnect(k_reconnect_interval);
     }
@@ -1359,7 +1359,7 @@ void App::drop_console()
 
 void App::schedule_reconnect(std::chrono::milliseconds after)
 {
-    reconnect_timer_.arm(after,
+    reconnect_timer.arm(after,
                          [this]()
                          {
                              if (console_ok)
@@ -1374,14 +1374,14 @@ void App::schedule_reconnect(std::chrono::milliseconds after)
 void App::on_console_request_deadline(
     std::chrono::steady_clock::time_point deadline)
 {
-    if (console_deadline_timer_.armed() && console_deadline_at_ <= deadline)
+    if (console_deadline_timer.armed() && console_deadline_at <= deadline)
     {
         return;
     }
-    console_deadline_at_ = deadline;
+    console_deadline_at = deadline;
     const auto after = std::chrono::duration_cast<std::chrono::microseconds>(
         deadline - std::chrono::steady_clock::now());
-    console_deadline_timer_.arm(
+    console_deadline_timer.arm(
         after,
         [this]()
         {
@@ -1464,7 +1464,7 @@ void App::arm_stats()
     {
         return;
     }
-    stats_timer_.arm(
+    stats_timer.arm(
         std::chrono::seconds(cfg.stats_sec),
         [this]()
         {
@@ -1474,23 +1474,23 @@ void App::arm_stats()
                     now - last_stats)
                     .count();
             last_stats = now;
-            tx_mux_.log_stats(elapsed_ms / 1000.0);
+            tx_mux.log_stats(elapsed_ms / 1000.0);
             arm_stats();
         });
 }
 
 void App::stop()
 {
-    stop_requested_.store(true);
+    stop_requested.store(true);
     reactor->stop();
 }
 
 void App::begin_shutdown()
 {
     mgr_console.stop();
-    radio_upstream_table_.clear();
+    radio_upstream_table.clear();
     upstreams.clear();
-    tx_mux_.stop();
+    tx_mux.stop();
 }
 
 int App::run()
@@ -1498,13 +1498,13 @@ int App::run()
     LOG_INF("winject-manager %s", WINJECT_VERSION_STRING);
     auto started = std::make_shared<std::promise<void>>();
     auto ready = started->get_future();
-    upstream_reactor_->wake_up(
+    upstream_reactor->wake_up(
         [started]
         {
             started->set_value();
         });
-    upstream_reactor_thread_ = std::thread(
-        [cv = upstream_reactor_]
+    upstream_reactor_thread = std::thread(
+        [cv = upstream_reactor]
         {
             cv->run();
         });
@@ -1513,15 +1513,15 @@ int App::run()
     {
         return 1;
     }
-    reconnect_timer_.bind(reactor.get());
-    console_deadline_timer_.bind(reactor.get());
-    stats_timer_.bind(reactor.get());
+    reconnect_timer.bind(reactor.get());
+    console_deadline_timer.bind(reactor.get());
+    stats_timer.bind(reactor.get());
     console.set_on_deadline(
         [this](std::chrono::steady_clock::time_point deadline)
         {
             on_console_request_deadline(deadline);
         });
-    radio_manager_.set_console_ops(
+    radio_manager.set_console_ops(
         [this](std::function<void(bool, const ManagerRadioView&)> done)
         {
             if (!console_ok)
@@ -1544,7 +1544,7 @@ int App::run()
                         done(false, view);
                         return;
                     }
-                    radio_manager_.set_actual_phy(view);
+                    radio_manager.set_actual_phy(view);
                     done(true, view);
                 });
         },
@@ -1567,7 +1567,7 @@ int App::run()
         {
             drop_console();
         });
-    radio_manager_.set_reconcile_filter(
+    radio_manager.set_reconcile_filter(
         [this](std::function<void(bool ok)> done)
         {
             if (!console_ok)
@@ -1615,22 +1615,22 @@ int App::run()
             "stats logging every %u s (WINJECT_STATS_SEC or winject.stats_sec)",
             cfg.stats_sec);
     }
-    tx_mux_.start(*reactor);
+    tx_mux.start(*reactor);
     arm_stats();
     // stop() before reactor->run() set it running would be lost; the first
     // loop pass runs this and stops then.
     reactor->get_timer().wait_us(0,
                                  [this]()
                                  {
-                                     if (stop_requested_.load())
+                                     if (stop_requested.load())
                                      {
                                          reactor->stop();
                                      }
                                  });
     reactor->run();
     begin_shutdown();
-    upstream_reactor_->stop();
-    upstream_reactor_thread_.join();
+    upstream_reactor->stop();
+    upstream_reactor_thread.join();
     return 0;
 }
 

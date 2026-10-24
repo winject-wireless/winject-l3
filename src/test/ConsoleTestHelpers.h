@@ -131,7 +131,6 @@ public:
     bool start(ManagerConsoleHandlers handlers, std::string* error)
     {
         stop();
-        handlers_ = std::move(handlers);
         const uint16_t port = reserve_free_udp_port();
         if (port == 0)
         {
@@ -141,26 +140,26 @@ public:
             }
             return false;
         }
-        console_in_ = {};
-        console_in_.sin_family = AF_INET;
-        console_in_.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        console_in_.sin_port = htons(port);
+        console_bind = {};
+        console_bind.sin_family = AF_INET;
+        console_bind.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        console_bind.sin_port = htons(port);
 
-        reactor_ = std::make_unique<IOReactor>();
-        if (!service_.start(*reactor_, console_in_, handlers_, error))
+        reactor = std::make_unique<IOReactor>();
+        if (!service.start(*reactor, console_bind, std::move(handlers), error))
         {
-            reactor_.reset();
+            reactor.reset();
             return false;
         }
-        reactor_->get_timer().wait_ms(10000,
+        reactor->get_timer().wait_ms(10000,
                                       [&]()
                                       {
-                                          reactor_->stop();
+                                          reactor->stop();
                                       });
-        worker_ = std::thread(
+        worker = std::thread(
             [&]()
             {
-                reactor_->run();
+                reactor->run();
             });
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         return true;
@@ -171,13 +170,13 @@ public:
     // complete replies and read that state through here.
     bool on_reactor(const std::function<void()>& fn, int timeout_ms = 500)
     {
-        if (reactor_ == nullptr)
+        if (reactor == nullptr)
         {
             return false;
         }
         auto done = std::make_shared<std::promise<void>>();
         std::future<void> finished = done->get_future();
-        reactor_->wake_up(
+        reactor->wake_up(
             [fn, done]()
             {
                 fn();
@@ -214,21 +213,21 @@ public:
 
     void stop()
     {
-        if (reactor_ != nullptr)
+        if (reactor != nullptr)
         {
-            reactor_->stop();
+            reactor->stop();
         }
-        if (worker_.joinable())
+        if (worker.joinable())
         {
-            worker_.join();
+            worker.join();
         }
-        service_.stop();
-        reactor_.reset();
+        service.stop();
+        reactor.reset();
     }
 
     const sockaddr_in& console_in() const
     {
-        return console_in_;
+        return console_bind;
     }
 
     bool send_line(bfc::socket& client, const char* line)
@@ -241,8 +240,8 @@ public:
         const bfc::const_buffer_view view(
             reinterpret_cast<const std::byte*>(wire.data()), wire.size());
         return client.send(view, 0,
-                           reinterpret_cast<const sockaddr*>(&console_in_),
-                           sizeof(console_in_)) > 0;
+                           reinterpret_cast<const sockaddr*>(&console_bind),
+                           sizeof(console_bind)) > 0;
     }
 
     bool recv_line(int fd, std::string* out, int timeout_ms = 500)
@@ -278,11 +277,11 @@ public:
     }
 
 private:
-    ConsoleService service_;
-    std::unique_ptr<IOReactor> reactor_;
-    std::thread worker_;
-    sockaddr_in console_in_{};
-    ManagerConsoleHandlers handlers_;
+    ConsoleService service;
+    std::unique_ptr<IOReactor> reactor;
+    std::thread worker;
+    sockaddr_in console_bind{};
+    ManagerConsoleHandlers handlers;
 };
 
 }  // namespace test

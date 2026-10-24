@@ -15,8 +15,8 @@ public:
 
 private:
     void deliver_datagram(const uint8_t* data, size_t len) override;
-    std::shared_ptr<ReactiveLossyQueue> app_rx_queue_;
-    std::shared_ptr<void> claim_;
+    std::shared_ptr<ReactiveLossyQueue> app_rx_queue;
+    std::shared_ptr<void> claim;
 };
 }  // namespace winject
 #endif

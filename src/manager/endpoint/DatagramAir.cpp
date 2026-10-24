@@ -31,23 +31,23 @@ namespace winject
 template <typename F>
 void DatagramAir::queue_tx(F&& queue)
 {
-    std::shared_ptr<Reactor> reactor;
+    std::shared_ptr<Reactor> wake_reactor;
     {
-        std::lock_guard<std::mutex> lock(tx_mu_);
-        if (!running_)
+        std::lock_guard<std::mutex> lock(tx_mu);
+        if (!running)
         {
             return;
         }
         queue();
-        if (timer_wake_pending_)
+        if (timer_wake_pending)
         {
-            timer_wake_pending_ = false;
-            reactor = reactor_;
+            timer_wake_pending = false;
+            wake_reactor = this->reactor;
         }
     }
-    if (reactor)
+    if (wake_reactor)
     {
-        reactor->wake_up();
+        wake_reactor->wake_up();
     }
 }
 
@@ -64,74 +64,74 @@ bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
                         const char* log_name)
 {
     stop();
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    fec_tx_.disable();
-    fec_rx_ = RsBlockErasure{};
+    std::lock_guard<std::mutex> lock(tx_mu);
+    fec_tx.disable();
+    fec_rx = RsBlockErasure{};
     if (!reactor || !tx_queue || tx_queue->capacity() == 0 || route_bus == 0 ||
         tx_stats == nullptr || tx_stats_mu == nullptr ||
         cfg.fec_timeout_ms < 0 ||
         (cfg.fec_type != FecType::none &&
          cfg.fec_type != FecType::RsBlockErasure) ||
         (cfg.fec_type == FecType::RsBlockErasure &&
-         !fec_tx_.init(cfg.fec_k, cfg.fec_n, cfg.fec_timeout_ms)))
+         !fec_tx.init(cfg.fec_k, cfg.fec_n, cfg.fec_timeout_ms)))
     {
         return false;
     }
-    tx_queue_ = std::move(tx_queue);
-    route_bus_ = route_bus;
-    tx_stats_ = tx_stats;
-    tx_stats_mu_ = tx_stats_mu;
-    deliver_app_ = std::move(deliver_app);
-    reactor_ = std::move(reactor);
-    log_name_ = log_name && log_name[0] ? log_name : "upstream";
-    fec_timeout_ms_ = cfg.fec_timeout_ms;
-    timer_guard_ = std::make_shared<TimerGuard>();
-    timer_guard_->owner = this;
-    running_ = true;
+    this->tx_queue = std::move(tx_queue);
+    this->route_bus = route_bus;
+    this->tx_stats = tx_stats;
+    this->tx_stats_mu = tx_stats_mu;
+    this->deliver_app = std::move(deliver_app);
+    this->reactor = std::move(reactor);
+    this->log_name = log_name && log_name[0] ? log_name : "upstream";
+    fec_timeout_setting = cfg.fec_timeout_ms;
+    timer_guard = std::make_shared<TimerGuard>();
+    timer_guard->owner = this;
+    running = true;
     return true;
 }
 
 void DatagramAir::stop()
 {
     // start/stop themselves are serialized by the endpoint lifecycle owner.
-    auto guard = timer_guard_;
+    auto guard = timer_guard;
     std::unique_lock<std::mutex> fence;
     if (guard)
     {
         fence = std::unique_lock<std::mutex>(guard->mutex);
         guard->owner = nullptr;
     }
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    running_ = false;
+    std::lock_guard<std::mutex> lock(tx_mu);
+    running = false;
     cancel_fec_timer_locked();
-    if (rx_timer_armed_ && reactor_)
+    if (rx_timer_armed && reactor)
     {
-        reactor_->get_timer().cancel(rx_timer_id_);
+        reactor->get_timer().cancel(rx_timer_id);
     }
-    rx_timer_armed_ = false;
-    reactor_.reset();
-    tx_queue_.reset();
-    route_bus_ = 0;
-    tx_stats_ = nullptr;
-    tx_stats_mu_ = nullptr;
-    deliver_app_ = nullptr;
-    fec_tx_.disable();
+    rx_timer_armed = false;
+    reactor.reset();
+    tx_queue.reset();
+    route_bus = 0;
+    tx_stats = nullptr;
+    tx_stats_mu = nullptr;
+    deliver_app = nullptr;
+    fec_tx.disable();
 }
 
 void DatagramAir::push_tx(bfc::sized_buffer pkt, bool is_fec)
 {
-    if (pkt.empty() || route_bus_ == 0 || tx_stats_ == nullptr ||
-        tx_stats_mu_ == nullptr)
+    if (pkt.empty() || route_bus == 0 || tx_stats == nullptr ||
+        tx_stats_mu == nullptr)
     {
         return;
     }
-    const auto capacity = tx_queue_->capacity();
+    const auto capacity = tx_queue->capacity();
     const size_t size = pkt.size();
     bfc::sized_buffer framed(k_slot_prefix_len + size);
     size_t framed_len = 0;
     {
-        std::lock_guard<std::mutex> lock(*tx_stats_mu_);
-        if (!stamp_slot_payload(tx_stats_, route_bus_, is_fec,
+        std::lock_guard<std::mutex> lock(*tx_stats_mu);
+        if (!stamp_slot_payload(tx_stats, route_bus, is_fec,
                                 reinterpret_cast<const uint8_t*>(pkt.data()),
                                 size, reinterpret_cast<uint8_t*>(framed.data()),
                                 framed.size(), &framed_len))
@@ -141,15 +141,15 @@ void DatagramAir::push_tx(bfc::sized_buffer pkt, bool is_fec)
     }
     auto shared =
         bfc::shared_sized_buffer::copy_from(framed.data(), framed_len);
-    const auto before = tx_queue_->push(std::move(shared));
+    const auto before = tx_queue->push(std::move(shared));
     if (capacity == 0 || before >= capacity)
     {
-        tx_queue_drops_.fetch_add(1, std::memory_order_relaxed);
+        tx_queue_drops_acc.fetch_add(1, std::memory_order_relaxed);
     }
     if (is_fec)
     {
-        fec_air_tx_bytes_.fetch_add(size, std::memory_order_relaxed);
-        fec_air_tx_packets_.fetch_add(1, std::memory_order_relaxed);
+        fec_air_tx_bytes_acc.fetch_add(size, std::memory_order_relaxed);
+        fec_air_tx_packets_acc.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -169,19 +169,19 @@ void DatagramAir::deliver(const uint8_t* data, size_t len)
     }
     DeliverApp callback;
     {
-        std::lock_guard<std::mutex> lock(tx_mu_);
-        if (!running_)
+        std::lock_guard<std::mutex> lock(tx_mu);
+        if (!running)
         {
             return;
         }
-        callback = deliver_app_;
+        callback = deliver_app;
     }
     if (!callback)
     {
         return;
     }
-    app_rx_bytes_.fetch_add(len, std::memory_order_relaxed);
-    app_rx_packets_.fetch_add(1, std::memory_order_relaxed);
+    app_rx_bytes_acc.fetch_add(len, std::memory_order_relaxed);
+    app_rx_packets_acc.fetch_add(1, std::memory_order_relaxed);
     callback(data, len);
 }
 
@@ -194,20 +194,20 @@ void DatagramAir::accept_app_datagram(const uint8_t* data, size_t len)
     queue_tx(
         [&]()
         {
-            app_tx_bytes_.fetch_add(len, std::memory_order_relaxed);
-            app_tx_packets_.fetch_add(1, std::memory_order_relaxed);
-            const size_t limit = fec_tx_.enabled()
+            app_tx_bytes_acc.fetch_add(len, std::memory_order_relaxed);
+            app_tx_packets_acc.fetch_add(1, std::memory_order_relaxed);
+            const size_t limit = fec_tx.enabled()
                                      ? RsBlockErasure::max_original()
                                      : k_stream_payload_max;
             if (len > limit)
             {
-                app_rx_oversize_pkt_.fetch_add(1, std::memory_order_relaxed);
+                app_rx_oversize_pkt_acc.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
-            if (fec_tx_.enabled())
+            if (fec_tx.enabled())
             {
                 std::vector<std::vector<uint8_t>> shards;
-                fec_tx_.push_app(data, len, &shards);
+                fec_tx.push_app(data, len, &shards);
                 enqueue_fec(shards);
                 sync_fec_timer_after_push();
             }
@@ -230,30 +230,30 @@ void DatagramAir::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
         return;
     }
     fec_vendor::fec_rx_payload_list payloads;
-    std::shared_ptr<Reactor> reactor;
+    std::shared_ptr<Reactor> wake_reactor;
     {
-        std::lock_guard<std::mutex> lock(tx_mu_);
-        if (!running_)
+        std::lock_guard<std::mutex> lock(tx_mu);
+        if (!running)
         {
             return;
         }
-        fec_air_rx_bytes_.fetch_add(pkt.size(), std::memory_order_relaxed);
-        fec_air_rx_packets_.fetch_add(1, std::memory_order_relaxed);
-        if (!fec_tx_.enabled())
+        fec_air_rx_bytes_acc.fetch_add(pkt.size(), std::memory_order_relaxed);
+        fec_air_rx_packets_acc.fetch_add(1, std::memory_order_relaxed);
+        if (!fec_tx.enabled())
         {
-            fec_air_rx_unexpected_.fetch_add(1, std::memory_order_relaxed);
+            fec_air_rx_unexpected_acc.fetch_add(1, std::memory_order_relaxed);
         }
-        fec_rx_.push_air(std::move(pkt), &payloads);
+        fec_rx.push_air(std::move(pkt), &payloads);
         arm_rx_timer();
-        if (timer_wake_pending_)
+        if (timer_wake_pending)
         {
-            timer_wake_pending_ = false;
-            reactor = reactor_;
+            timer_wake_pending = false;
+            wake_reactor = this->reactor;
         }
     }
-    if (reactor)
+    if (wake_reactor)
     {
-        reactor->wake_up();
+        wake_reactor->wake_up();
     }
     for (const auto& payload : payloads)
     {
@@ -263,28 +263,28 @@ void DatagramAir::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
 
 void DatagramAir::cancel_fec_timer_locked()
 {
-    ++tx_timer_generation_;
-    if (fec_timer_armed_ && reactor_)
+    ++tx_timer_generation;
+    if (fec_timer_armed && reactor)
     {
-        reactor_->get_timer().cancel(fec_timer_id_);
+        reactor->get_timer().cancel(fec_timer_id);
     }
-    fec_timer_armed_ = false;
+    fec_timer_armed = false;
 }
 
 void DatagramAir::sync_fec_timer_after_push()
 {
     cancel_fec_timer_locked();
     std::chrono::steady_clock::time_point deadline;
-    if (!reactor_ || !fec_tx_.next_deadline(&deadline))
+    if (!reactor || !fec_tx.next_deadline(&deadline))
     {
         return;
     }
     const auto delay = std::chrono::duration_cast<std::chrono::microseconds>(
                            deadline - std::chrono::steady_clock::now())
                            .count();
-    const auto generation = tx_timer_generation_;
-    auto guard = timer_guard_;
-    fec_timer_id_ = reactor_->get_timer().wait_us(
+    const auto generation = tx_timer_generation;
+    auto guard = timer_guard;
+    fec_timer_id = reactor->get_timer().wait_us(
         std::max<int64_t>(0, delay),
         [guard, generation]()
         {
@@ -299,8 +299,8 @@ void DatagramAir::sync_fec_timer_after_push()
                 guard->owner->on_fec_timer(generation);
             }
         });
-    fec_timer_armed_ = true;
-    timer_wake_pending_ = true;
+    fec_timer_armed = true;
+    timer_wake_pending = true;
 }
 
 void DatagramAir::on_fec_timer(uint64_t generation)
@@ -308,13 +308,13 @@ void DatagramAir::on_fec_timer(uint64_t generation)
     queue_tx(
         [&]()
         {
-            if (generation != tx_timer_generation_)
+            if (generation != tx_timer_generation)
             {
                 return;
             }
-            fec_timer_armed_ = false;
+            fec_timer_armed = false;
             std::vector<std::vector<uint8_t>> shards;
-            fec_tx_.on_tick(&shards);
+            fec_tx.on_tick(&shards);
             enqueue_fec(shards);
             sync_fec_timer_after_push();
         });
@@ -322,12 +322,12 @@ void DatagramAir::on_fec_timer(uint64_t generation)
 
 void DatagramAir::arm_rx_timer()
 {
-    if (!reactor_ || rx_timer_armed_ || !fec_rx_.has_pending_rx())
+    if (!reactor || rx_timer_armed || !fec_rx.has_pending_rx())
     {
         return;
     }
-    auto guard = timer_guard_;
-    rx_timer_id_ = reactor_->get_timer().wait_ms(
+    auto guard = timer_guard;
+    rx_timer_id = reactor->get_timer().wait_ms(
         k_rx_poll_ms,
         [guard]()
         {
@@ -342,24 +342,24 @@ void DatagramAir::arm_rx_timer()
                 guard->owner->on_rx_timer();
             }
         });
-    rx_timer_armed_ = true;
-    timer_wake_pending_ = true;
+    rx_timer_armed = true;
+    timer_wake_pending = true;
 }
 
 void DatagramAir::on_rx_timer()
 {
     fec_vendor::fec_rx_payload_list payloads;
     {
-        std::lock_guard<std::mutex> lock(tx_mu_);
-        if (!running_)
+        std::lock_guard<std::mutex> lock(tx_mu);
+        if (!running)
         {
             return;
         }
-        rx_timer_armed_ = false;
-        fec_rx_.poll_rx(&payloads);
+        rx_timer_armed = false;
+        fec_rx.poll_rx(&payloads);
         arm_rx_timer();
         // Already on the CV reactor; the next timer deadline is observed there.
-        timer_wake_pending_ = false;
+        timer_wake_pending = false;
     }
     for (const auto& payload : payloads)
     {
@@ -371,7 +371,7 @@ void DatagramAir::flush_fec_locked()
 {
     cancel_fec_timer_locked();
     std::vector<std::vector<uint8_t>> shards;
-    fec_tx_.flush(&shards);
+    fec_tx.flush(&shards);
     enqueue_fec(shards);
 }
 
@@ -404,11 +404,11 @@ bool DatagramAir::set_fec(FecType type, int k, int n, std::string* error)
             flush_fec_locked();
             if (type == FecType::none)
             {
-                fec_tx_.disable();
+                fec_tx.disable();
             }
             else
             {
-                ok = fec_tx_.init(k, n, fec_timeout_ms_);
+                ok = fec_tx.init(k, n, fec_timeout_setting);
             }
         });
     return ok;
@@ -427,42 +427,42 @@ bool DatagramAir::set_fec_timeout_ms(int timeout_ms, std::string* error)
     queue_tx(
         [&]()
         {
-            if (fec_tx_.enabled())
+            if (fec_tx.enabled())
             {
-                const int k = fec_tx_.k(), n = fec_tx_.n();
+                const int k = fec_tx.k(), n = fec_tx.n();
                 flush_fec_locked();
-                fec_tx_.init(k, n, timeout_ms);
+                fec_tx.init(k, n, timeout_ms);
             }
-            fec_timeout_ms_ = timeout_ms;
+            fec_timeout_setting = timeout_ms;
         });
     return true;
 }
 
 int DatagramAir::fec_timeout_ms() const
 {
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    return fec_timeout_ms_;
+    std::lock_guard<std::mutex> lock(tx_mu);
+    return fec_timeout_setting;
 }
 
 uint64_t DatagramAir::fec_recovered() const
 {
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    return fec_rx_.recovered();
+    std::lock_guard<std::mutex> lock(tx_mu);
+    return fec_rx.recovered();
 }
 
 uint64_t DatagramAir::fec_decode_fail() const
 {
-    std::lock_guard<std::mutex> lock(tx_mu_);
+    std::lock_guard<std::mutex> lock(tx_mu);
     // Preserve the upstream aggregate's inclusion of malformed/mismatched
     // shards.
-    return fec_rx_.decode_fail() + fec_rx_.hdr_errors() + fec_rx_.kn_mismatch();
+    return fec_rx.decode_fail() + fec_rx.hdr_errors() + fec_rx.kn_mismatch();
 }
 
 void DatagramAir::tx_pending_stats(uint64_t* pkt, uint64_t* byt) const
 {
-    std::lock_guard<std::mutex> lock(tx_mu_);
+    std::lock_guard<std::mutex> lock(tx_mu);
     uint64_t packets = 0, bytes = 0;
-    fec_tx_.pending_tx_stats(&packets, &bytes);
+    fec_tx.pending_tx_stats(&packets, &bytes);
     if (pkt)
     {
         *pkt = packets;
@@ -475,18 +475,18 @@ void DatagramAir::tx_pending_stats(uint64_t* pkt, uint64_t* byt) const
 
 void DatagramAir::get_fec(FecType* type, int* k, int* n) const
 {
-    std::lock_guard<std::mutex> lock(tx_mu_);
+    std::lock_guard<std::mutex> lock(tx_mu);
     if (type)
     {
-        *type = fec_tx_.enabled() ? FecType::RsBlockErasure : FecType::none;
+        *type = fec_tx.enabled() ? FecType::RsBlockErasure : FecType::none;
     }
     if (k)
     {
-        *k = fec_tx_.enabled() ? fec_tx_.k() : 0;
+        *k = fec_tx.enabled() ? fec_tx.k() : 0;
     }
     if (n)
     {
-        *n = fec_tx_.enabled() ? fec_tx_.n() : 0;
+        *n = fec_tx.enabled() ? fec_tx.n() : 0;
     }
 }
 

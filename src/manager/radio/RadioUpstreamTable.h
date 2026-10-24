@@ -36,26 +36,26 @@ public:
 
     std::mutex& mutex()
     {
-        return mu_;
+        return mu;
     }
     const std::mutex& mutex() const
     {
-        return mu_;
+        return mu;
     }
     // Caller must hold mutex().
     std::vector<RadioUpstreamEntry>& entries()
     {
-        return entries_;
+        return upstream_entries;
     }
     // Caller must hold mutex().
     const std::vector<RadioUpstreamEntry>& entries() const
     {
-        return entries_;
+        return upstream_entries;
     }
 
 private:
-    mutable std::mutex mu_;
-    std::vector<RadioUpstreamEntry> entries_;
+    mutable std::mutex mu;
+    std::vector<RadioUpstreamEntry> upstream_entries;
 };
 
 }  // namespace winject

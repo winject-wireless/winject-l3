@@ -27,8 +27,8 @@ class CvRun
 {
 public:
     explicit CvRun(bfc::cv_reactor<>& reactor)
-        : reactor_(reactor),
-          thread_(
+        : reactor(reactor),
+          thread(
               [&reactor]()
               {
                   reactor.run();
@@ -38,10 +38,10 @@ public:
 
     ~CvRun()
     {
-        reactor_.stop();
-        if (thread_.joinable())
+        reactor.stop();
+        if (thread.joinable())
         {
-            thread_.join();
+            thread.join();
         }
     }
 
@@ -49,8 +49,8 @@ public:
     CvRun& operator=(const CvRun&) = delete;
 
 private:
-    bfc::cv_reactor<>& reactor_;
-    std::thread thread_;
+    bfc::cv_reactor<>& reactor;
+    std::thread thread;
 };
 
 bool run_io_brief(IOReactor& reactor)

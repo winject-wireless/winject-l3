@@ -15,7 +15,7 @@ enum class UpstreamMode
     udp_static,
     udp_client,
     udp_server,
-    // In-process datagrams via named lossy queues. See HostEndpoint.
+    // In-process datagrams via named lossy queues. See QueueUpstream.
     queue,
 };
 
@@ -73,6 +73,7 @@ struct UpstreamConfig
     uint8_t bus_tx = 0;
     uint8_t bus_rx = 0;
     size_t scheduler_budget = 256;
+    size_t rx_queue_capacity = 1024;
     FecType fec_type = FecType::none;
     int fec_k = 0;
     int fec_n = 0;

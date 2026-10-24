@@ -23,43 +23,43 @@ public:
 
     void bind(IOReactor* reactor)
     {
-        reactor_ = reactor;
+        this->reactor = reactor;
     }
 
     void arm(std::chrono::microseconds after, std::function<void()> fn)
     {
         cancel();
-        if (reactor_ == nullptr)
+        if (this->reactor == nullptr)
         {
             return;
         }
-        const uint64_t seq = ++seq_;
+        const uint64_t seq = ++this->seq;
         const IOTimerId id =
-            reactor_->get_timer().wait_us(after.count() > 0 ? after.count() : 0,
+            this->reactor->get_timer().wait_us(after.count() > 0 ? after.count() : 0,
                                           [this, seq, fn = std::move(fn)]()
                                           {
-                                              if (!armed_ || armed_->seq != seq)
+                                              if (!armed_state || armed_state->seq != seq)
                                               {
                                                   return;
                                               }
-                                              armed_.reset();
+                                              armed_state.reset();
                                               fn();
                                           });
-        armed_ = Armed{id, seq};
+        armed_state = Armed{id, seq};
     }
 
     void cancel()
     {
-        if (armed_ && reactor_ != nullptr)
+        if (armed_state && this->reactor != nullptr)
         {
-            reactor_->get_timer().cancel(armed_->id);
+            this->reactor->get_timer().cancel(armed_state->id);
         }
-        armed_.reset();
+        armed_state.reset();
     }
 
     bool armed() const
     {
-        return armed_.has_value();
+        return armed_state.has_value();
     }
 
 private:
@@ -69,9 +69,9 @@ private:
         uint64_t seq;
     };
 
-    IOReactor* reactor_ = nullptr;
-    std::optional<Armed> armed_;
-    uint64_t seq_ = 0;
+    IOReactor* reactor = nullptr;
+    std::optional<Armed> armed_state;
+    uint64_t seq = 0;
 };
 
 }  // namespace winject

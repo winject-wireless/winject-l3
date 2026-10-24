@@ -60,12 +60,12 @@ private:
     std::vector<uint8_t> frame_sdu(const std::vector<uint8_t>& sdu, bool fec)
     {
         std::vector<uint8_t> slot(LCHeader::k_len + sdu.size());
-        LCHeader::write(slot.data(), k_bus, seq_, fec);
-        seq_ = static_cast<uint16_t>((seq_ + 1) & LCHeader::k_seq_mask);
+        LCHeader::write(slot.data(), k_bus, seq, fec);
+        seq = static_cast<uint16_t>((seq + 1) & LCHeader::k_seq_mask);
         memcpy(slot.data() + LCHeader::k_len, sdu.data(), sdu.size());
         return slot;
     }
-    uint16_t seq_ = 0;
+    uint16_t seq = 0;
 };
 
 std::vector<uint8_t> make_sdu(size_t len, uint8_t tag)
@@ -84,59 +84,60 @@ class TxMuxHarness
 {
 public:
     explicit TxMuxHarness(size_t budget, const char* modulation = "OFDM_54M")
-        : radio_sock_(bfc::create_udp4()), mux_(table_)
+        : radio_sock(bfc::create_udp4()), tx_mux(upstream_table)
     {
         sockaddr_in bind_addr = {};
         bind_addr.sin_family = AF_INET;
         bind_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         bind_addr.sin_port = 0;
-        EXPECT_EQ(radio_sock_.bind(bind_addr), 0);
+        EXPECT_EQ(radio_sock.bind(bind_addr), 0);
         socklen_t len = sizeof(bind_addr);
-        getsockname(radio_sock_.fd(), reinterpret_cast<sockaddr*>(&bind_addr),
+        getsockname(radio_sock.fd(), reinterpret_cast<sockaddr*>(&bind_addr),
                     &len);
 
-        radio_ = std::make_shared<WifiUdp>();
-        EXPECT_TRUE(radio_->open(reactor_, [](bfc::shared_sized_buffer) {}));
-        radio_->set_tx_dplane(bind_addr);
+        radio_udp = std::make_shared<WifiUdp>();
+        EXPECT_TRUE(radio_udp->open(io_reactor, [](bfc::shared_sized_buffer) {}));
+        radio_udp->set_tx_dplane(bind_addr);
 
-        up_ = std::make_shared<QueueProducer>(mux_.make_tx_queue());
-        table_.add(std::make_shared<ReactiveLossyQueue>(), up_->txq.queue, radio_,
-                   QueueProducer::k_bus, QueueProducer::k_bus, budget);
-        mux_.configure(1);
+        producer = std::make_shared<QueueProducer>(tx_mux.make_tx_queue());
+        upstream_table.add(std::make_shared<ReactiveLossyQueue>(), producer->txq.queue,
+                           radio_udp, QueueProducer::k_bus, QueueProducer::k_bus,
+                           budget);
+        tx_mux.configure(1);
         PhyMode mode;
         EXPECT_TRUE(phy_mode_from_name(modulation, 1, &mode));
-        mux_.set_phy_mode(mode);
+        tx_mux.set_phy_mode(mode);
     }
 
     ~TxMuxHarness()
     {
-        mux_.stop();
-        radio_->close();
+        tx_mux.stop();
+        radio_udp->close();
     }
 
     QueueProducer& up()
     {
-        return *up_;
+        return *producer;
     }
 
     TxMux& mux()
     {
-        return mux_;
+        return tx_mux;
     }
 
     RadioUpstreamTable& table()
     {
-        return table_;
+        return upstream_table;
     }
 
     void fail_radio_sends()
     {
-        radio_->set_tx_dplane(sockaddr_in{});
+        radio_udp->set_tx_dplane(sockaddr_in{});
     }
 
     IOReactor& reactor()
     {
-        return reactor_;
+        return io_reactor;
     }
     void collect_pending()
     {
@@ -144,56 +145,56 @@ public:
     }
     size_t received_count() const
     {
-        return received_.size();
+        return received_pdus.size();
     }
 
     // The test owns the reactor; TxMux must not create another thread.
     size_t run_for(std::chrono::microseconds window)
     {
-        mux_.start(reactor_);
-        reactor_.get_timer().wait_us(window.count(),
+        tx_mux.start(io_reactor);
+        io_reactor.get_timer().wait_us(window.count(),
                                      [this]()
                                      {
-                                         reactor_.stop();
+                                         io_reactor.stop();
                                      });
-        reactor_.run();
+        io_reactor.run();
         collect();
-        return received_.size();
+        return received_pdus.size();
     }
 
     size_t wait_received(size_t count, std::chrono::milliseconds timeout)
     {
         const auto end = std::chrono::steady_clock::now() + timeout;
-        while (received_.size() < count &&
+        while (received_pdus.size() < count &&
                std::chrono::steady_clock::now() < end)
         {
             run_for(std::chrono::milliseconds(1));
         }
-        return received_.size();
+        return received_pdus.size();
     }
 
     std::vector<std::vector<uint8_t>> drain()
     {
-        mux_.start(reactor_);
-        mux_.request_tick();
+        tx_mux.start(io_reactor);
+        tx_mux.request_tick();
         const auto end =
             std::chrono::steady_clock::now() + std::chrono::seconds(1);
-        while (!up_->txq.empty() && std::chrono::steady_clock::now() < end)
+        while (!producer->txq.empty() && std::chrono::steady_clock::now() < end)
         {
             run_for(std::chrono::milliseconds(2));
         }
         collect();
-        return received_;
+        return received_pdus;
     }
 
     // LC FEC flag and seq of every slot collected, in order.
     const std::vector<bool>& received_fec() const
     {
-        return received_fec_;
+        return received_fec_flags;
     }
     const std::vector<uint16_t>& received_seq() const
     {
-        return received_seq_;
+        return received_seq_nums;
     }
 
 private:
@@ -203,7 +204,7 @@ private:
         for (;;)
         {
             const ssize_t n =
-                ::recv(radio_sock_.fd(), buf, sizeof(buf), MSG_DONTWAIT);
+                ::recv(radio_sock.fd(), buf, sizeof(buf), MSG_DONTWAIT);
             if (n <= 0)
             {
                 return;
@@ -222,22 +223,22 @@ private:
                 const uint8_t* p =
                     reinterpret_cast<const uint8_t*>(slot.data());
                 EXPECT_EQ(p[0], QueueProducer::k_bus);
-                received_fec_.push_back(LCHeader::read_is_fec(p));
-                received_seq_.push_back(LCHeader::read_seq(p));
-                received_.emplace_back(p + LCHeader::k_len, p + slot.size());
+                received_fec_flags.push_back(LCHeader::read_is_fec(p));
+                received_seq_nums.push_back(LCHeader::read_seq(p));
+                received_pdus.emplace_back(p + LCHeader::k_len, p + slot.size());
             }
         }
     }
 
-    IOReactor reactor_;
-    bfc::socket radio_sock_;
-    RadioUpstreamTable table_;
-    TxMux mux_;
-    std::shared_ptr<WifiUdp> radio_;
-    std::shared_ptr<QueueProducer> up_;
-    std::vector<std::vector<uint8_t>> received_;
-    std::vector<bool> received_fec_;
-    std::vector<uint16_t> received_seq_;
+    IOReactor io_reactor;
+    bfc::socket radio_sock;
+    RadioUpstreamTable upstream_table;
+    TxMux tx_mux;
+    std::shared_ptr<WifiUdp> radio_udp;
+    std::shared_ptr<QueueProducer> producer;
+    std::vector<std::vector<uint8_t>> received_pdus;
+    std::vector<bool> received_fec_flags;
+    std::vector<uint16_t> received_seq_nums;
 };
 
 }  // namespace
