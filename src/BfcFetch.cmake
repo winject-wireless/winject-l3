@@ -2,7 +2,7 @@ include(FetchContent)
 
 FetchContent_Declare(bfc
     GIT_REPOSITORY https://github.com/therooftopprinz/BFC.git
-    GIT_TAG 7144cdc3216f4b660a91b9b1d2d661b4d585e181
+    GIT_TAG 6c02a495d1a2cf4a8a13dfa6b25b342780527c89
 )
 FetchContent_GetProperties(bfc)
 if(NOT bfc_POPULATED)
