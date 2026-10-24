@@ -11,7 +11,6 @@
 
 namespace
 {
-constexpr size_t k_max_tx_queue = 1024;
 constexpr int k_rx_poll_ms = 10;
 
 bfc::sized_buffer make_pkt(const uint8_t* data, size_t len)
@@ -32,32 +31,23 @@ namespace winject
 template <typename F>
 void DatagramAir::queue_tx(F&& queue)
 {
-    Wake tx_wake, timer_wake;
+    std::shared_ptr<Reactor> reactor;
     {
         std::lock_guard<std::mutex> lock(tx_mu_);
         if (!running_)
         {
             return;
         }
-        const bool had_tx = has_tx_locked();
         queue();
-        if (!had_tx && has_tx_locked())
-        {
-            tx_wake = tx_wake_;
-        }
         if (timer_wake_pending_)
         {
             timer_wake_pending_ = false;
-            timer_wake = timer_wake_;
+            reactor = reactor_;
         }
     }
-    if (timer_wake)
+    if (reactor)
     {
-        timer_wake();
-    }
-    if (tx_wake)
-    {
-        tx_wake();
+        reactor->wake_up();
     }
 }
 
@@ -66,16 +56,20 @@ DatagramAir::~DatagramAir()
     stop();
 }
 
-bool DatagramAir::start(Wake tx_wake, DeliverApp deliver_app,
-                        FecTimer* fec_timer, Wake timer_wake,
-                        const UpstreamConfig& cfg, const char* log_name)
+bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
+                        DeliverApp deliver_app,
+                        std::shared_ptr<Reactor> reactor,
+                        const UpstreamConfig& cfg, uint8_t route_bus,
+                        UpstreamStats* tx_stats, std::mutex* tx_stats_mu,
+                        const char* log_name)
 {
     stop();
     std::lock_guard<std::mutex> lock(tx_mu_);
     fec_tx_.disable();
     fec_rx_ = RsBlockErasure{};
-    txq_.clear();
-    if (cfg.fec_timeout_ms < 0 ||
+    if (!reactor || !tx_queue || tx_queue->capacity() == 0 || route_bus == 0 ||
+        tx_stats == nullptr || tx_stats_mu == nullptr ||
+        cfg.fec_timeout_ms < 0 ||
         (cfg.fec_type != FecType::none &&
          cfg.fec_type != FecType::RsBlockErasure) ||
         (cfg.fec_type == FecType::RsBlockErasure &&
@@ -83,10 +77,12 @@ bool DatagramAir::start(Wake tx_wake, DeliverApp deliver_app,
     {
         return false;
     }
-    tx_wake_ = std::move(tx_wake);
+    tx_queue_ = std::move(tx_queue);
+    route_bus_ = route_bus;
+    tx_stats_ = tx_stats;
+    tx_stats_mu_ = tx_stats_mu;
     deliver_app_ = std::move(deliver_app);
-    timer_wake_ = std::move(timer_wake);
-    fec_timer_ = fec_timer;
+    reactor_ = std::move(reactor);
     log_name_ = log_name && log_name[0] ? log_name : "upstream";
     fec_timeout_ms_ = cfg.fec_timeout_ms;
     timer_guard_ = std::make_shared<TimerGuard>();
@@ -108,31 +104,53 @@ void DatagramAir::stop()
     std::lock_guard<std::mutex> lock(tx_mu_);
     running_ = false;
     cancel_fec_timer_locked();
-    if (rx_timer_armed_ && fec_timer_)
+    if (rx_timer_armed_ && reactor_)
     {
-        fec_timer_->cancel(rx_timer_id_);
+        reactor_->get_timer().cancel(rx_timer_id_);
     }
     rx_timer_armed_ = false;
-    fec_timer_ = nullptr;
-    tx_wake_ = nullptr;
+    reactor_.reset();
+    tx_queue_.reset();
+    route_bus_ = 0;
+    tx_stats_ = nullptr;
+    tx_stats_mu_ = nullptr;
     deliver_app_ = nullptr;
-    timer_wake_ = nullptr;
-    txq_.clear();
     fec_tx_.disable();
 }
 
 void DatagramAir::push_tx(bfc::sized_buffer pkt, bool is_fec)
 {
-    if (pkt.empty())
+    if (pkt.empty() || route_bus_ == 0 || tx_stats_ == nullptr ||
+        tx_stats_mu_ == nullptr)
     {
         return;
     }
-    if (txq_.size() >= k_max_tx_queue)
+    const auto capacity = tx_queue_->capacity();
+    const size_t size = pkt.size();
+    bfc::sized_buffer framed(k_slot_prefix_len + size);
+    size_t framed_len = 0;
     {
-        txq_.pop_front();
+        std::lock_guard<std::mutex> lock(*tx_stats_mu_);
+        if (!stamp_slot_payload(tx_stats_, route_bus_, is_fec,
+                                reinterpret_cast<const uint8_t*>(pkt.data()),
+                                size, reinterpret_cast<uint8_t*>(framed.data()),
+                                framed.size(), &framed_len))
+        {
+            return;
+        }
+    }
+    auto shared =
+        bfc::shared_sized_buffer::copy_from(framed.data(), framed_len);
+    const auto before = tx_queue_->push(std::move(shared));
+    if (capacity == 0 || before >= capacity)
+    {
         tx_queue_drops_.fetch_add(1, std::memory_order_relaxed);
     }
-    txq_.push_back(TxItem{std::move(pkt), is_fec});
+    if (is_fec)
+    {
+        fec_air_tx_bytes_.fetch_add(size, std::memory_order_relaxed);
+        fec_air_tx_packets_.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void DatagramAir::enqueue_fec(const std::vector<std::vector<uint8_t>>& shards)
@@ -212,7 +230,7 @@ void DatagramAir::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
         return;
     }
     fec_vendor::fec_rx_payload_list payloads;
-    Wake timer_wake;
+    std::shared_ptr<Reactor> reactor;
     {
         std::lock_guard<std::mutex> lock(tx_mu_);
         if (!running_)
@@ -230,12 +248,12 @@ void DatagramAir::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
         if (timer_wake_pending_)
         {
             timer_wake_pending_ = false;
-            timer_wake = timer_wake_;
+            reactor = reactor_;
         }
     }
-    if (timer_wake)
+    if (reactor)
     {
-        timer_wake();
+        reactor->wake_up();
     }
     for (const auto& payload : payloads)
     {
@@ -246,9 +264,9 @@ void DatagramAir::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
 void DatagramAir::cancel_fec_timer_locked()
 {
     ++tx_timer_generation_;
-    if (fec_timer_armed_ && fec_timer_)
+    if (fec_timer_armed_ && reactor_)
     {
-        fec_timer_->cancel(fec_timer_id_);
+        reactor_->get_timer().cancel(fec_timer_id_);
     }
     fec_timer_armed_ = false;
 }
@@ -257,7 +275,7 @@ void DatagramAir::sync_fec_timer_after_push()
 {
     cancel_fec_timer_locked();
     std::chrono::steady_clock::time_point deadline;
-    if (!fec_timer_ || !fec_tx_.next_deadline(&deadline))
+    if (!reactor_ || !fec_tx_.next_deadline(&deadline))
     {
         return;
     }
@@ -266,16 +284,21 @@ void DatagramAir::sync_fec_timer_after_push()
                            .count();
     const auto generation = tx_timer_generation_;
     auto guard = timer_guard_;
-    fec_timer_id_ =
-        fec_timer_->wait_us(std::max<int64_t>(0, delay),
-                            [guard, generation]()
-                            {
-                                std::lock_guard<std::mutex> fence(guard->mutex);
-                                if (guard->owner)
-                                {
-                                    guard->owner->on_fec_timer(generation);
-                                }
-                            });
+    fec_timer_id_ = reactor_->get_timer().wait_us(
+        std::max<int64_t>(0, delay),
+        [guard, generation]()
+        {
+            auto lease = guard->lifetime.lock();
+            if (guard->managed && !lease)
+            {
+                return;
+            }
+            std::lock_guard<std::mutex> fence(guard->mutex);
+            if (guard->owner)
+            {
+                guard->owner->on_fec_timer(generation);
+            }
+        });
     fec_timer_armed_ = true;
     timer_wake_pending_ = true;
 }
@@ -299,21 +322,26 @@ void DatagramAir::on_fec_timer(uint64_t generation)
 
 void DatagramAir::arm_rx_timer()
 {
-    if (!fec_timer_ || rx_timer_armed_ || !fec_rx_.has_pending_rx())
+    if (!reactor_ || rx_timer_armed_ || !fec_rx_.has_pending_rx())
     {
         return;
     }
     auto guard = timer_guard_;
-    rx_timer_id_ =
-        fec_timer_->wait_ms(k_rx_poll_ms,
-                            [guard]()
-                            {
-                                std::lock_guard<std::mutex> fence(guard->mutex);
-                                if (guard->owner)
-                                {
-                                    guard->owner->on_rx_timer();
-                                }
-                            });
+    rx_timer_id_ = reactor_->get_timer().wait_ms(
+        k_rx_poll_ms,
+        [guard]()
+        {
+            auto lease = guard->lifetime.lock();
+            if (guard->managed && !lease)
+            {
+                return;
+            }
+            std::lock_guard<std::mutex> fence(guard->mutex);
+            if (guard->owner)
+            {
+                guard->owner->on_rx_timer();
+            }
+        });
     rx_timer_armed_ = true;
     timer_wake_pending_ = true;
 }
@@ -330,7 +358,7 @@ void DatagramAir::on_rx_timer()
         rx_timer_armed_ = false;
         fec_rx_.poll_rx(&payloads);
         arm_rx_timer();
-        // Already on the IO reactor; the next timer deadline is observed there.
+        // Already on the CV reactor; the next timer deadline is observed there.
         timer_wake_pending_ = false;
     }
     for (const auto& payload : payloads)
@@ -435,11 +463,6 @@ void DatagramAir::tx_pending_stats(uint64_t* pkt, uint64_t* byt) const
     std::lock_guard<std::mutex> lock(tx_mu_);
     uint64_t packets = 0, bytes = 0;
     fec_tx_.pending_tx_stats(&packets, &bytes);
-    for (const auto& item : txq_)
-    {
-        ++packets;
-        bytes += item.pkt.size();
-    }
     if (pkt)
     {
         *pkt = packets;
@@ -465,48 +488,6 @@ void DatagramAir::get_fec(FecType* type, int* k, int* n) const
     {
         *n = fec_tx_.enabled() ? fec_tx_.n() : 0;
     }
-}
-
-bool DatagramAir::has_tx()
-{
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    return has_tx_locked();
-}
-
-bool DatagramAir::has_tx_locked() const
-{
-    return !txq_.empty();
-}
-
-size_t DatagramAir::get_tx_size()
-{
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    return txq_.empty() ? 0 : txq_.front().pkt.size();
-}
-
-bfc::sized_buffer DatagramAir::pull_tx(size_t max, bool* is_fec)
-{
-    if (is_fec)
-    {
-        *is_fec = false;
-    }
-    std::lock_guard<std::mutex> lock(tx_mu_);
-    if (txq_.empty() || txq_.front().pkt.size() > max)
-    {
-        return {};
-    }
-    TxItem item = std::move(txq_.front());
-    txq_.pop_front();
-    if (item.is_fec)
-    {
-        fec_air_tx_bytes_.fetch_add(item.pkt.size(), std::memory_order_relaxed);
-        fec_air_tx_packets_.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (is_fec)
-    {
-        *is_fec = item.is_fec;
-    }
-    return std::move(item.pkt);
 }
 
 }  // namespace winject

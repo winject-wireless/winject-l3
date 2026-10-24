@@ -20,8 +20,14 @@ class RadioUpstreamTable
 {
 public:
     void add(const std::shared_ptr<Upstream>& up,
+             const std::shared_ptr<BoundedLossyQueue>& tx_queue,
              const std::shared_ptr<WifiUdp>& radio, uint8_t bus_tx,
              uint8_t bus_rx, size_t budget);
+    void add(std::shared_ptr<ReactiveLossyQueue> rx_queue,
+             std::shared_ptr<BoundedLossyQueue> tx_queue,
+             const std::shared_ptr<WifiUdp>& radio, uint8_t bus_tx,
+             uint8_t bus_rx, size_t budget);
+    void clear();
     bool remove(size_t index);
     bool set_budget(size_t index, size_t budget);
     bool get_budget(size_t index, size_t* budget) const;

@@ -2,13 +2,14 @@
 #define WINJECT_MANAGER_DATAGRAM_AIR_H_
 
 #include "Config.h"
+#include "endpoint/UpstreamQueues.h"
+#include "endpoint/UpstreamStats.h"
 #include "fec/RsBlockErasure.h"
 
 #include <atomic>
+#include <bfc/cv_reactor.hpp>
 #include <bfc/shared_sized_buffer.hpp>
 #include <bfc/sized_buffer.hpp>
-#include <bfc/timer.hpp>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -19,17 +20,17 @@
 namespace winject
 {
 
-// Air-side queue and optional RS FEC shared by UDP and queue upstreams.
-// One app datagram in, zero or more air SDUs out via pull_tx; air SDUs in
-// become app datagrams via the deliver callback. The FEC flush timer belongs
-// to the caller. timer_wake runs after a timer is armed so a reactor blocked
-// in its wait observes the new deadline.
+// Optional RS FEC shared by UDP and queue upstreams. Encoded packets are
+// pushed immediately into the caller-supplied, reactor-bound TX queue.
+// One app datagram in, zero or more air SDUs pushed to tx_queue; air SDUs in
+// become app datagrams via the deliver callback. The shared CV reactor owns
+// the FEC timers and is woken whenever a new deadline is armed.
 class DatagramAir
 {
 public:
     using DeliverApp = std::function<void(const uint8_t* data, size_t len)>;
-    using Wake = std::function<void()>;
-    using FecTimer = bfc::timer<std::function<void()>>;
+    using Reactor = bfc::cv_reactor<>;
+    using FecTimer = bfc::timer<bfc::light_function<void()>>;
 
     DatagramAir() = default;
     ~DatagramAir();
@@ -38,17 +39,28 @@ public:
     DatagramAir& operator=(const DatagramAir&) = delete;
 
     // log_name is a string literal ("udp", "queue") used in logs.
-    bool start(Wake tx_wake, DeliverApp deliver_app, FecTimer* fec_timer,
-               Wake timer_wake, const UpstreamConfig& cfg,
+    bool start(std::shared_ptr<BoundedLossyQueue> tx_queue,
+               DeliverApp deliver_app, std::shared_ptr<Reactor> reactor,
+               const UpstreamConfig& cfg, uint8_t route_bus,
+               UpstreamStats* tx_stats, std::mutex* tx_stats_mu,
                const char* log_name);
     void stop();
+    void set_lifetime(std::weak_ptr<void> owner)
+    {
+        timer_guard_->lifetime = std::move(owner);
+        timer_guard_->managed = true;
+    }
 
+    // UDP truncation is known before enqueue; account it without touching FEC.
+    void reject_oversize_datagram(size_t len)
+    {
+        app_tx_bytes_.fetch_add(len, std::memory_order_relaxed);
+        app_tx_packets_.fetch_add(1, std::memory_order_relaxed);
+        app_rx_oversize_pkt_.fetch_add(1, std::memory_order_relaxed);
+    }
     void accept_app_datagram(const uint8_t* data, size_t len);
     void on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec);
 
-    bool has_tx();
-    size_t get_tx_size();
-    bfc::sized_buffer pull_tx(size_t max, bool* is_fec);
     void announce_down();
 
     bool set_fec(FecType type, int k, int n, std::string* error);
@@ -105,17 +117,10 @@ public:
     uint64_t fec_decode_fail() const;
 
 private:
-    struct TxItem
-    {
-        bfc::sized_buffer pkt;
-        bool is_fec = false;
-    };
-
     template <typename F>
     void queue_tx(F&& queue);
 
     void push_tx(bfc::sized_buffer pkt, bool is_fec);
-    bool has_tx_locked() const;
     void enqueue_fec(const std::vector<std::vector<uint8_t>>& shards);
     void deliver(const uint8_t* data, size_t len);
     void arm_rx_timer();
@@ -127,13 +132,14 @@ private:
 
     using FecTimerId = FecTimer::timer_id_t;
 
-    Wake tx_wake_;
+    std::shared_ptr<BoundedLossyQueue> tx_queue_;
+    uint8_t route_bus_ = 0;
+    UpstreamStats* tx_stats_ = nullptr;
+    std::mutex* tx_stats_mu_ = nullptr;
     DeliverApp deliver_app_;
-    Wake timer_wake_;
-    FecTimer* fec_timer_ = nullptr;
+    std::shared_ptr<Reactor> reactor_;
     const char* log_name_ = "upstream";
     mutable std::mutex tx_mu_;
-    std::deque<TxItem> txq_;
     RsBlockErasure fec_tx_;
     RsBlockErasure fec_rx_;
     bool running_ = false;
@@ -143,6 +149,8 @@ private:
     {
         std::mutex mutex;
         DatagramAir* owner = nullptr;
+        std::weak_ptr<void> lifetime;
+        bool managed = false;
     };
     std::shared_ptr<TimerGuard> timer_guard_;
     uint64_t tx_timer_generation_ = 0;
@@ -161,7 +169,7 @@ private:
     std::atomic<uint64_t> fec_air_tx_bytes_{0};
     std::atomic<uint64_t> fec_air_tx_packets_{0};
     bool fec_timer_armed_ = false;
-    // Set under tx_mu_ when a timer is armed. queue_tx invokes timer_wake_
+    // Set under tx_mu_ when a timer is armed. queue_tx wakes the reactor
     // after releasing the mutex.
     bool timer_wake_pending_ = false;
     FecTimerId fec_timer_id_{};

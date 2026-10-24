@@ -1,22 +1,42 @@
 #include "endpoint/DatagramAir.h"
+#include "frames/LCHeader.h"
 #include "utils/NetUtil.h"
 
 #include <atomic>
 #include <chrono>
 #include <gtest/gtest.h>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
 using namespace winject;
 namespace
 {
+bfc::shared_sized_buffer pull_air_sdu(const std::shared_ptr<BoundedLossyQueue>& queue,
+                                      size_t max, bool* fec)
+{
+    auto item = queue->pop(max);
+    if (!item)
+    {
+        return {};
+    }
+    const auto& slot = *item;
+    *fec = LCHeader::read_is_fec(slot.u8());
+    return slot.subview(k_slot_prefix_len, slot.size() - k_slot_prefix_len);
+}
 class DatagramAirTest : public ::testing::Test
 {
 protected:
-    DatagramAir::FecTimer timer;
+    std::shared_ptr<DatagramAir::Reactor> cv =
+        std::make_shared<DatagramAir::Reactor>();
+    DatagramAir::FecTimer& timer = cv->get_timer();
+    std::shared_ptr<BoundedLossyQueue> tx_queue =
+        std::make_shared<BoundedLossyQueue>();
     DatagramAir air;
     UpstreamConfig cfg;
+    UpstreamStats tx_stats;
+    std::mutex tx_stats_mu;
     std::vector<std::vector<uint8_t>> received;
     void SetUp() override
     {
@@ -24,25 +44,30 @@ protected:
         cfg.fec_k = 2;
         cfg.fec_n = 3;
         cfg.fec_timeout_ms = 0;
+        cfg.bus_tx = 7;
         ASSERT_TRUE(start());
     }
     bool start()
     {
+        while (tx_queue->pop())
+        {
+        }
+        tx_stats = UpstreamStats{};
         return air.start(
-            {},
+            tx_queue,
             [&](const uint8_t* p, size_t n)
             {
                 received.emplace_back(p, p + n);
             },
-            &timer, {}, cfg, "test");
+            cv, cfg, cfg.bus_tx, &tx_stats, &tx_stats_mu, "test");
     }
     std::vector<std::vector<uint8_t>> drain()
     {
         std::vector<std::vector<uint8_t>> shards;
-        while (air.has_tx())
+        while (tx_queue->has_data())
         {
             bool fec = false;
-            auto p = air.pull_tx(k_stream_payload_max, &fec);
+            auto p = pull_air_sdu(tx_queue, k_wifi_payload_max, &fec);
             EXPECT_TRUE(fec);
             if (p.empty())
             {
@@ -70,9 +95,9 @@ TEST_F(DatagramAirTest, EncodedBacklogIsBoundedAndDropsCounted)
         air.accept_app_datagram(&p, 1);
     }
     uint64_t packets = 0, bytes = 0;
-    air.tx_pending_stats(&packets, &bytes);
+    tx_queue->pending_stats(&packets, &bytes);
     EXPECT_EQ(packets, 1024u);
-    EXPECT_LE(bytes, 1024u * k_stream_payload_max);
+    EXPECT_LE(bytes, 1024u * k_wifi_payload_max);
     EXPECT_EQ(air.tx_queue_drops(), 15000u - 1024u);
 }
 
@@ -82,7 +107,7 @@ TEST_F(DatagramAirTest, TimeoutChangeFlushesOldBlockAndAppliesNewDeadline)
     ASSERT_TRUE(air.set_fec_timeout_ms(1000, &error));
     const uint8_t p = 1;
     air.accept_app_datagram(&p, 1);
-    ASSERT_FALSE(air.has_tx());
+    ASSERT_FALSE(tx_queue->has_data());
     ASSERT_TRUE(air.set_fec_timeout_ms(1, &error));
     EXPECT_EQ(drain().size(), 2u);  // old partial block survived the change
     air.accept_app_datagram(&p, 1);
@@ -99,7 +124,7 @@ TEST_F(DatagramAirTest, ZeroTimeoutSurvivesRuntimeKnChange)
     uint8_t p = 1;
     air.accept_app_datagram(&p, 1);
     timer.schedule(DatagramAir::FecTimer::current_time_us() + 1000000);
-    EXPECT_FALSE(air.has_tx());
+    EXPECT_FALSE(tx_queue->has_data());
     air.announce_down();
     EXPECT_EQ(drain().size(), 2u);
 }
@@ -174,7 +199,7 @@ TEST_F(DatagramAirTest, InvalidReconfigureDoesNotFlushOrDisablePendingBlock)
     air.accept_app_datagram(&p, 1);
     std::string error;
     EXPECT_FALSE(air.set_fec(FecType::RsBlockErasure, 3, 3, &error));
-    EXPECT_FALSE(air.has_tx());
+    EXPECT_FALSE(tx_queue->has_data());
     air.accept_app_datagram(&p, 1);
     EXPECT_EQ(drain().size(), 3u);
 }
@@ -187,17 +212,23 @@ TEST_F(DatagramAirTest, ReopenClearsPendingTxAndDisablesOldFec)
     ASSERT_TRUE(start());
     air.accept_app_datagram(&p, 1);
     bool fec = true;
-    EXPECT_EQ(air.pull_tx(k_stream_payload_max, &fec).size(), 1u);
+    EXPECT_EQ(pull_air_sdu(tx_queue, k_wifi_payload_max, &fec).size(), 1u);
     EXPECT_FALSE(fec);
-    EXPECT_FALSE(air.has_tx());
+    EXPECT_FALSE(tx_queue->has_data());
 }
 
 TEST(DatagramAirLifetimeTest, ExtractedTimerCallbackIsSafeAfterDestroy)
 {
-    DatagramAir::FecTimer timer;
+    std::shared_ptr<DatagramAir::Reactor> cv =
+        std::make_shared<DatagramAir::Reactor>();
+    DatagramAir::FecTimer& timer = cv->get_timer();
     auto air = std::make_unique<DatagramAir>();
     UpstreamConfig cfg;
-    ASSERT_TRUE(air->start({}, {}, &timer, {}, cfg, "test"));
+    cfg.bus_tx = 1;
+    UpstreamStats stats;
+    std::mutex stats_mu;
+    ASSERT_TRUE(air->start(std::make_shared<BoundedLossyQueue>(), {}, cv, cfg,
+                           cfg.bus_tx, &stats, &stats_mu, "test"));
     timer.wait_us(0,
                   [&]()
                   {

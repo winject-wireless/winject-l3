@@ -3,6 +3,7 @@
 #include "endpoint/Upstream.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
+#include "utils/NetUtil.h"
 #include "radio/RadioDefs.h"
 #include "radio/RadioUpstreamEntry.h"
 
@@ -32,9 +33,8 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
 {
     struct Delivery
     {
-        std::shared_ptr<Upstream> up;
+        std::shared_ptr<ReactiveLossyQueue> queue;
         bfc::shared_sized_buffer view;
-        bool is_fec = false;
     };
     std::array<Delivery, WIFI_PDU_SLOTS * 8> pending{};
     size_t pending_count = 0;
@@ -63,7 +63,7 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
         for (size_t i = 0; i < entries.size(); ++i)
         {
             const uint8_t bus = entries[i].bus_rx;
-            if (bus != 0 && entries[i].up != nullptr)
+            if (bus != 0 && entries[i].rx_queue != nullptr)
             {
                 rx_by_bus[bus].push_back(i);
             }
@@ -80,7 +80,7 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
             const bfc::const_buffer_view pdu =
                 view.get_slot_payload(static_cast<uint8_t>(slot));
             if (pdu.empty() || pdu.size() != pdu_len ||
-                pdu.size() < LCHeader::k_len)
+                pdu.size() < k_slot_prefix_len)
             {
                 return;
             }
@@ -99,25 +99,15 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
             for (size_t idx : targets)
             {
                 RadioUpstreamEntry& s = table_.entries()[idx];
-                const uint8_t* payload = nullptr;
-                size_t plen = 0;
-                bool is_fec = false;
-                if (!s.up->accept_air(
-                        reinterpret_cast<const uint8_t*>(pdu.data()),
-                        pdu.size(), &payload, &plen, &is_fec))
-                {
-                    continue;
-                }
-                const size_t payload_off =
-                    static_cast<size_t>(payload - mpdu_bytes);
+                const size_t payload_off = static_cast<size_t>(
+                    reinterpret_cast<const uint8_t*>(pdu.data()) - mpdu_bytes);
                 if (pending_count >= pending.size())
                 {
                     return;
                 }
-                pending[pending_count].up = s.up;
+                pending[pending_count].queue = s.rx_queue;
                 pending[pending_count].view =
-                    mpdu_owned.subview(payload_off, plen);
-                pending[pending_count].is_fec = is_fec;
+                    mpdu_owned.subview(payload_off, pdu.size());
                 ++pending_count;
             }
         }
@@ -125,8 +115,7 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
 
     for (size_t i = 0; i < pending_count; ++i)
     {
-        pending[i].up->on_radio_rx(std::move(pending[i].view),
-                                   pending[i].is_fec);
+        pending[i].queue->push(std::move(pending[i].view));
     }
 }
 

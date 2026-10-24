@@ -26,45 +26,46 @@ using namespace winject;
 namespace
 {
 
-class QueueUpstream : public Upstream
+class QueueProducer
 {
 public:
-    std::deque<std::vector<uint8_t>> txq;
-    // Parallel to txq: whether each SDU is an FEC shard. Missing means raw.
-    std::deque<bool> txq_fec;
-    std::thread::id pull_thread;
+    static constexpr uint8_t k_bus = 7;
 
-    void on_radio_rx(bfc::shared_sized_buffer /*pkt*/, bool /*is_fec*/) override
+    struct QueueFacade
     {
-    }
-
-    bool has_tx() override
-    {
-        return !txq.empty();
-    }
-
-    size_t get_tx_size() override
-    {
-        return txq.empty() ? 0 : txq.front().size();
-    }
-
-    bfc::sized_buffer pull_tx(size_t max, bool* is_fec) override
-    {
-        if (txq.empty() || txq.front().size() > max)
+        std::shared_ptr<BoundedLossyQueue> queue;
+        QueueProducer* owner = nullptr;
+        void push_back(const std::vector<uint8_t>& slot_payload)
         {
-            return bfc::sized_buffer();
+            queue->push(bfc::shared_sized_buffer::copy_from(
+                slot_payload.data(), slot_payload.size()));
         }
-        pull_thread = std::this_thread::get_id();
-        bfc::sized_buffer out(txq.front().size());
-        memcpy(out.data(), txq.front().data(), txq.front().size());
-        txq.pop_front();
-        *is_fec = !txq_fec.empty() && txq_fec.front();
-        if (!txq_fec.empty())
+        bool empty() const
         {
-            txq_fec.pop_front();
+            return !queue->has_data();
         }
-        return out;
+    } txq;
+    explicit QueueProducer(std::shared_ptr<BoundedLossyQueue> queue)
+        : txq{std::move(queue)}
+    {
+        txq.owner = this;
     }
+    void push_sdu(const std::vector<uint8_t>& sdu, bool fec = false)
+    {
+        txq.push_back(frame_sdu(sdu, fec));
+    }
+
+private:
+    friend struct QueueFacade;
+    std::vector<uint8_t> frame_sdu(const std::vector<uint8_t>& sdu, bool fec)
+    {
+        std::vector<uint8_t> slot(LCHeader::k_len + sdu.size());
+        LCHeader::write(slot.data(), k_bus, seq_, fec);
+        seq_ = static_cast<uint16_t>((seq_ + 1) & LCHeader::k_seq_mask);
+        memcpy(slot.data() + LCHeader::k_len, sdu.data(), sdu.size());
+        return slot;
+    }
+    uint16_t seq_ = 0;
 };
 
 std::vector<uint8_t> make_sdu(size_t len, uint8_t tag)
@@ -98,8 +99,9 @@ public:
         EXPECT_TRUE(radio_->open(reactor_, [](bfc::shared_sized_buffer) {}));
         radio_->set_tx_dplane(bind_addr);
 
-        up_ = std::make_shared<QueueUpstream>();
-        table_.add(up_, radio_, k_bus, k_bus, budget);
+        up_ = std::make_shared<QueueProducer>(mux_.make_tx_queue());
+        table_.add(std::make_shared<ReactiveLossyQueue>(), up_->txq.queue, radio_,
+                   QueueProducer::k_bus, QueueProducer::k_bus, budget);
         mux_.configure(1);
         PhyMode mode;
         EXPECT_TRUE(phy_mode_from_name(modulation, 1, &mode));
@@ -112,7 +114,7 @@ public:
         radio_->close();
     }
 
-    QueueUpstream& up()
+    QueueProducer& up()
     {
         return *up_;
     }
@@ -195,8 +197,6 @@ public:
     }
 
 private:
-    static constexpr uint8_t k_bus = 7;
-
     void collect()
     {
         uint8_t buf[WIFI_RADIO_INJECT_MAX + 64];
@@ -221,7 +221,7 @@ private:
                 ASSERT_GE(slot.size(), LCHeader::k_len);
                 const uint8_t* p =
                     reinterpret_cast<const uint8_t*>(slot.data());
-                EXPECT_EQ(p[0], k_bus);
+                EXPECT_EQ(p[0], QueueProducer::k_bus);
                 received_fec_.push_back(LCHeader::read_is_fec(p));
                 received_seq_.push_back(LCHeader::read_seq(p));
                 received_.emplace_back(p + LCHeader::k_len, p + slot.size());
@@ -234,7 +234,7 @@ private:
     RadioUpstreamTable table_;
     TxMux mux_;
     std::shared_ptr<WifiUdp> radio_;
-    std::shared_ptr<QueueUpstream> up_;
+    std::shared_ptr<QueueProducer> up_;
     std::vector<std::vector<uint8_t>> received_;
     std::vector<bool> received_fec_;
     std::vector<uint16_t> received_seq_;
@@ -251,7 +251,7 @@ TEST(TxMuxTest, SduNearShareLimitIsNotDropped)
         make_sdu(100, 1), make_sdu(96, 2), make_sdu(50, 3)};
     for (const auto& s : sdus)
     {
-        h.up().txq.push_back(s);
+        h.up().push_sdu(s);
     }
     EXPECT_EQ(h.drain(), sdus);
     EXPECT_TRUE(h.up().txq.empty());
@@ -264,7 +264,7 @@ TEST(TxMuxTest, SduExactlyBudgetIsNotDropped)
         make_sdu(98, 1), make_sdu(99, 2), make_sdu(100, 3)};
     for (const auto& s : sdus)
     {
-        h.up().txq.push_back(s);
+        h.up().push_sdu(s);
     }
     EXPECT_EQ(h.drain(), sdus);
 }
@@ -278,15 +278,14 @@ TEST(TxMuxTest, SduLargerThanBudgetIsSent)
         make_sdu(1000, 1), make_sdu(k_stream_payload_max, 2), make_sdu(10, 3)};
     for (const auto& s : sdus)
     {
-        h.up().txq.push_back(s);
+        h.up().push_sdu(s);
     }
     EXPECT_EQ(h.drain(), sdus);
     EXPECT_TRUE(h.up().txq.empty());
 }
 
-// The LC header FEC flag follows the upstream's per-SDU tag, whatever the SDU
-// bytes are, and one seq counter covers both kinds.
-TEST(TxMuxTest, StampsFecFlagPerSdu)
+// Pre-framed slot payloads pass through the mux with FEC flag and seq intact.
+TEST(TxMuxTest, ForwardsPreframedFecFlagPerSdu)
 {
     TxMuxHarness h(4096);
     std::vector<std::vector<uint8_t>> sdus = {
@@ -295,8 +294,7 @@ TEST(TxMuxTest, StampsFecFlagPerSdu)
     const std::vector<bool> fec = {false, true, true, false};
     for (size_t i = 0; i < sdus.size(); i++)
     {
-        h.up().txq.push_back(sdus[i]);
-        h.up().txq_fec.push_back(fec[i]);
+        h.up().push_sdu(sdus[i], fec[i]);
     }
     EXPECT_EQ(h.drain(), sdus);
     EXPECT_EQ(h.received_fec(), fec);
@@ -327,7 +325,7 @@ TEST(TxMuxTest, BacklogDrainsAtPacedRate)
     constexpr size_t k_sdu = 1400;
     for (int i = 0; i < 200; i++)
     {
-        h.up().txq.push_back(make_sdu(k_sdu, static_cast<uint8_t>(i)));
+        h.up().push_sdu(make_sdu(k_sdu, static_cast<uint8_t>(i)));
     }
     PhyMode mode;
     ASSERT_TRUE(phy_mode_from_name("OFDM_24M", 1, &mode));
@@ -353,12 +351,9 @@ TEST(TxMuxTest, IdleHasNoPollingAndProducerWakeRunsOnIoReactor)
     h.run_for(std::chrono::milliseconds(2));
     int64_t deadline = 0;
     EXPECT_FALSE(h.reactor().get_timer().get_next_deadline_us(deadline));
-    h.up().txq.push_back(make_sdu(100, 1));
-    // No fallback poll: non-reactive queue producers must notify after push.
-    EXPECT_EQ(h.run_for(std::chrono::milliseconds(10)), 0u);
-    h.mux().request_tick();
+    h.up().push_sdu(make_sdu(100, 1));
+    // The bound TX queue wakes the scheduler automatically after push.
     EXPECT_EQ(h.wait_received(1, std::chrono::milliseconds(100)), 1u);
-    EXPECT_EQ(h.up().pull_thread, std::this_thread::get_id());
     EXPECT_FALSE(h.reactor().get_timer().get_next_deadline_us(deadline));
 }
 
@@ -373,7 +368,7 @@ TEST(TxMuxTest, SmallBudgetDoesNotCapRate)
         std::lock_guard<std::mutex> lock(h.table().mutex());
         for (size_t i = 0; i < k_frames; i++)
         {
-            h.up().txq.push_back(make_sdu(1400, static_cast<uint8_t>(i)));
+            h.up().push_sdu(make_sdu(1400, static_cast<uint8_t>(i)));
         }
     }
     // Start behind schedule, as after any stall: pacing credit is open.
@@ -393,7 +388,7 @@ TEST(TxMuxTest, SharesCvReactorAndDrainsFromPacingTimers)
     bfc::cv_reactor<> cv;
     for (int i = 0; i < 20; ++i)
     {
-        h.up().txq.push_back(make_sdu(1400, i));
+        h.up().push_sdu(make_sdu(1400, i));
     }
     h.mux().start(cv);
     cv.get_timer().wait_ms(60,
@@ -404,7 +399,6 @@ TEST(TxMuxTest, SharesCvReactorAndDrainsFromPacingTimers)
     cv.run();
     h.collect_pending();
     EXPECT_EQ(h.received_count(), 20u);
-    EXPECT_EQ(h.up().pull_thread, std::this_thread::get_id());
     int64_t deadline = 0;
     EXPECT_FALSE(cv.get_timer().get_next_deadline_us(deadline));
     h.mux().stop();
@@ -434,7 +428,7 @@ TEST(TxMuxTest, NotificationsAreCoalesced)
     }
     EXPECT_EQ(probe.wakes, 1u);
     h.run_for(std::chrono::milliseconds(1));
-    h.up().txq.push_back(make_sdu(100, 1));
+    h.up().push_sdu(make_sdu(100, 1));
     for (int i = 0; i < 100; ++i)
     {
         h.mux().request_tick();
@@ -454,14 +448,13 @@ TEST(TxMuxTest, CrossThreadProducerWakesSharedReactor)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             {
                 std::lock_guard<std::mutex> lock(h.table().mutex());
-                h.up().txq.push_back(make_sdu(100, 7));
+                h.up().push_sdu(make_sdu(100, 7));
             }
             h.mux().request_tick();
         });
     h.run_for(std::chrono::milliseconds(30));
     producer.join();
     EXPECT_EQ(h.received_count(), 1u);
-    EXPECT_EQ(h.up().pull_thread, std::this_thread::get_id());
 }
 
 TEST(TxMuxTest, StopCancelsPacingAndRestartFindsRemainingBacklog)
@@ -469,7 +462,7 @@ TEST(TxMuxTest, StopCancelsPacingAndRestartFindsRemainingBacklog)
     TxMuxHarness h(256, "DSS_1M_L");
     for (int i = 0; i < 5; ++i)
     {
-        h.up().txq.push_back(make_sdu(1400, i));
+        h.up().push_sdu(make_sdu(1400, i));
     }
     h.run_for(std::chrono::milliseconds(1));
     ASSERT_FALSE(h.up().txq.empty());
@@ -509,7 +502,7 @@ TEST(TxMuxTest, FailedSubmissionsDoNotStrandRemainingBacklog)
     h.fail_radio_sends();
     for (int i = 0; i < 5; ++i)
     {
-        h.up().txq.push_back(make_sdu(1400, i));
+        h.up().push_sdu(make_sdu(1400, i));
     }
     h.run_for(std::chrono::milliseconds(20));
     EXPECT_TRUE(h.up().txq.empty());

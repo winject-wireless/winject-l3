@@ -5,7 +5,8 @@
 #include "console/ConsoleClient.h"
 #include "console/ConsoleService.h"
 #include "console/ManagerConsoleTypes.h"
-#include "endpoint/HostEndpoint.h"
+#include "endpoint/QueueUpstream.h"
+#include "endpoint/UDPUpstream.h"
 #include "radio/RadioManager.h"
 #include "radio/RadioUpstreamTable.h"
 #include "radio/RxDemux.h"
@@ -22,6 +23,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace winject
@@ -55,12 +57,12 @@ private:
     void arm_console_deadline();
     void arm_stats();
     void begin_shutdown();
-    void poll_shutdown();
     void refresh_host_metrics();
 
-    bool set_upstream_fec(size_t index, FecType type, int k, int n,
-                          std::string* error);
-    bool get_upstream_fec(size_t index, FecType* type, int* k, int* n,
+    std::shared_ptr<Upstream> construct_upstream(
+        const UpstreamConfig& config,
+        const std::shared_ptr<BoundedLossyQueue>& tx_queue);
+    bool replace_upstream(size_t index, const UpstreamConfig& config,
                           std::string* error);
     bool set_upstream_scheduler_budget(size_t index, size_t budget,
                                        std::string* error);
@@ -101,7 +103,7 @@ private:
     static constexpr std::chrono::milliseconds k_reconnect_interval{1000};
 
     Config cfg;
-    IOReactor reactor;
+    std::shared_ptr<IOReactor> reactor = std::make_shared<IOReactor>();
     ConsoleClient console;
     ConsoleService mgr_console;
     RadioUpstreamTable radio_upstream_table_;
@@ -109,15 +111,15 @@ private:
     RadioManager radio_manager_;
     RxDemux rx_demux_{radio_upstream_table_};
     std::shared_ptr<WifiUdp> radio;
-    std::vector<std::shared_ptr<HostEndpoint>> upstreams;
+    std::vector<std::shared_ptr<Upstream>> upstreams;
+    std::shared_ptr<Upstream::Reactor> upstream_reactor_ =
+        std::make_shared<Upstream::Reactor>();
+    std::thread upstream_reactor_thread_;
     OneShotTimer reconnect_timer_;
     // Runs ConsoleClient::poll_deadlines() at the earliest request deadline.
     OneShotTimer console_deadline_timer_;
     std::chrono::steady_clock::time_point console_deadline_at_{};
     OneShotTimer stats_timer_;
-    OneShotTimer shutdown_timer_;
-    bool shutdown_complete_ = false;
-    std::chrono::steady_clock::time_point shutdown_deadline_{};
     // Set by stop(); checked once the reactor runs, in case stop() came
     // before reactor.run() set it running.
     std::atomic<bool> stop_requested_{false};

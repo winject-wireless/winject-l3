@@ -1,6 +1,8 @@
 #ifndef WINJECT_MANAGER_RADIO_RADIO_UPSTREAM_ENTRY_H_
 #define WINJECT_MANAGER_RADIO_RADIO_UPSTREAM_ENTRY_H_
 
+#include "endpoint/UpstreamQueues.h"
+
 #include <memory>
 #include <stddef.h>
 #include <stdint.h>
@@ -14,7 +16,10 @@ class WifiUdp;
 // One configured host upstream on the shared radio (not an MPDU PduSlot).
 struct RadioUpstreamEntry
 {
-    std::shared_ptr<Upstream> up;
+    std::weak_ptr<Upstream>
+        up;  // statistics only; registration does not own endpoint
+    std::shared_ptr<ReactiveLossyQueue> rx_queue;
+    std::shared_ptr<BoundedLossyQueue> tx_queue;
     std::shared_ptr<WifiUdp> radio;
     uint8_t bus_tx = 0;
     uint8_t bus_rx = 0;

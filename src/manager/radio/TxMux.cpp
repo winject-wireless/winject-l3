@@ -2,7 +2,7 @@
 
 #include "console/ConsoleParse.h"
 #include "endpoint/Upstream.h"
-#include "endpoint/UpstreamStats.h"
+#include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
 #include "radio/WifiUdp.h"
 #include "utils/Log.h"
@@ -19,19 +19,44 @@ namespace
 struct TxMpduEntryPlan
 {
     size_t entry_index = 0;
-    bfc::sized_buffer sdu;
-    bool is_fec = false;
-    size_t framed_bytes = 0;
+    bfc::shared_sized_buffer slot_payload;
+    size_t slot_bytes = 0;
 };
 }  // namespace
 
 namespace winject
 {
 
-TxMux::TxMux(RadioUpstreamTable& table) : table_(table) {}
+struct TxMux::QueueWake
+{
+    std::mutex mutex;
+    TxMux* owner = nullptr;
+    void wake_up()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (owner)
+        {
+            owner->request_tick();
+        }
+    }
+};
+TxMux::TxMux(RadioUpstreamTable& table)
+    : queue_wake_(std::make_shared<QueueWake>()), table_(table)
+{
+    queue_wake_->owner = this;
+}
+std::shared_ptr<BoundedLossyQueue> TxMux::make_tx_queue(size_t capacity)
+{
+    return std::make_shared<BoundedLossyQueue>(
+        capacity, [wake = queue_wake_] { wake->wake_up(); });
+}
 
 TxMux::~TxMux()
 {
+    {
+        std::lock_guard<std::mutex> lock(queue_wake_->mutex);
+        queue_wake_->owner = nullptr;
+    }
     stop();
 }
 
@@ -94,7 +119,7 @@ void TxMux::init_schedule_shares(std::vector<size_t>& shares) const
     for (size_t i = 0; i < entries.size(); i++)
     {
         const auto& s = entries[i];
-        if (s.up == nullptr || s.up->get_tx_size() == 0)
+        if (s.tx_queue == nullptr || s.tx_queue->head_size() == 0)
         {
             shares[i] = 0;
             continue;
@@ -120,7 +145,7 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
         return false;
     }
     auto& s0 = entries[primary];
-    if (s0.up == nullptr || s0.radio == nullptr || s0.bus_tx == 0)
+    if (s0.tx_queue == nullptr || s0.radio == nullptr || s0.bus_tx == 0)
     {
         return false;
     }
@@ -128,7 +153,7 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
     {
         return false;
     }
-    if (s0.up->get_tx_size() == 0)
+    if (s0.tx_queue->head_size() == 0)
     {
         schedule_shares[primary] = 0;
         return false;
@@ -152,7 +177,7 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
             return false;
         }
         auto& s = entries[i];
-        if (s.up == nullptr || s.bus_tx == 0)
+        if (s.tx_queue == nullptr || s.bus_tx == 0)
         {
             return false;
         }
@@ -161,7 +186,7 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
             return false;
         }
 
-        const size_t first_sdu = s.up->get_tx_size();
+        const size_t first_sdu = s.tx_queue->head_size();
         if (first_sdu == 0)
         {
             schedule_shares[i] = 0;
@@ -169,54 +194,52 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
         }
 
         const size_t room = k_wifi_payload_max - body_total;
-        if (room < k_lc_header_len + 1)
-        {
-            return false;
-        }
-        const size_t room_payload = room - k_lc_header_len;
-
-        size_t max_sdu = k_stream_payload_max;
-        if (room_payload < max_sdu)
-        {
-            max_sdu = room_payload;
-        }
-        // The share counts framed bytes (SDU + LC header). An entry that has
-        // not sent yet this pass may send one SDU larger than its share, so a
-        // budget below the SDU size slows the upstream instead of blocking it.
-        if (schedule_shares[i] < s.budget)
-        {
-            const size_t share_payload =
-                schedule_shares[i] > k_lc_header_len
-                    ? schedule_shares[i] - k_lc_header_len
-                    : 0;
-            if (share_payload < max_sdu)
-            {
-                max_sdu = share_payload;
-            }
-        }
-        if (max_sdu == 0 || first_sdu > max_sdu)
+        if (room < k_slot_prefix_len + 1)
         {
             return false;
         }
 
-        // pull_tx returns at most max_sdu bytes, so the SDU always fits here.
-        bool is_fec = false;
-        bfc::sized_buffer sdu = s.up->pull_tx(max_sdu, &is_fec);
-        if (sdu.empty())
+        size_t max_slot = k_wifi_payload_max;
+        if (room < max_slot)
+        {
+            max_slot = room;
+        }
+        // Shares count whole slot payloads. An entry that has not sent yet this
+        // pass may send one slot larger than its share, so a budget below the
+        // slot size slows the upstream instead of blocking it.
+        if (schedule_shares[i] < s.budget && schedule_shares[i] < max_slot)
+        {
+            max_slot = schedule_shares[i];
+        }
+        if (max_slot < k_slot_prefix_len + 1 || first_sdu > max_slot)
+        {
+            return false;
+        }
+
+        // Pop atomically checks the head against the available frame space.
+        auto item = s.tx_queue->pop(max_slot);
+        if (!item || item->empty())
         {
             schedule_shares[i] = 0;
             return false;
         }
-        const size_t pulled = sdu.size();
-        const size_t framed = pulled + k_lc_header_len;
+        auto slot_payload = std::move(*item);
+        const size_t pulled = slot_payload.size();
+        if (pulled < k_slot_prefix_len ||
+            RouteHeader::read_bus(
+                reinterpret_cast<const uint8_t*>(slot_payload.data())) !=
+                s.bus_tx)
+        {
+            schedule_shares[i] = 0;
+            return false;
+        }
 
         TxMpduEntryPlan entry;
         entry.entry_index = i;
-        entry.sdu = std::move(sdu);
-        entry.is_fec = is_fec;
-        entry.framed_bytes = framed;
+        entry.slot_payload = std::move(slot_payload);
+        entry.slot_bytes = pulled;
         plan.push_back(std::move(entry));
-        body_total += framed;
+        body_total += pulled;
         n++;
         return true;
     };
@@ -231,24 +254,6 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
         try_plan(i);
     }
 
-    for (size_t p = 0; p < plan.size(); p++)
-    {
-        const TxMpduEntryPlan& entry_plan = plan[p];
-        auto& s = entries[entry_plan.entry_index];
-        const uint8_t* payload =
-            reinterpret_cast<const uint8_t*>(entry_plan.sdu.data());
-        const size_t pulled = entry_plan.sdu.size();
-        size_t framed = 0;
-        if (!stamp_air_payload(&bus_air_tx_[s.bus_tx], s.bus_tx,
-                               entry_plan.is_fec, framed_buf[p],
-                               sizeof(framed_buf[p]), payload, pulled,
-                               &framed) ||
-            framed != entry_plan.framed_bytes)
-        {
-            return note_build_fail(body_total);
-        }
-    }
-
     const size_t mpdu_len = WIFI_HDR_LEN + body_total;
     if (mpdu_len > sizeof(mpdu_buf))
     {
@@ -258,7 +263,7 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
     for (size_t p = 0; p < plan.size(); p++)
     {
         mpdu.set_slot_payload(static_cast<uint8_t>(p),
-                              static_cast<uint16_t>(plan[p].framed_bytes));
+                              static_cast<uint16_t>(plan[p].slot_bytes));
     }
     if (!mpdu.rescan())
     {
@@ -267,11 +272,13 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
     for (size_t p = 0; p < plan.size(); p++)
     {
         bfc::buffer_view slot = mpdu.get_slot_payload(static_cast<uint8_t>(p));
-        if (slot.empty() || slot.size() != plan[p].framed_bytes)
+        if (slot.empty() || slot.size() != plan[p].slot_bytes)
         {
             return note_build_fail(body_total);
         }
-        memcpy(slot.data(), framed_buf[p], plan[p].framed_bytes);
+        memcpy(slot.data(),
+               reinterpret_cast<const uint8_t*>(plan[p].slot_payload.data()),
+               plan[p].slot_bytes);
     }
     ieee_802_11::SeqControl* seq = mpdu.ieee().seq_ctl;
     if (seq == nullptr)
@@ -301,15 +308,15 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
     for (const TxMpduEntryPlan& entry_plan : plan)
     {
         auto& s = entries[entry_plan.entry_index];
-        if (entry_plan.framed_bytes <= schedule_shares[entry_plan.entry_index])
+        if (entry_plan.slot_bytes <= schedule_shares[entry_plan.entry_index])
         {
-            schedule_shares[entry_plan.entry_index] -= entry_plan.framed_bytes;
+            schedule_shares[entry_plan.entry_index] -= entry_plan.slot_bytes;
         }
         else
         {
             schedule_shares[entry_plan.entry_index] = 0;
         }
-        if (s.up == nullptr || s.up->get_tx_size() == 0)
+        if (s.tx_queue == nullptr || s.tx_queue->head_size() == 0)
         {
             schedule_shares[entry_plan.entry_index] = 0;
         }
@@ -547,8 +554,8 @@ bool TxMux::has_pending_tx_locked() const
     }
     for (const auto& entry : table_.entries())
     {
-        if (entry.up && entry.radio && entry.bus_tx && entry.budget &&
-            entry.up->get_tx_size())
+        if (entry.tx_queue && entry.radio && entry.bus_tx && entry.budget &&
+            entry.tx_queue->head_size())
         {
             return true;
         }

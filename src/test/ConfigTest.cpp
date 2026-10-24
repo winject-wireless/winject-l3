@@ -71,6 +71,7 @@ upstream-0.tx               = 127.0.0.1:21082
     EXPECT_EQ(cfg.upstreams[0].bus_tx, 0xb2);
     EXPECT_EQ(cfg.upstreams[0].bus_rx, 0xa1);
     EXPECT_EQ(cfg.upstreams[0].fec_type, FecType::none);
+    EXPECT_EQ(cfg.upstreams[0].rx_queue_capacity, 1024u);
     std::remove(path.c_str());
 }
 
@@ -248,6 +249,7 @@ upstream-0.mode             = UDP_SERVER_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = a1
 upstream-0.scheduler_budget = 4096
+upstream-0.rx_queue_capacity = 17
 upstream-0.rx               = 127.0.0.1:22081
 upstream-0.fec.type         = RS_BLOCK_ERASURE
 upstream-0.fec.k            = 10
@@ -262,6 +264,7 @@ upstream-0.fec.timeout_ms   = 25
     EXPECT_EQ(cfg.upstreams[0].fec_k, 10);
     EXPECT_EQ(cfg.upstreams[0].fec_n, 15);
     EXPECT_EQ(cfg.upstreams[0].fec_timeout_ms, 25);
+    EXPECT_EQ(cfg.upstreams[0].rx_queue_capacity, 17u);
     std::remove(path.c_str());
 }
 

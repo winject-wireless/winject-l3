@@ -18,11 +18,33 @@ bool RadioUpstreamTable::remove(size_t index)
 }
 
 void RadioUpstreamTable::add(const std::shared_ptr<Upstream>& up,
+                             const std::shared_ptr<BoundedLossyQueue>& tx_queue,
                              const std::shared_ptr<WifiUdp>& radio,
                              uint8_t bus_tx, uint8_t bus_rx, size_t budget)
 {
     std::lock_guard<std::mutex> lock(mu_);
-    entries_.push_back(RadioUpstreamEntry{up, radio, bus_tx, bus_rx, budget});
+    entries_.push_back(RadioUpstreamEntry{up, up->rx_queue(), tx_queue, radio,
+                                          bus_tx, bus_rx, budget});
+}
+
+void RadioUpstreamTable::add(std::shared_ptr<ReactiveLossyQueue> rx_queue,
+                             std::shared_ptr<BoundedLossyQueue> tx_queue,
+                             const std::shared_ptr<WifiUdp>& radio,
+                             uint8_t bus_tx, uint8_t bus_rx, size_t budget)
+{
+    std::lock_guard<std::mutex> lock(mu_);
+    entries_.push_back(RadioUpstreamEntry{{},
+                                          std::move(rx_queue),
+                                          std::move(tx_queue),
+                                          radio,
+                                          bus_tx,
+                                          bus_rx,
+                                          budget});
+}
+void RadioUpstreamTable::clear()
+{
+    std::lock_guard<std::mutex> lock(mu_);
+    entries_.clear();
 }
 
 bool RadioUpstreamTable::set_budget(size_t index, size_t budget)
@@ -54,11 +76,12 @@ bool RadioUpstreamTable::peek_seq_lost(size_t index, uint64_t* lost) const
     {
         return false;
     }
-    if (entries_[index].up == nullptr)
+    auto up = entries_[index].up.lock();
+    if (!up)
     {
         return false;
     }
-    *lost = entries_[index].up->stats().air_rx_gap_loss;
+    *lost = up->stats().air_rx_gap_loss;
     return true;
 }
 
@@ -68,11 +91,12 @@ uint64_t RadioUpstreamTable::collect_seq_loss_delta()
     uint64_t total_lost = 0;
     for (size_t i = 0; i < entries_.size(); i++)
     {
-        if (entries_[i].up == nullptr)
+        auto up = entries_[i].up.lock();
+        if (!up)
         {
             continue;
         }
-        total_lost += entries_[i].up->collect_air_seq_loss_delta();
+        total_lost += up->collect_air_seq_loss_delta();
     }
     return total_lost;
 }

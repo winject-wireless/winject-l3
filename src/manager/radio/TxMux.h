@@ -61,6 +61,8 @@ public:
                 reactor.get_timer().cancel(id);
             });
     }
+    // The caller passes this queue to the upstream constructor. Push wakes TX.
+    std::shared_ptr<BoundedLossyQueue> make_tx_queue(size_t capacity = 1024);
     void stop();
     void request_tick();
     void post_send_socket_change(std::shared_ptr<WifiUdp> radio,
@@ -91,6 +93,8 @@ private:
     TxEventQueue take_events();
     void apply_events(TxEventQueue events);
 
+    struct QueueWake;
+    std::shared_ptr<QueueWake> queue_wake_;
     RadioUpstreamTable& table_;
     PhyMode phy_{};
     uint32_t gap_us_ = 96;
@@ -100,10 +104,8 @@ private:
     uint16_t domain_ = 0;
     std::chrono::steady_clock::time_point next_tx_at_{};
     size_t next = 0;
-    uint8_t framed_buf[5][2048]{};
     uint8_t mpdu_buf[WIFI_RADIO_INJECT_MAX]{};
     uint64_t air_bytes_interval = 0;
-    uint16_t bus_air_tx_[256] = {};
     std::atomic<uint64_t> tx_send_fail_mpdu_{0};
     std::atomic<uint64_t> tx_send_fail_byt_{0};
 

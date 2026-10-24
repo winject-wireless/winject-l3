@@ -12,19 +12,19 @@
 
 namespace winject
 {
-// RX retains the slot prefix (route + upstream air header). Upstream interprets
-// sequence/FEC; demux only reads the route bus byte.
-using ReactiveLossyRxQueue =
+// Reactive BFC queue; packets retain the slot prefix (route + upstream air
+// header). Upstream interprets sequence/FEC; demux only reads the route bus
+// byte.
+using ReactiveLossyQueue =
     bfc::reactive_circular_lossy_queue<bfc::shared_sized_buffer>;
 
-// Bounded lossy TX FIFO for radio scheduling. push returns occupancy before the
-// call; a non-zero capacity and a return equal to capacity means the oldest
-// item was dropped. The optional push notification runs after releasing the
-// queue mutex.
-class BoundedLossyTxQueue
+// Bounded lossy FIFO. push returns occupancy before the call; a non-zero
+// capacity and a return equal to capacity means the oldest item was dropped.
+// The optional push notification runs after releasing the queue mutex.
+class BoundedLossyQueue
 {
 public:
-    explicit BoundedLossyTxQueue(size_t capacity = 1024,
+    explicit BoundedLossyQueue(size_t capacity = 1024,
                                  bfc::light_function<void()> on_push = {})
         : capacity_(capacity), on_push_(std::move(on_push))
     {

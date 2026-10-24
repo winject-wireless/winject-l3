@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cinttypes>
 #include <errno.h>
+#include <future>
+#include <stdexcept>
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -24,14 +26,12 @@ namespace winject
 
 App::~App()
 {
-    // The upstream table also owns endpoints and outlives TxMux. Fence their
-    // callbacks before member destruction, including a partially failed run().
-    for (auto& up : upstreams)
+    radio_upstream_table_.clear();
+    upstreams.clear();
+    upstream_reactor_->stop();
+    if (upstream_reactor_thread_.joinable())
     {
-        if (up)
-        {
-            up->close();
-        }
+        upstream_reactor_thread_.join();
     }
     tx_mux_.stop();
 }
@@ -54,16 +54,18 @@ bool App::add_upstream(const UpstreamConfig& uc)
     {
         return false;
     }
-    const auto tx_wake = [this]()
+    auto tx_queue = tx_mux_.make_tx_queue();
+    std::shared_ptr<Upstream> up;
+    try
     {
-        tx_mux_.request_tick();
-    };
-    auto up = std::make_shared<HostEndpoint>();
-    if (!up->open(reactor, uc, tx_wake))
+        up = construct_upstream(uc, tx_queue);
+    }
+    catch (const std::exception& e)
     {
+        LOG_ERR("upstream construction failed: %s", e.what());
         return false;
     }
-    radio_upstream_table_.add(up, radio, uc.bus_tx, uc.bus_rx,
+    radio_upstream_table_.add(up, tx_queue, radio, uc.bus_tx, uc.bus_rx,
                               uc.scheduler_budget);
     upstreams.push_back(up);
     tx_mux_.request_tick();
@@ -76,7 +78,7 @@ bool App::add_upstream(const UpstreamConfig& uc)
 bool App::setup_radio()
 {
     radio = std::make_shared<WifiUdp>();
-    if (!radio->open(reactor,
+    if (!radio->open(*reactor,
                      [this](bfc::shared_sized_buffer mpdu)
                      {
                          rx_demux_.on_mpdu(std::move(mpdu));
@@ -130,7 +132,7 @@ bool App::setup_upstreams()
     {
         return false;
     }
-    radio_manager_.bind(&cfg, &tx_mux_, radio.get(), &reactor);
+    radio_manager_.bind(&cfg, &tx_mux_, radio.get(), reactor.get());
     radio_manager_.configure_tx_mux();
     rx_demux_.set_domain(cfg.domain);
     for (const auto& uc : cfg.upstreams)
@@ -143,52 +145,84 @@ bool App::setup_upstreams()
     return true;
 }
 
-bool App::set_upstream_fec(size_t index, FecType type, int k, int n,
-                           std::string* error)
+std::shared_ptr<Upstream> App::construct_upstream(
+    const UpstreamConfig& uc, const std::shared_ptr<BoundedLossyQueue>& tx_queue)
 {
-    auto fail = [&](const char* msg) -> bool
+    if (uc.mode != UpstreamMode::queue)
     {
-        if (error != nullptr)
-        {
-            *error = msg;
-        }
-        return false;
-    };
-    if (index >= upstreams.size() || !upstreams[index])
-    {
-        return fail("invalid upstream index");
+        auto up = std::make_shared<UDPUpstream>(upstream_reactor_, reactor, uc,
+                                                tx_queue);
+        up->bind_callbacks();
+        return up;
     }
-    HostEndpoint* endpoint = upstreams[index].get();
-    if (!endpoint->set_fec(type, k, n, error))
-    {
-        return false;
-    }
-    if (index < cfg.upstreams.size())
-    {
-        cfg.upstreams[index].fec_type = type;
-        cfg.upstreams[index].fec_k = type == FecType::none ? 0 : k;
-        cfg.upstreams[index].fec_n = type == FecType::none ? 0 : n;
-    }
-    return true;
+    using Registry =
+        bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>;
+    auto cv = bfc::cv_reactor_registry::get_instance().get(uc.reactor);
+    auto in = Registry::get_instance().get(uc.endpoint.rx);
+    auto out = Registry::get_instance().get(uc.endpoint.tx);
+    auto up = std::make_shared<QueueUpstream>(cv, uc, tx_queue, in, out);
+    up->bind_callbacks();
+    return up;
 }
 
-bool App::get_upstream_fec(size_t index, FecType* type, int* k, int* n,
+bool App::replace_upstream(size_t index, const UpstreamConfig& uc,
                            std::string* error)
 {
-    auto fail = [&](const char* msg) -> bool
+    const auto original = cfg.upstreams[index];
+    // Unregister producer access, then wait for any callback's shared lease to
+    // finish destruction before reclaiming its input queue/socket binding.
+    std::shared_future<void> destroyed;
+    if (upstreams[index])
     {
-        if (error != nullptr)
+        destroyed = upstreams[index]->destruction_;
+    }
+    {
+        std::lock_guard<std::mutex> lock(radio_upstream_table_.mutex());
+        radio_upstream_table_.entries()[index] = {};
+    }
+    upstreams[index].reset();
+    if (destroyed.valid())
+    {
+        destroyed.wait();
+    }
+    auto install = [&](const UpstreamConfig& config)
+    {
+        auto queue = tx_mux_.make_tx_queue();
+        auto up = construct_upstream(config, queue);
         {
-            *error = msg;
+            std::lock_guard<std::mutex> lock(radio_upstream_table_.mutex());
+            radio_upstream_table_.entries()[index] =
+                RadioUpstreamEntry{up,
+                                   up->rx_queue(),
+                                   queue,
+                                   radio,
+                                   config.bus_tx,
+                                   config.bus_rx,
+                                   config.scheduler_budget};
+        }
+        upstreams[index] = std::move(up);
+    };
+    try
+    {
+        install(uc);
+    }
+    catch (const std::exception& e)
+    {
+        if (error)
+        {
+            *error = k_eio;
+        }
+        LOG_ERR("upstream replacement failed: %s", e.what());
+        try
+        {
+            install(original);
+        }
+        catch (const std::exception& rollback)
+        {
+            LOG_ERR("upstream restore failed: %s", rollback.what());
         }
         return false;
-    };
-    if (index >= upstreams.size() || !upstreams[index])
-    {
-        return fail("invalid upstream index");
     }
-    HostEndpoint* endpoint = upstreams[index].get();
-    endpoint->get_fec(type, k, n);
     return true;
 }
 
@@ -353,14 +387,6 @@ bool App::console_remove_upstream(uint8_t id, std::string* error)
     {
         return fail(k_enoent);
     }
-    if (upstreams[index])
-    {
-        auto* endpoint = upstreams[index].get();
-        if (endpoint != nullptr)
-        {
-            endpoint->close();
-        }
-    }
     upstreams.erase(upstreams.begin() + static_cast<ptrdiff_t>(index));
     tx_mux_.request_tick();
     cfg.upstreams.erase(cfg.upstreams.begin() + static_cast<ptrdiff_t>(index));
@@ -450,30 +476,18 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
     {
         return fail(k_einval);
     }
-    if (patch.have_quanta && !set_upstream_scheduler_budget(
-                                 index, candidate.scheduler_budget, error))
+    if (patch.have_fec || patch.have_k || patch.have_n ||
+        patch.have_fec_timeout)
     {
-        return fail(error != nullptr && !error->empty() ? error->c_str()
-                                                        : k_einval);
-    }
-    auto* endpoint = upstreams[index].get();
-    if (patch.have_fec_timeout)
-    {
-        if (endpoint == nullptr ||
-            !endpoint->set_fec_timeout_ms(candidate.fec_timeout_ms, error))
+        if (!replace_upstream(index, candidate, error))
         {
-            return fail(error != nullptr && !error->empty() ? error->c_str()
-                                                            : k_einval);
+            return false;
         }
     }
-    if (patch.have_fec || patch.have_k || patch.have_n)
+    else if (patch.have_quanta && !set_upstream_scheduler_budget(
+                                      index, candidate.scheduler_budget, error))
     {
-        if (!set_upstream_fec(index, candidate.fec_type, candidate.fec_k,
-                              candidate.fec_n, error))
-        {
-            return fail(error != nullptr && !error->empty() ? error->c_str()
-                                                            : k_einval);
-        }
+        return false;
     }
     cfg.upstreams[index] = candidate;
     if (out == nullptr || !fill_upstream_view(index, out))
@@ -501,7 +515,7 @@ std::vector<uint8_t> console_upstream_ids(const std::vector<uint8_t>& ids,
     return want;
 }
 
-void fill_upstream_fec_fields(const HostEndpoint* endpoint, FecType* fec, int* k,
+void fill_upstream_fec_fields(const Upstream* endpoint, FecType* fec, int* k,
                               int* n)
 {
     if (fec == nullptr || k == nullptr || n == nullptr)
@@ -604,7 +618,8 @@ bool App::console_list_upstream_tx_stat(
             row.txpkt = endpoint->app_tx_packets();
             row.fec_txbyt = endpoint->fec_air_tx_bytes();
             row.fec_txpkt = endpoint->fec_air_tx_packets();
-            endpoint->tx_pending_stats(&row.tx_pending_pkt, &row.tx_pending_byt);
+            endpoint->tx_pending_stats(&row.tx_pending_pkt,
+                                       &row.tx_pending_byt);
         }
         out->push_back(row);
     }
@@ -650,7 +665,7 @@ void App::refresh_host_metrics()
         ->store(radio_proto_ok_ ? 1u : 0u);
     for (size_t i = 0; i < upstreams.size(); ++i)
     {
-        const HostEndpoint* up = upstreams[i].get();
+        const Upstream* up = upstreams[i].get();
         if (up == nullptr)
         {
             continue;
@@ -668,22 +683,30 @@ void App::refresh_host_metrics()
             "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
         metrics_registry_.get_metrics<MetricU64>(oversize_key)
             ->store(up->app_rx_oversize_pkt());
-        metrics_registry_.get_metrics<MetricU64>(
-            "upstream_" + std::to_string(view.id) + "_tx_queue_drops")
+        metrics_registry_
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_tx_queue_drops")
             ->store(up->tx_queue_drops());
-        const auto transport = up->transport_counters();
-        const std::string transport_prefix = "upstream_" + std::to_string(view.id) + "_";
-        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_attempts")
+        const auto transport = up->rx_counters();
+        const std::string transport_prefix =
+            "upstream_" + std::to_string(view.id) + "_";
+        metrics_registry_
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_attempts")
             ->store(transport.delivery_attempts);
-        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_accepted")
+        metrics_registry_
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_accepted")
             ->store(transport.accepted_packets);
-        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_errors")
+        metrics_registry_
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_errors")
             ->store(transport.send_errors);
-        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_no_peer")
+        metrics_registry_
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_no_peer")
             ->store(transport.no_peer_drops);
-        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_closed")
+        metrics_registry_
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_closed")
             ->store(transport.closed_drops);
-        metrics_registry_.get_metrics<MetricU64>(transport_prefix + "app_delivery_evictions")
+        metrics_registry_
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_evictions")
             ->store(transport.queue_evictions);
         const std::string fec_unexpected_key =
             "upstream_" + std::to_string(view.id) + "_air_rx_fec_unexpected";
@@ -1226,7 +1249,7 @@ bool App::start_manager_console()
         return console_radio_device(patch, out, error);
     };
     std::string err;
-    if (!mgr_console.start(reactor, in_addr, std::move(handlers), &err))
+    if (!mgr_console.start(*reactor, in_addr, std::move(handlers), &err))
     {
         LOG_ERR("manager console: %s", err.c_str());
         return false;
@@ -1300,11 +1323,11 @@ bool App::hold_console()
 {
     console.clear_pending();
     console_ok = true;
-    if (!reactor.add_read_rdy(console.fd(),
-                              [this]()
-                              {
-                                  on_console();
-                              }))
+    if (!reactor->add_read_rdy(console.fd(),
+                               [this]()
+                               {
+                                   on_console();
+                               }))
     {
         LOG_ERR("console epoll add failed");
         return false;
@@ -1319,8 +1342,8 @@ void App::drop_console()
     const int fd = console.fd();
     if (fd >= 0)
     {
-        reactor.rem_read_rdy(fd);
-        reactor.rem_write_rdy(fd);
+        reactor->rem_read_rdy(fd);
+        reactor->rem_write_rdy(fd);
     }
     radio_manager_.on_console_down();
     console.cancel_pending();
@@ -1458,68 +1481,40 @@ void App::arm_stats()
 void App::stop()
 {
     stop_requested_.store(true);
-    reactor.stop();
+    reactor->stop();
 }
 
 void App::begin_shutdown()
 {
     mgr_console.stop();
-    shutdown_deadline_ =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-    for (auto& up : upstreams)
-    {
-        if (up)
-        {
-            up->stop_input();
-            up->announce_down();
-        }
-    }
-    tx_mux_.request_tick();
-    poll_shutdown();
-}
-
-void App::poll_shutdown()
-{
-    uint64_t packets = 0, bytes = 0;
-    for (const auto& up : upstreams)
-    {
-        if (up)
-        {
-            uint64_t p = 0, b = 0;
-            up->tx_pending_stats(&p, &b);
-            packets += p;
-            bytes += b;
-        }
-    }
-    if (packets == 0 || std::chrono::steady_clock::now() >= shutdown_deadline_)
-    {
-        if (packets)
-        {
-            LOG_INF("shutdown drain ended with %llu bytes queued",
-                    static_cast<unsigned long long>(bytes));
-        }
-        shutdown_complete_ = true;
-        reactor.stop();
-        return;
-    }
-    shutdown_timer_.arm(std::chrono::milliseconds(1),
-                        [this]()
-                        {
-                            poll_shutdown();
-                        });
+    radio_upstream_table_.clear();
+    upstreams.clear();
+    tx_mux_.stop();
 }
 
 int App::run()
 {
     LOG_INF("winject-manager %s", WINJECT_VERSION_STRING);
+    auto started = std::make_shared<std::promise<void>>();
+    auto ready = started->get_future();
+    upstream_reactor_->wake_up(
+        [started]
+        {
+            started->set_value();
+        });
+    upstream_reactor_thread_ = std::thread(
+        [cv = upstream_reactor_]
+        {
+            cv->run();
+        });
+    ready.wait();
     if (!setup_upstreams())
     {
         return 1;
     }
-    reconnect_timer_.bind(&reactor);
-    console_deadline_timer_.bind(&reactor);
-    stats_timer_.bind(&reactor);
-    shutdown_timer_.bind(&reactor);
+    reconnect_timer_.bind(reactor.get());
+    console_deadline_timer_.bind(reactor.get());
+    stats_timer_.bind(reactor.get());
     console.set_on_deadline(
         [this](std::chrono::steady_clock::time_point deadline)
         {
@@ -1619,28 +1614,22 @@ int App::run()
             "stats logging every %u s (WINJECT_STATS_SEC or winject.stats_sec)",
             cfg.stats_sec);
     }
-    tx_mux_.start(reactor);
+    tx_mux_.start(*reactor);
     arm_stats();
-    // stop() before reactor.run() set it running would be lost; the first
+    // stop() before reactor->run() set it running would be lost; the first
     // loop pass runs this and stops then.
-    reactor.get_timer().wait_us(0,
-                                [this]()
-                                {
-                                    if (stop_requested_.load())
-                                    {
-                                        reactor.stop();
-                                    }
-                                });
-    reactor.run();
-    // stop() remains signal-safe (atomics + wake fd). Resume the same reactor
-    // only for a bounded, timer-driven drain after transport ingress is fenced.
+    reactor->get_timer().wait_us(0,
+                                 [this]()
+                                 {
+                                     if (stop_requested_.load())
+                                     {
+                                         reactor->stop();
+                                     }
+                                 });
+    reactor->run();
     begin_shutdown();
-    if (!shutdown_complete_)
-    {
-        reactor.run();
-    }
-    shutdown_timer_.cancel();
-    tx_mux_.stop();
+    upstream_reactor_->stop();
+    upstream_reactor_thread_.join();
     return 0;
 }
 
