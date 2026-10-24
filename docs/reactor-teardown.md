@@ -124,13 +124,18 @@ does for d-plane address changes.
 
 When queue upstreams are enabled, `App` runs a dedicated `cv_reactor` thread for
 UDP/CV processing while queue upstreams may use a host-registered CV reactor from
-BFC's registry. Follow the sync remove + lease `wake_up` pattern above; stop FEC
-timers with `DatagramAir::stop()` in the endpoint destructor (`air.stop()`), not
-via `wake_up`.
+BFC's registry. `Upstream::teardown()` follows the sync remove + `wake_up` fence
+pattern above and calls `DatagramAir::stop()` inside the fence, on the CV reactor
+thread, so no FEC timer can be running or re-armed. The destructor keeps the
+non-blocking lease `wake_up` plus `air.stop()` for paths that never call
+`teardown()`. Every teardown fence wait (CV fence, and the IO `done_cb` in
+`UDPUpstream::teardown()`) is bounded by `Upstream::k_fence_timeout`, since a
+reactor that is not running never runs it; on timeout the CV path stops `air`
+inline and the abandoned closure no longer touches the endpoint.
 
-Instance replacement (`replace_upstream`) still waits on endpoint destruction
-(`destruction` future) for queue claims and in-flight `shared_ptr` drains — reactor
-fences alone do not release those.
+Instance replacement (`replace_upstream`) calls `Upstream::teardown()` on the IO
+thread before `reset()`; queue claims are released in `~QueueUpstream` when the
+last `shared_ptr` is dropped.
 
 ## Rules for new code
 
@@ -145,7 +150,9 @@ fences alone do not release those.
    from a foreign thread or a `wake_up` callback.
 4. Never block shutdown on a `wake_up` `done` if the reactor may already be
    stopped.
-5. Stop FEC / upstream timers separately (`cancel_fec_timer`, `air.stop()`).
+5. `wake_up` alone is not a timer fence. Cancel timers inside the fence on the
+   reactor thread (as `Upstream::teardown()` does with `air.stop()`), so none is
+   running and no handler can re-arm one.
 
 ## Known issues
 

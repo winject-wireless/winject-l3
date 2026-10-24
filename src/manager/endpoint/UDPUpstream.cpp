@@ -1,5 +1,6 @@
 #include "endpoint/UDPUpstream.h"
 
+#include "utils/Log.h"
 #include "utils/NetUtil.h"
 
 #include <errno.h>
@@ -71,6 +72,11 @@ void UDPUpstream::bind_callbacks()
 }
 void UDPUpstream::teardown()
 {
+    // Fail before touching the socket so misuse leaves nothing half removed.
+    if (reactor->is_reactor_thread())
+    {
+        throw std::logic_error("upstream teardown on cv reactor thread");
+    }
     if (registered)
     {
         const int fd = socket.fd();
@@ -80,13 +86,18 @@ void UDPUpstream::teardown()
         }
         else
         {
-            std::promise<void> io_done;
+            // Shared: a stopped IO reactor runs done_cb late or never.
+            auto io_done = std::make_shared<std::promise<void>>();
+            auto removed = io_done->get_future();
             io->rem_read_rdy(fd,
-                             [&io_done]()
+                             [io_done]()
                              {
-                                 io_done.set_value();
+                                 io_done->set_value();
                              });
-            io_done.get_future().wait();
+            if (removed.wait_for(k_fence_timeout) != std::future_status::ready)
+            {
+                LOG_WRN("udp upstream teardown: io reactor fence timed out");
+            }
         }
         registered = false;
     }

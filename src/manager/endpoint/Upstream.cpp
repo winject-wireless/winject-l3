@@ -1,6 +1,8 @@
 #include "endpoint/Upstream.h"
 
-#include <future>
+#include "utils/Log.h"
+
+#include <condition_variable>
 #include <stdexcept>
 
 namespace winject
@@ -89,29 +91,41 @@ void Upstream::teardown()
     reactor->remove_read_rdy(*app_tx_queue);
     host_rx_queue->set_reactor(nullptr);
     app_tx_queue->set_reactor(nullptr);
-    struct TeardownFence
+    // The fence runs after any in-flight queue handler or FEC timer. A stopped
+    // reactor never runs it, so the wait is bounded and the closure must not
+    // borrow this once the wait gives up.
+    struct Fence
     {
-        std::shared_ptr<
-            std::pair<std::shared_ptr<ReactiveLossyQueue>,
-                      std::shared_ptr<ReactiveLossyQueue>>>
-            leases;
+        std::mutex mutex;
+        std::condition_variable cv;
         DatagramAir* air = nullptr;
-        std::promise<void> done;
+        bool done = false;
     };
-    auto fence = std::make_shared<TeardownFence>();
-    fence->leases = std::make_shared<
-        std::pair<std::shared_ptr<ReactiveLossyQueue>,
-                  std::shared_ptr<ReactiveLossyQueue>>>(host_rx_queue,
-                                                          app_tx_queue);
+    auto fence = std::make_shared<Fence>();
     fence->air = &air;
-    auto done = fence->done.get_future();
     reactor->wake_up(
         [fence]()
         {
-            fence->air->stop();
-            fence->done.set_value();
+            std::lock_guard<std::mutex> lock(fence->mutex);
+            if (fence->air)
+            {
+                fence->air->stop();
+            }
+            fence->done = true;
+            fence->cv.notify_one();
         });
-    done.wait();
+    std::unique_lock<std::mutex> lock(fence->mutex);
+    if (!fence->cv.wait_for(lock, k_fence_timeout,
+                            [&fence]
+                            {
+                                return fence->done;
+                            }))
+    {
+        fence->air = nullptr;
+        lock.unlock();
+        LOG_WRN("upstream teardown: cv reactor fence timed out, stopping inline");
+        air.stop();  // fences an in-flight timer itself
+    }
     bound = false;
 }
 

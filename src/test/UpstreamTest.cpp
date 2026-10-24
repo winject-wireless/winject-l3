@@ -310,6 +310,101 @@ TEST_F(UpstreamTest, TeardownReleasesInputClaim)
     cv_worker.join();
     EXPECT_EQ(tx->size(), 3u);
 }
+// teardown() waits out a handler that is mid-pass and cancels an armed FEC
+// timer; nothing of the old upstream runs after it returns.
+TEST_F(UpstreamTest, TeardownWaitsForInFlightPassAndCancelsFecTimer)
+{
+    cfg.fec_type = FecType::RsBlockErasure;
+    cfg.fec_k = 3;
+    cfg.fec_n = 4;
+    cfg.fec_timeout_ms = 5;
+    create_queue();
+    auto blocker = std::make_shared<ReactiveLossyQueue>();
+    blocker->set_capacity(1);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future().share();
+    cv->add_read_rdy(*blocker,
+                     [&]
+                     {
+                         blocker->pop();
+                         entered.set_value();
+                         released.wait();
+                     });
+    std::thread cv_worker(
+        [this]()
+        {
+            cv->run();
+        });
+    struct Join
+    {
+        std::shared_ptr<Upstream::Reactor> cv;
+        std::thread& worker;
+        ~Join()
+        {
+            cv->stop();
+            worker.join();
+        }
+    } join{cv, cv_worker};
+    auto wait_for = [](auto pred)
+    {
+        auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!pred() && std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return pred();
+    };
+
+    app_tx_queue->push(packet({1}));  // partial block arms the FEC timer
+    ASSERT_TRUE(wait_for([&] { return up->app_tx_packets() == 1u; }));
+    EXPECT_FALSE(tx->has_data());
+
+    blocker->push(packet({0}));
+    cv->wake_up();
+    ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+
+    auto torn_down = std::async(std::launch::async,
+                                [this]
+                                {
+                                    up->teardown();
+                                });
+    EXPECT_EQ(torn_down.wait_for(std::chrono::milliseconds(20)),
+              std::future_status::timeout);
+    release.set_value();
+    ASSERT_EQ(torn_down.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    torn_down.get();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_FALSE(tx->has_data());  // FEC timeout never flushed the block
+    app_tx_queue->push(packet({2}));
+    cv->wake_up();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT_TRUE(app_tx_queue->has_data());  // no handler consumes input
+    cv->remove_read_rdy(*blocker);
+}
+
+// A reactor that is not running never runs the fence; teardown gives up after
+// the timeout, and the abandoned fence is harmless when the reactor runs later.
+TEST_F(UpstreamTest, TeardownWithStoppedReactorTimesOut)
+{
+    cfg.fec_type = FecType::RsBlockErasure;
+    cfg.fec_k = 3;
+    cfg.fec_n = 4;
+    cfg.fec_timeout_ms = 5;
+    create_queue();
+    app_tx_queue->push(packet({1}));
+    pump_cv(1);  // arms the FEC timer, then the reactor stops
+    up->teardown();
+    up.reset();
+    app_tx_queue->push(packet({2}));
+    pump_cv(20);  // runs the abandoned fence; the FEC timer was cancelled
+    EXPECT_FALSE(tx->has_data());
+    EXPECT_TRUE(app_tx_queue->has_data());
+}
 
 TEST_F(UpstreamTest, ReconstructionReleasesInputClaim)
 {
@@ -448,6 +543,40 @@ TEST_F(UpstreamTest, UdpServerLearnsPeerAndReplacementStartsFresh)
     pump_cv();
     EXPECT_TRUE(receive(peer).empty());
     EXPECT_EQ(up->rx_counters().no_peer_drops, 1u);
+}
+// Replace on the IO thread as App does: the old socket's epoll removal is
+// immediate, so a replacement reusing the fd number stays registered.
+TEST_F(UpstreamTest, UdpTeardownOnIoThreadKeepsReplacementArmed)
+{
+    uint16_t port = test::reserve_free_udp_port();
+    ASSERT_NE(port, 0);
+    const auto rx_addr = "127.0.0.1:" + std::to_string(port);
+    create_udp(rx_addr);
+    std::thread cv_worker(
+        [this]()
+        {
+            cv->run();
+        });
+    io->wake_up(
+        [&]
+        {
+            up->teardown();
+            up.reset();
+            create_udp(rx_addr);
+        });
+    pump_io();
+    bfc::socket peer(bfc::create_udp4());
+    send_to(peer, port, packet({5}));
+    pump_io();
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!tx->has_data() && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    cv->stop();
+    cv_worker.join();
+    ASSERT_EQ(tx->size(), 1u);
+    EXPECT_EQ(bytes(*tx->pop()), bytes(lc_packet(packet({5}), false, 0)));
 }
 TEST_F(UpstreamTest, UdpSendFailureIsAccounted)
 {

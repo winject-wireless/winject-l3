@@ -7,6 +7,7 @@
 #include "endpoint/UpstreamStats.h"
 
 #include <bfc/cv_reactor.hpp>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -132,6 +133,9 @@ protected:
     // Executed only by the supplied CV reactor, including FEC timer delivery.
     virtual void deliver_datagram(const uint8_t* data, size_t len) = 0;
     void unbind_callbacks();
+    // Caller-side bound on teardown fence waits; a reactor that is not running
+    // never runs them. A running reactor reaches the fence within one pass.
+    static constexpr std::chrono::milliseconds k_fence_timeout{100};
     void submit_datagram(const uint8_t* data, size_t len);
     void reject_oversize_datagram(size_t len)
     {
