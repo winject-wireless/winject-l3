@@ -3,8 +3,6 @@
 #include "radio/WifiFcs.h"
 #include "utils/Log.h"
 
-#include <chrono>
-#include <future>
 #include <utility>
 
 namespace winject
@@ -20,27 +18,54 @@ constexpr int k_max_datagrams_per_wake = 8;
 
 }  // namespace
 
+template <typename Fn>
+void WifiQueue::through_gate(const std::shared_ptr<Gate>& gate, Fn&& fn)
+{
+    std::lock_guard<std::mutex> lock(gate->mu);
+    if (gate->owner == nullptr)
+    {
+        return;
+    }
+    gate->running.store(std::this_thread::get_id());
+    fn(*gate->owner);
+    gate->running.store(std::thread::id{});
+}
+
+WifiQueue::WifiQueue()
+{
+    gate->owner = this;
+}
+
 WifiQueue::~WifiQueue()
 {
     close();
+    std::lock_guard<std::mutex> lock(gate->mu);
+    gate->owner = nullptr;
 }
 
 bool WifiQueue::open(IOReactor& reactor, rx on_rx, idle on_idle)
 {
     close();
+    {
+        std::lock_guard<std::mutex> lock(gate->mu);
+        this->on_rx = std::move(on_rx);
+        this->on_idle = std::move(on_idle);
+    }
+    std::lock_guard<std::mutex> lock(transport_mu);
     this->reactor = &reactor;
-    this->on_rx = std::move(on_rx);
-    this->on_idle = std::move(on_idle);
     opened = true;
     return true;
 }
 
 bool WifiQueue::bind_dplane(const WifiQueueDplaneBinding& binding)
 {
-    if (!opened || reactor == nullptr)
     {
-        LOG_ERR("wifi queue: open before bind_dplane");
-        return false;
+        std::lock_guard<std::mutex> lock(transport_mu);
+        if (!opened || reactor == nullptr)
+        {
+            LOG_ERR("wifi queue: open before bind_dplane");
+            return false;
+        }
     }
     if (binding.wifi_tx.empty() || binding.wifi_rx.empty() ||
         binding.reactor.empty())
@@ -103,12 +128,15 @@ bool WifiQueue::bind_dplane(const WifiQueueDplaneBinding& binding)
         dplane_bound = true;
     }
 
-    cv_reactor->add_read_rdy(
-        *wifi_rx,
-        [this]()
-        {
-            on_wifi_rx();
-        });
+    cv_reactor->add_read_rdy(*wifi_rx,
+                             [gate = gate]()
+                             {
+                                 through_gate(gate,
+                                              [](WifiQueue& self)
+                                              {
+                                                  self.on_wifi_rx();
+                                              });
+                             });
     cv_reactor->wake_up();
     LOG_INF("wifi queue dplane wifi_tx=%s wifi_rx=%s reactor=%s",
             binding.wifi_tx.c_str(), binding.wifi_rx.c_str(),
@@ -123,24 +151,34 @@ void WifiQueue::set_tx_dplane(const sockaddr_in& dplane)
 
 void WifiQueue::post_rx_event(RxEvent ev)
 {
-    if (!opened || reactor == nullptr)
+    IOReactor* io = nullptr;
     {
-        return;
-    }
-    reactor->wake_up(
-        [this, ev = std::move(ev)]()
+        std::lock_guard<std::mutex> lock(transport_mu);
+        if (!opened || reactor == nullptr)
         {
-            std::visit(
-                [this](const auto& e)
-                {
-                    using T = std::decay_t<decltype(e)>;
-                    if constexpr (std::is_same_v<T, EventCtrlRecvSocketChange>)
-                    {
-                        (void)e;
-                        register_forward();
-                    }
-                },
-                ev);
+            return;
+        }
+        io = reactor;
+    }
+    io->wake_up(
+        [gate = gate, ev = std::move(ev)]()
+        {
+            through_gate(gate,
+                         [&ev](WifiQueue& self)
+                         {
+                             std::visit(
+                                 [&self](const auto& e)
+                                 {
+                                     using T = std::decay_t<decltype(e)>;
+                                     if constexpr (std::is_same_v<
+                                                       T, EventCtrlRecvSocketChange>)
+                                     {
+                                         (void)e;
+                                         self.register_forward();
+                                     }
+                                 },
+                                 ev);
+                         });
         });
 }
 
@@ -167,29 +205,25 @@ void WifiQueue::close()
         wifi_tx.reset();
         wifi_rx.reset();
         cv_reactor.reset();
+        reactor = nullptr;
     }
     if (cv && rx_queue)
     {
         cv->remove_read_rdy(*rx_queue);
-        if (!cv->is_reactor_thread())
-        {
-            auto done = std::make_shared<std::promise<void>>();
-            auto finished = done->get_future();
-            cv->wake_up(
-                [done]()
-                {
-                    done->set_value();
-                });
-            if (finished.wait_for(std::chrono::seconds(2)) !=
-                std::future_status::ready)
-            {
-                LOG_ERR("wifi queue close: reactor did not ack detach");
-            }
-        }
+        // The reactor snapshots raw queue pointers; keep this one alive past
+        // that scan even if the host unregisters it.
+        cv->wake_up([rx_queue] {});
     }
-    reactor = nullptr;
-    on_rx = nullptr;
-    on_idle = nullptr;
+    // A callback dispatched before the removal finds the queue closed. Wait
+    // out one running on another thread; from inside a callback, the caller
+    // already holds the gate and the callbacks stay set until open() or
+    // destruction.
+    if (gate->running.load() != std::this_thread::get_id())
+    {
+        std::lock_guard<std::mutex> lock(gate->mu);
+        on_rx = nullptr;
+        on_idle = nullptr;
+    }
 }
 
 bool WifiQueue::push_wifi_tx(const uint8_t* data, size_t len)
@@ -222,7 +256,7 @@ bool WifiQueue::push_wifi_tx(const uint8_t* data, size_t len)
 
 bool WifiQueue::send(const uint8_t* mpdu, size_t len)
 {
-    if (!dplane_bound || mpdu == nullptr || len == 0)
+    if (mpdu == nullptr || len == 0)
     {
         return false;
     }

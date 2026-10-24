@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <string>
 #include <sys/socket.h>
+#include <thread>
 
 namespace winject
 {
@@ -33,6 +34,11 @@ namespace winject
 //
 // m-plane (UDP console) stays on WifiUdp / sockets; only the d-plane uses
 // queues until a queue m-plane exists.
+//
+// close() never waits for a reactor, which may be stopped or busy elsewhere.
+// It waits out an rx/idle callback or posted RX event running on another
+// thread, and none runs after it returns. It may be called from inside on_rx
+// or on_idle. A callback must not destroy the WifiQueue.
 struct WifiQueueDplaneBinding
 {
     // Manager -> peer: inject MPDUs and 1-byte registration (same as UDP TX).
@@ -51,7 +57,7 @@ public:
     static constexpr size_t k_tx_mpdu_max = WIFI_RADIO_INJECT_MAX;
     static constexpr size_t k_rx_mpdu_max = WIFI_RADIO_RX_MAX;
 
-    WifiQueue() = default;
+    WifiQueue();
     ~WifiQueue();
     WifiQueue(const WifiQueue&) = delete;
     WifiQueue& operator=(const WifiQueue&) = delete;
@@ -102,10 +108,26 @@ private:
         bfc::reactive_circular_lossy_queue<bfc::shared_sized_buffer>;
     using DplaneReactor = bfc::cv_reactor<>;
 
+    // Reactor callbacks reach the WifiQueue through this, never by raw this:
+    // owner is cleared on destruction, and mu is held while a callback runs.
+    struct Gate
+    {
+        std::mutex mu;
+        WifiQueue* owner = nullptr;
+        // Thread running a callback, so close() from inside one does not wait
+        // on itself.
+        std::atomic<std::thread::id> running{};
+    };
+    template <typename Fn>
+    static void through_gate(const std::shared_ptr<Gate>& gate, Fn&& fn);
+
     bool push_wifi_tx(const uint8_t* data, size_t len);
     void on_wifi_rx();
 
+    std::shared_ptr<Gate> gate = std::make_shared<Gate>();
+    // Guarded by transport_mu.
     IOReactor* reactor = nullptr;
+    // Guarded by gate->mu.
     rx on_rx;
     idle on_idle;
     std::atomic<RadioFcsMode> fcs_mode_acc{RadioFcsMode::unknown};

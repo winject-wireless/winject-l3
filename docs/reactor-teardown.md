@@ -140,6 +140,13 @@ handler; the data-path mutex is what fences it.
 Instance replacement (`replace_upstream`) calls `Upstream::teardown()` on the IO
 thread before `reset()`; `QueueUpstream::teardown()` releases the queue claim.
 
+[`WifiQueue`](../src/manager/radio/WifiQueue.cpp) follows the same rule for its
+`wifi_rx` handler and posted RX events: callbacks capture a shared gate, not
+`this`. The gate's mutex is held while one runs, so `close()` waits out a
+running callback on another thread without a reactor fence, and the destructor
+clears the gate's owner so a late callback does nothing. `close()` may run from
+inside `on_rx`/`on_idle`.
+
 ## Rules for new code
 
 1. Deregister, then `wake_up(done)`; free or reuse resources in `done` or in the

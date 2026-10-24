@@ -187,3 +187,161 @@ TEST(WifiQueueTest, RegisterForwardSendsOneByte)
     }
     EXPECT_TRUE(saw_reg.load());
 }
+
+namespace
+{
+
+// Registers a d-plane pair and a CV reactor under unique names for one test.
+struct Dplane
+{
+    std::string prefix;
+    std::shared_ptr<DplaneQueue> inject = std::make_shared<DplaneQueue>();
+    std::shared_ptr<DplaneQueue> forward = std::make_shared<DplaneQueue>();
+    std::shared_ptr<bfc::cv_reactor<>> cv =
+        std::make_shared<bfc::cv_reactor<>>();
+    WifiQueueDplaneBinding binding;
+
+    explicit Dplane(std::string name, size_t inject_capacity = 16)
+        : prefix(std::move(name))
+    {
+        inject->set_capacity(inject_capacity);
+        forward->set_capacity(16);
+        binding.wifi_tx = prefix + "-tx";
+        binding.wifi_rx = prefix + "-rx";
+        binding.reactor = prefix + "-cv";
+        EXPECT_TRUE(
+            DplaneQueueRegistry::get_instance().add(binding.wifi_tx, inject));
+        EXPECT_TRUE(
+            DplaneQueueRegistry::get_instance().add(binding.wifi_rx, forward));
+        EXPECT_TRUE(
+            bfc::cv_reactor_registry::get_instance().add(binding.reactor, cv));
+    }
+    ~Dplane()
+    {
+        DplaneQueueRegistry::get_instance().rem(binding.wifi_tx);
+        DplaneQueueRegistry::get_instance().rem(binding.wifi_rx);
+        bfc::cv_reactor_registry::get_instance().rem(binding.reactor);
+    }
+    // A forward frame as the peer sends it (signal mode: zero trailer).
+    void push_forward()
+    {
+        std::vector<uint8_t> frame(24 + 4, 0);
+        forward->push(
+            bfc::shared_sized_buffer::copy_from(frame.data(), frame.size()));
+        cv->wake_up();
+    }
+};
+
+}  // namespace
+
+// close() waits out an rx callback running on the reactor, however long it
+// runs, and no callback runs afterwards.
+TEST(WifiQueueTest, CloseWaitsForInFlightRxCallback)
+{
+    Dplane dplane("wq-inflight");
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future().share();
+    std::atomic<int> calls{0};
+    IOReactor io;
+    WifiQueue wifi;
+    ASSERT_TRUE(wifi.open(io,
+                          [&](bfc::shared_sized_buffer)
+                          {
+                              if (calls.fetch_add(1) == 0)
+                              {
+                                  entered.set_value();
+                                  released.wait();
+                              }
+                          }));
+    ASSERT_TRUE(wifi.bind_dplane(dplane.binding));
+    wifi.set_fcs_mode(RadioFcsMode::signal);
+    CvRun cv_run(*dplane.cv);
+    dplane.push_forward();
+    ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    auto closed = std::async(std::launch::async,
+                             [&]
+                             {
+                                 wifi.close();
+                             });
+    EXPECT_EQ(closed.wait_for(std::chrono::milliseconds(200)),
+              std::future_status::timeout);
+    release.set_value();
+    ASSERT_EQ(closed.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    closed.get();
+    dplane.push_forward();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(calls.load(), 1);
+    EXPECT_TRUE(dplane.forward->has_data());  // left for the next consumer
+}
+
+// A reactor that is not running never blocks close().
+TEST(WifiQueueTest, CloseWithStoppedReactorReturnsAtOnce)
+{
+    Dplane dplane("wq-stopped");
+    IOReactor io;
+    WifiQueue wifi;
+    ASSERT_TRUE(wifi.open(io, [](bfc::shared_sized_buffer) {}));
+    ASSERT_TRUE(wifi.bind_dplane(dplane.binding));
+    const auto begin = std::chrono::steady_clock::now();
+    wifi.close();
+    EXPECT_LT(std::chrono::steady_clock::now() - begin,
+              std::chrono::milliseconds(50));
+}
+
+TEST(WifiQueueTest, CloseFromInsideRxCallback)
+{
+    Dplane dplane("wq-reentrant");
+    IOReactor io;
+    WifiQueue wifi;
+    std::atomic<int> calls{0};
+    ASSERT_TRUE(wifi.open(io,
+                          [&](bfc::shared_sized_buffer)
+                          {
+                              ++calls;
+                              wifi.close();
+                          }));
+    ASSERT_TRUE(wifi.bind_dplane(dplane.binding));
+    wifi.set_fcs_mode(RadioFcsMode::signal);
+    dplane.push_forward();
+    dplane.push_forward();
+    CvRun cv_run(*dplane.cv);
+    for (int i = 0; i < 100 && calls.load() == 0; ++i)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    EXPECT_EQ(calls.load(), 1);  // the drain loop stops once closed
+    EXPECT_FALSE(wifi.send(minimal_mpdu().data(), 24));
+}
+
+// An RX event posted to the IO reactor never reaches a destroyed WifiQueue.
+TEST(WifiQueueTest, PostedRxEventAfterDestructionIsIgnored)
+{
+    Dplane dplane("wq-posted");
+    IOReactor io;
+    {
+        WifiQueue wifi;
+        ASSERT_TRUE(wifi.open(io, [](bfc::shared_sized_buffer) {}));
+        ASSERT_TRUE(wifi.bind_dplane(dplane.binding));
+        wifi.post_rx_event(EventCtrlRecvSocketChange{});
+    }
+    ASSERT_TRUE(run_io_brief(io));
+    EXPECT_FALSE(dplane.inject->has_data());
+}
+
+TEST(WifiQueueTest, TxEvictionIsCounted)
+{
+    Dplane dplane("wq-evict", 1);
+    IOReactor io;
+    WifiQueue wifi;
+    ASSERT_TRUE(wifi.open(io, [](bfc::shared_sized_buffer) {}));
+    ASSERT_TRUE(wifi.bind_dplane(dplane.binding));
+    const auto mpdu = minimal_mpdu();
+    ASSERT_TRUE(wifi.send(mpdu.data(), mpdu.size()));
+    ASSERT_TRUE(wifi.send(mpdu.data(), mpdu.size()));
+    EXPECT_EQ(wifi.peek_counters().wifi_tx_drops, 1u);
+    EXPECT_EQ(dplane.inject->size(), 1u);
+}
