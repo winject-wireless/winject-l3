@@ -16,6 +16,8 @@ set(WINJECT_L3_SOURCES
     fec/vendor/rs_block_erasure.cpp
     fec/vendor/rs_block_erasure_rx.cpp
     fec/vendor/rs_encode_scalar.cpp
+    fec/FecTx.cpp
+    fec/FecRx.cpp
     utils/NetUtil.cpp
     radio/WifiUdp.cpp
     radio/WifiQueue.cpp

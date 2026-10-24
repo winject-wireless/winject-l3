@@ -391,38 +391,72 @@ void winject::fec_vendor::rs_block_erasure::run_emit_engine(fec_rx_payload_list*
             continue;
         }
         /* No shard of the head id yet: find the nearest later block. */
-        int                       best = 0;
-        bool                      found = false;
-        clock_type::time_point    next_start{};
-        for (const auto& kv : rx_blocks)
-        {
-            const int d = dist_from_emit(kv.first);
-            if (d > 0 && (!found || d < best))
-            {
-                found = true;
-                best = d;
-                next_start = block_start(kv.second);
-            }
-        }
-        for (const auto& kv : ready_blocks)
-        {
-            const int d = dist_from_emit(kv.first);
-            if (d > 0 && (!found || d < best))
-            {
-                found = true;
-                best = d;
-                next_start = kv.second.start;
-            }
-        }
+        int                    best = 0;
+        clock_type::time_point next_start{};
         /* The missing blocks were closed before that one, so their last shard was due within
          * one spread of its start. */
-        if (!found || t < next_start + spread_now() + margin_now())
+        if (!nearest_block_after_head(&best, &next_start) ||
+            t < next_start + spread_now() + margin_now())
         {
             break;
         }
         note_head_hole_sdus(best);
         emit_next = static_cast<uint16_t>(emit_next + static_cast<uint16_t>(best));
     }
+}
+
+bool winject::fec_vendor::rs_block_erasure::nearest_block_after_head(
+    int* dist, clock_type::time_point* start) const
+{
+    bool found = false;
+    for (const auto& kv : rx_blocks)
+    {
+        const int d = dist_from_emit(kv.first);
+        if (d > 0 && (!found || d < *dist))
+        {
+            found = true;
+            *dist = d;
+            *start = block_start(kv.second);
+        }
+    }
+    for (const auto& kv : ready_blocks)
+    {
+        const int d = dist_from_emit(kv.first);
+        if (d > 0 && (!found || d < *dist))
+        {
+            found = true;
+            *dist = d;
+            *start = kv.second.start;
+        }
+    }
+    return found;
+}
+
+/* Mirrors where run_emit_engine stops: the head block's deadline, or the gap skip time. */
+bool winject::fec_vendor::rs_block_erasure::next_rx_deadline(clock_type::time_point* out) const
+{
+    if (!emit_base_set || nullptr == out)
+    {
+        return false;
+    }
+    if (ready_blocks.count(emit_next) != 0)
+    {
+        *out = now();
+        return true;
+    }
+    if (auto rxit = rx_blocks.find(emit_next); rxit != rx_blocks.end())
+    {
+        *out = block_deadline(rxit->second);
+        return true;
+    }
+    int                    best = 0;
+    clock_type::time_point next_start{};
+    if (!nearest_block_after_head(&best, &next_start))
+    {
+        return false;
+    }
+    *out = next_start + spread_now() + margin_now();
+    return true;
 }
 
 bool winject::fec_vendor::rs_block_erasure::try_decode_block(uint16_t sdu_base, rx_block_s* block,

@@ -109,7 +109,6 @@ public:
     }
 
     // Adapter queries: neither retains an encoded-output queue.
-    bool has_pending_rx() const { return !rx_blocks.empty() || !ready_blocks.empty(); }
     void pending_tx_stats(uint64_t* packets, uint64_t* bytes) const
     {
         if (packets) *packets = pending.size();
@@ -125,8 +124,11 @@ public:
     /* Next partial-block flush time; false if no pending TX deadline. */
     [[nodiscard]] bool next_deadline(std::chrono::steady_clock::time_point* out) const;
     // RX tick: flush the head block once its deadline has passed and release what follows
-    // in sequence. Call periodically even when no datagram arrives.
+    // in sequence. Call at next_rx_deadline() even when no datagram arrives.
     void poll_rx(fec_rx_payload_list* out);
+    /* When poll_rx can next release something without new shards (head block deadline or
+     * head gap skip); false if nothing waits on time. Valid after push_air / poll_rx. */
+    [[nodiscard]] bool next_rx_deadline(std::chrono::steady_clock::time_point* out) const;
 
     // Air datagram (full 5-byte FEC shard header + body). Zero-copy RX stores the
     // buffer in the block; systematic emits are subviews of the shard body.
@@ -269,6 +271,8 @@ private:
     void advance_head(int sdu_n);
     void note_released(uint16_t sdu_base);
     void try_stream_head_systematic(rx_block_s& block, fec_rx_payload_list* out);
+    /* Nearest block ahead of the head: its distance in SDUs and fitted start. */
+    bool nearest_block_after_head(int* dist, std::chrono::steady_clock::time_point* start) const;
     void run_emit_engine(fec_rx_payload_list* out);
     bool try_decode_block(uint16_t sdu_base, rx_block_s* block, fec_rx_payload_list* out);
 

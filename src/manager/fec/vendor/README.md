@@ -11,8 +11,10 @@ Local changes:
 
 - Namespace `winject::fec_vendor`, local include paths and `WINJECT_` backend
   macros/symbols. Host NEON uses the existing winject ISA-L wrapper.
-- Two read-only adapter queries: pending original TX datagrams/bytes and whether
-  receive blocks need periodic polling. Encoded output is returned to the caller.
+- Two read-only adapter queries: pending original TX datagrams/bytes and
+  `next_rx_deadline()`, the time `poll_rx` can next release without new shards
+  (shares `nearest_block_after_head` with `run_emit_engine`). Encoded output is
+  returned to the caller.
 - Reject virtual pad indices in received headers, preserving winject validation.
 - `RsBlockErasure.h` supplies winject's 1445-byte shard budget and k<n<=31 config
   profile. The vendored codec's n=k behavior remains covered by its own tests.

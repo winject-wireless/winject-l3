@@ -451,6 +451,53 @@ TEST(RsBlockErasureEmitTest, NextDeadlineAfterPartialPush)
 
 
 
+/* next_rx_deadline is exactly where poll_rx starts releasing: the head block's deadline, then
+ * the head gap skip, and nothing once everything is out. */
+TEST(RsBlockErasureEmitTest, NextRxDeadlineMatchesPollRelease)
+{
+    rs_block_erasure enc;
+    ASSERT_TRUE(enc.init(3, 4, 20));
+    const auto b0 = encode_block_apps(enc, 100, {1, 2, 3});
+    const auto b1 = encode_block_apps(enc, 106, {7, 8, 9});
+
+    rs_block_erasure dec;
+    fake_clock clk;
+    clk.attach(dec);
+    std::chrono::steady_clock::time_point dl;
+    EXPECT_FALSE(dec.next_rx_deadline(&dl));
+
+    winject::fec_vendor::fec_rx_payload_list out;
+    feed_append(dec, b0[1], &out);  // head shard 0 missing
+    EXPECT_TRUE(out.empty());
+    ASSERT_TRUE(dec.next_rx_deadline(&dl));
+    EXPECT_GT(dl, clk.t);
+
+    clk.t = dl - std::chrono::microseconds(1);
+    dec.poll_rx(&out);
+    EXPECT_TRUE(out.empty());
+    clk.t = dl;
+    dec.poll_rx(&out);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_TRUE(out_has_app_tag(out, 2));
+    EXPECT_FALSE(dec.next_rx_deadline(&dl));
+
+    /* Block 103 never arrives; 106 is complete and waits behind the gap. */
+    out.clear();
+    for (size_t i = 0; i < 3; i++)
+    {
+        feed_append(dec, b1[i], &out);
+    }
+    EXPECT_TRUE(out.empty());
+    ASSERT_TRUE(dec.next_rx_deadline(&dl));
+    clk.t = dl - std::chrono::microseconds(1);
+    dec.poll_rx(&out);
+    EXPECT_TRUE(out.empty());
+    clk.t = dl;
+    dec.poll_rx(&out);
+    EXPECT_EQ(out.size(), 3u);
+    EXPECT_FALSE(dec.next_rx_deadline(&dl));
+}
+
 /* Late parity for a block that already decoded while an earlier block was incomplete must not
  * create a phantom partial block whose abandonment counts the whole block as lost again. */
 TEST(RsBlockErasureEmitTest, LateParityOfReadyBlockNotCountedLost)

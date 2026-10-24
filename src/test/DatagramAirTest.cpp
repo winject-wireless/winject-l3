@@ -59,7 +59,7 @@ protected:
             {
                 received.emplace_back(p, p + n);
             },
-            cv, cfg, cfg.bus_tx, &tx_stats, &tx_stats_mu, "test");
+            cv, cfg, cfg.bus_tx, &tx_stats, &tx_stats_mu);
     }
     std::vector<std::vector<uint8_t>> drain()
     {
@@ -101,32 +101,30 @@ TEST_F(DatagramAirTest, EncodedBacklogIsBoundedAndDropsCounted)
     EXPECT_EQ(air.tx_queue_drops(), 15000u - 1024u);
 }
 
-TEST_F(DatagramAirTest, TimeoutChangeFlushesOldBlockAndAppliesNewDeadline)
+TEST_F(DatagramAirTest, TxTimeoutFlushesPartialBlockOnReactorTimer)
 {
-    std::string error;
-    ASSERT_TRUE(air.set_fec_timeout_ms(1000, &error));
+    cfg.fec_timeout_ms = 1;
+    ASSERT_TRUE(start());
     const uint8_t p = 1;
     air.accept_app_datagram(&p, 1);
-    ASSERT_FALSE(tx_queue->has_data());
-    ASSERT_TRUE(air.set_fec_timeout_ms(1, &error));
-    EXPECT_EQ(drain().size(), 2u);  // old partial block survived the change
-    air.accept_app_datagram(&p, 1);
+    EXPECT_FALSE(tx_queue->has_data());
+    int64_t deadline_us = 0;
+    ASSERT_TRUE(timer.get_next_deadline_us(deadline_us));
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     timer.schedule();
     EXPECT_EQ(drain().size(), 2u);
-    EXPECT_EQ(air.fec_timeout_ms(), 1);
+    EXPECT_FALSE(timer.get_next_deadline_us(deadline_us));
 }
 
-TEST_F(DatagramAirTest, ZeroTimeoutSurvivesRuntimeKnChange)
+TEST_F(DatagramAirTest, ZeroTimeoutWaitsForFullBlockWithoutTimer)
 {
-    std::string error;
-    ASSERT_TRUE(air.set_fec(FecType::RsBlockErasure, 3, 4, &error));
     uint8_t p = 1;
     air.accept_app_datagram(&p, 1);
-    timer.schedule(DatagramAir::FecTimer::current_time_us() + 1000000);
+    int64_t deadline_us = 0;
+    EXPECT_FALSE(timer.get_next_deadline_us(deadline_us));
     EXPECT_FALSE(tx_queue->has_data());
-    air.announce_down();
-    EXPECT_EQ(drain().size(), 2u);
+    air.accept_app_datagram(&p, 1);
+    EXPECT_EQ(drain().size(), 3u);
 }
 
 TEST_F(DatagramAirTest, EarlySystematicDeliveryIsNotRepeatedAfterRecovery)
@@ -151,24 +149,34 @@ TEST_F(DatagramAirTest, RxGiveUpSalvagesDataWithoutFurtherArrivals)
     ASSERT_TRUE(enc.encode_block({{1}, {2}, {3}}, 100, &shards));
     receive(shards[1]);  // head missing, no immediate output
     EXPECT_TRUE(received.empty());
-    std::this_thread::sleep_for(std::chrono::milliseconds(280));
+    // One timer at the block deadline (spread cap + margin), not a poll.
+    int64_t deadline_us = 0;
+    ASSERT_TRUE(timer.get_next_deadline_us(deadline_us));
+    const int64_t wait_us = deadline_us - DatagramAir::FecTimer::current_time_us();
+    EXPECT_GT(wait_us, 100000);
+    EXPECT_LE(wait_us, (RsBlockErasure::k_spread_cap_ms +
+                        RsBlockErasure::k_deadline_margin_min_ms) * 1000);
+    timer.schedule(deadline_us - 50000);
+    EXPECT_TRUE(received.empty());
+    std::this_thread::sleep_for(std::chrono::microseconds(
+        deadline_us - DatagramAir::FecTimer::current_time_us() + 1000));
     timer.schedule();
     EXPECT_EQ(received, (std::vector<std::vector<uint8_t>>{{2}}));
     EXPECT_EQ(air.fec_decode_fail(), 1u);
+    EXPECT_FALSE(timer.get_next_deadline_us(deadline_us));
 }
 
-TEST_F(DatagramAirTest, TxReconfigurationPreservesPartialRxBlock)
+TEST_F(DatagramAirTest, CompleteRxBlockLeavesNoTimer)
 {
     RsBlockErasure enc;
     ASSERT_TRUE(enc.init(2, 3, 20));
     std::vector<std::vector<uint8_t>> shards;
     ASSERT_TRUE(enc.encode_block({{1}, {2}}, 100, &shards));
+    receive(shards[0]);
     receive(shards[1]);
-    std::string error;
-    ASSERT_TRUE(air.set_fec(FecType::none, 0, 0, &error));
-    ASSERT_TRUE(air.set_fec_timeout_ms(5, &error));
-    receive(shards[2]);
     EXPECT_EQ(received, (std::vector<std::vector<uint8_t>>{{1}, {2}}));
+    int64_t deadline_us = 0;
+    EXPECT_FALSE(timer.get_next_deadline_us(deadline_us));
 }
 
 TEST_F(DatagramAirTest, PayloadAndTelemetryStayOpaque)
@@ -184,24 +192,14 @@ TEST_F(DatagramAirTest, PayloadAndTelemetryStayOpaque)
     ASSERT_EQ(received.size(), 1u);
     EXPECT_EQ(received[0], telemetry);
     air.accept_app_datagram(telemetry.data(), telemetry.size());
-    air.announce_down();
+    air.accept_app_datagram(telemetry.data(), telemetry.size());  // k = 2
     for (const auto& shard : drain())
     {
         receive(shard);
     }
-    ASSERT_EQ(received.size(), 2u);
+    ASSERT_EQ(received.size(), 3u);
     EXPECT_EQ(received[1], telemetry);
-}
-
-TEST_F(DatagramAirTest, InvalidReconfigureDoesNotFlushOrDisablePendingBlock)
-{
-    uint8_t p = 1;
-    air.accept_app_datagram(&p, 1);
-    std::string error;
-    EXPECT_FALSE(air.set_fec(FecType::RsBlockErasure, 3, 3, &error));
-    EXPECT_FALSE(tx_queue->has_data());
-    air.accept_app_datagram(&p, 1);
-    EXPECT_EQ(drain().size(), 3u);
+    EXPECT_EQ(received[2], telemetry);
 }
 
 TEST_F(DatagramAirTest, ReopenClearsPendingTxAndDisablesOldFec)
@@ -227,8 +225,9 @@ TEST(DatagramAirLifetimeTest, ExtractedTimerCallbackIsSafeAfterDestroy)
     cfg.bus_tx = 1;
     UpstreamStats stats;
     std::mutex stats_mu;
-    ASSERT_TRUE(air->start(std::make_shared<BoundedLossyQueue>(), {}, cv, cfg,
-                           cfg.bus_tx, &stats, &stats_mu, "test"));
+    ASSERT_TRUE(air->start(std::make_shared<BoundedLossyQueue>(),
+                           [](const uint8_t*, size_t) {}, cv, cfg, cfg.bus_tx,
+                           &stats, &stats_mu));
     timer.wait_us(0,
                   [&]()
                   {
@@ -244,28 +243,4 @@ TEST(DatagramAirLifetimeTest, ExtractedTimerCallbackIsSafeAfterDestroy)
     // schedule extracts both callbacks before invoking the first one.
     timer.schedule(DatagramAir::FecTimer::current_time_us() + 1000000);
     EXPECT_FALSE(air);
-}
-
-TEST_F(DatagramAirTest, ConcurrentInputAndRuntimeChanges)
-{
-    std::thread producer(
-        [&]()
-        {
-            uint8_t p = 1;
-            for (int i = 0; i < 2000; ++i)
-            {
-                air.accept_app_datagram(&p, 1);
-            }
-        });
-    for (int i = 0; i < 100; ++i)
-    {
-        std::string error;
-        EXPECT_TRUE(air.set_fec(FecType::RsBlockErasure, 2 + i % 3, 5, &error));
-        EXPECT_TRUE(air.set_fec_timeout_ms(i % 2, &error));
-    }
-    producer.join();
-    air.announce_down();
-    uint64_t packets = 0;
-    air.tx_pending_stats(&packets, nullptr);
-    EXPECT_LE(packets, 1024u);
 }

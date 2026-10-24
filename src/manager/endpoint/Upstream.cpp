@@ -36,7 +36,7 @@ Upstream::Upstream(std::shared_ptr<Reactor> reactor,
                 deliver_datagram(p, n);
             },
             this->reactor, upstream_config, upstream_config.bus_tx,
-            &upstream_stats, &stats_mu, type_name()))
+            &upstream_stats, &stats_mu))
     {
         throw std::invalid_argument("invalid upstream FEC configuration");
     }
@@ -124,7 +124,7 @@ void Upstream::teardown()
         fence->air = nullptr;
         lock.unlock();
         LOG_WRN("upstream teardown: cv reactor fence timed out, stopping inline");
-        air.stop();  // fences an in-flight timer itself
+        air.stop();  // DatagramAir is reactor-only; assumes it no longer runs
     }
     bound = false;
 }

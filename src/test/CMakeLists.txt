@@ -60,6 +60,8 @@ add_executable(winject-tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_block_erasure.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_block_erasure_rx.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_encode_scalar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/FecTx.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/FecRx.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UpstreamStats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/Upstream.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/DatagramAir.cpp
