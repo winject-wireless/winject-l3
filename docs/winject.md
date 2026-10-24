@@ -42,7 +42,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 |---|---|---|
 | `App` | [`App.*`](../src/manager/App.cpp) | Owns everything below; startup, radio programming sequence, metrics, console handlers |
 | `Config` | [`Config.*`](../src/manager/Config.cpp) | Parses the `winject.*`, `radio.*`, and `upstream-N.*` keys |
-| `IOReactor` | [`IOReactor.h`](../src/manager/utils/IOReactor.h) | epoll reactor (`bfc::epoll_reactor`); runs all socket I/O and timers on one thread |
+| `IOReactor` | [`IOReactor.h`](../src/manager/utils/IOReactor.h) | epoll reactor (`bfc::epoll_reactor`); runs all socket I/O and timers on one thread. Teardown and `wake_up` ordering: [reactor-teardown.md](reactor-teardown.md) |
 | `ConsoleClient` | [`ConsoleClient.*`](../src/manager/console/ConsoleClient.cpp) | Radio m-plane client: correlated requests (`cmd:<u8>`), timeouts, `apply_radio`, `radio_caps_info` query |
 | `ConsoleService` | [`ConsoleService.*`](../src/manager/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender) |
 | `RadioManager` | [`RadioManager.*`](../src/manager/radio/RadioManager.cpp) | Keeps the radio in the configured state: PHY reconcile, filter reconcile, heartbeat, forward re-registration, TX pacing per modulation |
@@ -51,7 +51,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | `TxMux` | [`TxMux.*`](../src/manager/radio/TxMux.cpp) | TX scheduler: picks upstreams, builds MPDUs, paces them at 90 % of the modulation's airtime |
 | `RxDemux` | [`RxDemux.*`](../src/manager/radio/RxDemux.cpp) | RX: validates domain, splits slots, routes each slot by its LC bus to upstreams |
 | `RadioUpstreamTable` | [`RadioUpstreamTable.*`](../src/manager/radio/RadioUpstreamTable.cpp) | Shared upstream list (`bus_tx`, `bus_rx`, upstream pointer), guarded by one mutex |
-| `Upstream` / `HostEndpoint` | [`HostEndpoint.*`](../src/manager/endpoint/HostEndpoint.cpp) | One configurable application flow: UDP socket or host-owned queues, with shared FEC, buffering, lifecycle and delivery metrics. See [upstream-endpoint.md](upstream-endpoint.md) |
+| `Upstream` / `QueueUpstream` / `UDPUpstream` | [`endpoint/`](../src/manager/endpoint/Upstream.cpp) | One application flow: UDP socket or host-owned queues, with shared FEC, buffering, lifecycle and delivery metrics. See [upstream-endpoint.md](upstream-endpoint.md) |
 | `UpstreamStats` | [`UpstreamStats.*`](../src/manager/endpoint/UpstreamStats.cpp) | Stamps and checks the LC header (bus, sequence); duplicate drop and gap counting |
 | `RsBlockErasure` | [`fec/`](../src/manager/fec/vendor/rs_block_erasure.cpp) | Optional k-of-n Reed–Solomon erasure coding (ISA-L) |
 | `Mpdu` / `Frame` / `LCHeader` | [`frames/`](../src/manager/frames/Mpdu.cpp) | On-air framing (see § Framing) |
@@ -71,9 +71,13 @@ updates explicitly request work. Its reactor binding also supports a CV reactor;
 App currently uses IO because the radio and management planes still use UDP.
 See [reactive-tx.md](reactive-tx.md) for pacing, lifecycle and shutdown.
 
+Cross-thread socket and registration changes on the main reactor should use
+`IOReactor::wake_up` so work runs after the current I/O handler batch; see
+[reactor-teardown.md](reactor-teardown.md).
+
 ### Data path: TX
 
-1. An application sends a UDP datagram to an upstream socket (`HostEndpoint`, IO reactor thread). Datagrams over 1445 bytes are dropped and counted (`app_rx_oversize_pkt`).
+1. An application sends a UDP datagram to an upstream socket (`UDPUpstream` / queue input, IO or host CV reactor). Datagrams over 1445 bytes are dropped and counted (`app_rx_oversize_pkt`).
 2. With FEC enabled, the datagram goes into the encoder, which emits k systematic and n−k parity shards; otherwise it is queued as-is.
 3. The TxMux reactor callback picks a primary upstream that has data, then fills the remaining room in the MPDU from other upstreams, up to 5 slots and 1448 body bytes.
 4. Each slot payload is prefixed with the LC header (upstream `tx_bus`, FEC flag, per-bus sequence).

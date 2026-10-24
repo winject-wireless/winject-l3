@@ -100,7 +100,7 @@ Most manager code runs on one reactor thread ([`IOReactor`](../src/manager/utils
 
 | Component | Register | Teardown today |
 |-----------|----------|----------------|
-| [`UdpEndpoint`](../src/manager/endpoint/UdpEndpoint.cpp) | `add_read_rdy` on app UDP socket | `rem_read_rdy` then close socket in `close()` |
+| [`UDPUpstream`](../src/manager/endpoint/UDPUpstream.cpp) | `add_read_rdy` on app UDP socket | `teardown()` / `rem_read_rdy` then close socket |
 | [`WifiUdp`](../src/manager/radio/WifiUdp.cpp) | d-plane forward socket | `rem_read_rdy` then close in `close()` |
 | [`ConsoleService`](../src/manager/console/ConsoleService.cpp) | manager m-plane socket | `rem_read_rdy` on shutdown |
 | [`App`](../src/manager/App.cpp) | console client fd | `rem_read_rdy` when dropping console |
@@ -156,7 +156,9 @@ last `shared_ptr` is dropped.
 
 ## Known issues
 
-- **UDP upstream replace:** `UdpEndpoint::close` calls `rem_read_rdy` then closes
+- **UDP upstream replace:** if the socket is closed before deferred epoll `rem`
+  completes, fd reuse can drop the new registration; `UDPUpstream::teardown()`
+  waits on IO `done_cb` when off-thread. Legacy path: `close` calls `rem_read_rdy` then closes
   the socket immediately. If `close` runs off the I/O reactor thread, epoll
   removal is deferred while the fd is already closed; a new endpoint can obtain
   the same fd number and lose its registration when the deferred `rem` runs.
