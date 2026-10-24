@@ -170,22 +170,15 @@ bool App::replace_upstream(size_t index, const UpstreamConfig& uc,
                            std::string* error)
 {
     const auto original = cfg.upstreams[index];
-    // Unregister producer access, then wait for any callback's shared lease to
-    // finish destruction before reclaiming its input queue/socket binding.
-    std::shared_future<void> destroyed;
-    if (upstreams[index])
-    {
-        destroyed = upstreams[index]->destruction;
-    }
     {
         std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
         radio_upstream_table.entries()[index] = {};
     }
-    upstreams[index].reset();
-    if (destroyed.valid())
+    if (upstreams[index])
     {
-        destroyed.wait();
+        upstreams[index]->teardown();
     }
+    upstreams[index].reset();
     auto install = [&](const UpstreamConfig& config)
     {
         auto queue = tx_mux.make_tx_queue();

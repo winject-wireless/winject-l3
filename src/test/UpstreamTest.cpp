@@ -285,6 +285,32 @@ TEST_F(UpstreamTest, ExtractedFecTimerCannotUseDestroyedEndpoint)
     EXPECT_FALSE(up);
     EXPECT_FALSE(tx->has_data());
 }
+TEST_F(UpstreamTest, TeardownReleasesInputClaim)
+{
+    create_queue();
+    std::thread cv_worker(
+        [this]()
+        {
+            cv->run();
+        });
+    up->teardown();
+    up.reset();
+    cfg.fec_type = FecType::RsBlockErasure;
+    cfg.fec_k = 2;
+    cfg.fec_n = 3;
+    create_queue();
+    app_tx_queue->push(packet({1}));
+    app_tx_queue->push(packet({2}));
+    cv->get_timer().wait_ms(
+        50,
+        [this]()
+        {
+            cv->stop();
+        });
+    cv_worker.join();
+    EXPECT_EQ(tx->size(), 3u);
+}
+
 TEST_F(UpstreamTest, ReconstructionReleasesInputClaim)
 {
     create_queue();

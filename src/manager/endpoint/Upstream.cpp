@@ -1,5 +1,6 @@
 #include "endpoint/Upstream.h"
 
+#include <future>
 #include <stdexcept>
 
 namespace winject
@@ -74,29 +75,68 @@ void Upstream::bind_callbacks()
     reactor->wake_up();  // discover input queued before construction
 }
 
+void Upstream::teardown()
+{
+    if (!bound)
+    {
+        return;
+    }
+    if (reactor->is_reactor_thread())
+    {
+        throw std::logic_error("upstream teardown on cv reactor thread");
+    }
+    reactor->remove_read_rdy(*host_rx_queue);
+    reactor->remove_read_rdy(*app_tx_queue);
+    host_rx_queue->set_reactor(nullptr);
+    app_tx_queue->set_reactor(nullptr);
+    struct TeardownFence
+    {
+        std::shared_ptr<
+            std::pair<std::shared_ptr<ReactiveLossyQueue>,
+                      std::shared_ptr<ReactiveLossyQueue>>>
+            leases;
+        DatagramAir* air = nullptr;
+        std::promise<void> done;
+    };
+    auto fence = std::make_shared<TeardownFence>();
+    fence->leases = std::make_shared<
+        std::pair<std::shared_ptr<ReactiveLossyQueue>,
+                  std::shared_ptr<ReactiveLossyQueue>>>(host_rx_queue,
+                                                          app_tx_queue);
+    fence->air = &air;
+    auto done = fence->done.get_future();
+    reactor->wake_up(
+        [fence]()
+        {
+            fence->air->stop();
+            fence->done.set_value();
+        });
+    done.wait();
+    bound = false;
+}
+
 Upstream::~Upstream()
 {
     unbind_callbacks();
     air.stop();
-    destroyed.set_value();
 }
 
 void Upstream::unbind_callbacks()
 {
-    if (bound)
+    if (!bound)
     {
-        reactor->remove_read_rdy(*host_rx_queue);
-        reactor->remove_read_rdy(*app_tx_queue);
-        host_rx_queue->set_reactor(nullptr);
-        app_tx_queue->set_reactor(nullptr);
-        // CV scans snapshot raw queue pointers; retain both until that scan
-        // ends.
-        auto leases = std::make_shared<
-            std::pair<std::shared_ptr<ReactiveLossyQueue>, std::shared_ptr<ReactiveLossyQueue>>>(
-            host_rx_queue, app_tx_queue);
-        reactor->wake_up([leases] {});
-        bound = false;
+        return;
     }
+    reactor->remove_read_rdy(*host_rx_queue);
+    reactor->remove_read_rdy(*app_tx_queue);
+    host_rx_queue->set_reactor(nullptr);
+    app_tx_queue->set_reactor(nullptr);
+    // CV scans snapshot raw queue pointers; retain both until that scan ends.
+    auto leases = std::make_shared<
+        std::pair<std::shared_ptr<ReactiveLossyQueue>, std::shared_ptr<ReactiveLossyQueue>>>(
+        host_rx_queue, app_tx_queue);
+    reactor->wake_up([leases] {});
+    bound = false;
 }
 
 void Upstream::submit_datagram(const uint8_t* data, size_t len)

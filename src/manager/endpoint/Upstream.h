@@ -7,14 +7,14 @@
 #include "endpoint/UpstreamStats.h"
 
 #include <bfc/cv_reactor.hpp>
-#include <future>
 #include <memory>
 #include <mutex>
 #include <utility>
 
 namespace winject
 {
-// Call bind_callbacks after establishing shared ownership, before publication.
+// After make_shared, call bind_callbacks before publishing the instance.
+// Hot-swap calls teardown() on the IO thread before dropping the last ref.
 class Upstream : public std::enable_shared_from_this<Upstream>
 {
 public:
@@ -39,6 +39,7 @@ public:
     };
 
     virtual void bind_callbacks();
+    virtual void teardown();
     virtual ~Upstream();
     std::shared_ptr<ReactiveLossyQueue> rx_queue() const
     {
@@ -143,10 +144,6 @@ protected:
     RxCounters stored_rx_counters;
 
 private:
-    friend class App;
-    // App waits for destructor completion when replacing an in-flight callback.
-    std::promise<void> destroyed;
-    std::shared_future<void> destruction = destroyed.get_future().share();
     void drain_radio_rx();
     void drain_app_tx_queue();
     std::shared_ptr<ReactiveLossyQueue> host_rx_queue;

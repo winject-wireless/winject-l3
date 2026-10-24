@@ -14,6 +14,7 @@ public:
                 std::shared_ptr<BoundedLossyQueue> radio_tx_queue);
     ~UDPUpstream() override;
     void bind_callbacks() override;
+    void teardown() override;
 
 private:
     void on_socket_readable();

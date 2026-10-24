@@ -3,6 +3,7 @@
 #include "utils/NetUtil.h"
 
 #include <errno.h>
+#include <future>
 #include <stdexcept>
 #include <sys/socket.h>
 namespace winject
@@ -68,12 +69,36 @@ void UDPUpstream::bind_callbacks()
         throw std::runtime_error("UDP upstream reactor registration failed");
     }
 }
+void UDPUpstream::teardown()
+{
+    if (registered)
+    {
+        const int fd = socket.fd();
+        if (io->is_reactor_thread())
+        {
+            io->rem_read_rdy(fd);
+        }
+        else
+        {
+            std::promise<void> io_done;
+            io->rem_read_rdy(fd,
+                             [&io_done]()
+                             {
+                                 io_done.set_value();
+                             });
+            io_done.get_future().wait();
+        }
+        registered = false;
+    }
+    Upstream::teardown();
+}
+
 UDPUpstream::~UDPUpstream()
 {
-    unbind_callbacks();
     if (registered)
     {
         io->rem_read_rdy(socket.fd());
+        registered = false;
     }
 }
 void UDPUpstream::on_socket_readable()

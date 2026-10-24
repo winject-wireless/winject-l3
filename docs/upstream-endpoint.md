@@ -15,11 +15,26 @@ then call `bind_callbacks()` before publishing the instance. `Upstream` inherits
 retain weak references. Repeated binding is harmless.
 
 There are no public open, close, stop-input, drain or FEC reconfiguration methods.
-Destruction removes callbacks and timers and discards pending work. Reconfigure
-by replacing the instance. Management FEC updates do this; invalid configuration
-is rejected before replacement. An instance replacement resets learned UDP peers,
-receive sequence state, codec state and per-instance counters. Scheduler-budget
-updates alone do not require replacement.
+Reconfigure by replacing the instance. Management FEC updates do this; invalid
+configuration is rejected before replacement. An instance replacement resets
+learned UDP peers, receive sequence state, codec state and per-instance counters.
+Scheduler-budget updates alone do not require replacement.
+
+### Teardown and destruction
+
+Call `teardown()` from the **IO reactor thread** (manager console path) before
+dropping the last `shared_ptr` on hot-swap (`App::replace_upstream`). It
+synchronously deregisters CV queue handlers, then runs `DatagramAir::stop()` on
+the CV reactor thread inside a `wake_up` fence so in-flight handlers and FEC
+timers cannot overlap the replacement. `UDPUpstream::teardown()` removes the
+application UDP socket from the IO reactor first (with a `done_cb` wait when
+called off-thread), then calls the base implementation.
+
+Do not call `teardown()` on the CV reactor thread (it blocks waiting for that
+thread). When the CV reactor is already stopped (`App` shutdown), rely on the
+destructor fallback only: non-blocking `unbind_callbacks()` plus `air.stop()`.
+
+See [reactor-teardown.md](reactor-teardown.md) for BFC ordering rules.
 
 The caller supplies shared pointers to the CV reactor and radio TX queue. UDP
 additionally retains a shared pointer to its I/O reactor. `DatagramAir` retains
