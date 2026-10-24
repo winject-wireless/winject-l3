@@ -321,7 +321,6 @@ TEST(TxMuxTest, PacingIntervalIsAirtimePlusGapOverNinetyPercent)
 // so a backlog drains at the paced rate, not faster.
 TEST(TxMuxTest, BacklogDrainsAtPacedRate)
 {
-    const auto start = std::chrono::steady_clock::now();
     TxMuxHarness h(4096, "OFDM_24M");
     constexpr size_t k_sdu = 1400;
     for (int i = 0; i < 200; i++)
@@ -334,15 +333,17 @@ TEST(TxMuxTest, BacklogDrainsAtPacedRate)
     const uint32_t iv_us =
         ((phy_txtime_us(mode, mpdu_len + 4) + 96) * 100 + 89) / 90;
 
+    // Time only the reactor run: setup before it (slow under TSan) is idle
+    // time the mux may make up by at most two intervals.
+    const auto start = std::chrono::steady_clock::now();
     const size_t sent = h.run_for(std::chrono::milliseconds(60));
     const auto elapsed_us =
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - start)
             .count();
     const size_t expected = static_cast<size_t>(elapsed_us / iv_us) + 1;
-    // Never faster than paced. A slow test loop (e.g. under TSAN) can lose
-    // slots beyond the two-interval catch-up, so the lower bound is loose.
-    EXPECT_LE(sent, expected + 1) << "iv_us=" << iv_us;
+    // Never faster than paced, apart from the two-interval catch-up.
+    EXPECT_LE(sent, expected + 2) << "iv_us=" << iv_us;
     EXPECT_GE(sent * 4, expected * 3) << "iv_us=" << iv_us;
 }
 
