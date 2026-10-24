@@ -365,12 +365,10 @@ TEST(TxMuxTest, SmallBudgetDoesNotCapRate)
 {
     TxMuxHarness h(256, "OFDM_24M");
     constexpr size_t k_frames = 40;
+    // Queue pushes wake TxMux, which takes the table lock: never push under it.
+    for (size_t i = 0; i < k_frames; i++)
     {
-        std::lock_guard<std::mutex> lock(h.table().mutex());
-        for (size_t i = 0; i < k_frames; i++)
-        {
-            h.up().push_sdu(make_sdu(1400, static_cast<uint8_t>(i)));
-        }
+        h.up().push_sdu(make_sdu(1400, static_cast<uint8_t>(i)));
     }
     // Start behind schedule, as after any stall: pacing credit is open.
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -447,10 +445,7 @@ TEST(TxMuxTest, CrossThreadProducerWakesSharedReactor)
         [&]()
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            {
-                std::lock_guard<std::mutex> lock(h.table().mutex());
-                h.up().push_sdu(make_sdu(100, 7));
-            }
+            h.up().push_sdu(make_sdu(100, 7));
             h.mux().request_tick();
         });
     h.run_for(std::chrono::milliseconds(30));
