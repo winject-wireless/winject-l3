@@ -253,3 +253,8 @@ Removed with no replacement: `radio.device`, `radio.skip_console`, `winject.skip
 
 - Architecture, data paths and on-air framing: [winject.md](winject.md)
 - Code style and tests: [contributing.md](contributing.md)
+
+Upstream FEC updates reconstruct the upstream instance. Pending RX/TX/FEC data
+is discarded, learned UDP peers and per-instance counters reset, and fresh
+reactor callbacks are registered. Invalid updates leave the active instance
+intact. A scheduling-budget-only update preserves the instance.

@@ -24,8 +24,8 @@ add vstreamer's outer four-byte header to the winject air protocol.
 
 The encoder collects up to k originals, then returns systematic and parity
 shards. Partial blocks flush at their actual codec deadline, defaulting to 20 ms.
-A zero timeout disables automatic flush; explicit shutdown/reconfiguration still
-flushes pending originals. Short blocks omit their virtual zero-pad data shards.
+A zero timeout disables automatic flush. Destruction and instance replacement
+discard pending originals. Short blocks omit their virtual zero-pad data shards.
 
 Raw datagrams and encoded shards share one 1024-packet queue. Overflow drops
 the oldest queued packet and increments `upstream_<id>_tx_queue_drops`. This is
@@ -34,14 +34,15 @@ are bounded by the fixed air MTU; pending unencoded input is limited to one
 partial block. Pending statistics include those originals as well as queued
 output.
 
-The adapter serializes ingestion, output pulls and FEC updates. A valid k/n,
-enable/disable or timeout change flushes the old partial block and applies the
-new TX configuration in one locked transition. Invalid k/n leaves pending input
-and active configuration intact. The TX sequence continues across changes.
+Encoding and timer processing run on the supplied upstream CV reactor. Encoded
+output is pushed into the caller-supplied reactive TX queue; the scheduler
+consumes it directly. Management FEC changes replace the upstream instance,
+discarding old pending state and resetting per-instance counters. Invalid changes
+leave the active instance intact. The scheduler's per-bus air sequence continues.
 
 ## Receiving
 
-Separate RX codec state survives TX reconfiguration. Shard headers determine
+Each instance owns RX codec state; instance replacement discards it. Shard headers determine
 receive k/n, including on an upstream whose local TX FEC is disabled. Such input
 continues to increment the existing unexpected-FEC metric.
 
@@ -54,18 +55,16 @@ the previous block-at-once implementation.
 
 Deadlines follow the vendored codec's measured sender spread/jitter policy:
 initially it assumes a 250 ms spread cap plus a minimum 5 ms margin. The adapter
-polls pending receive state on the manager IO reactor every 10 ms, so buffered
+polls pending receive state on the supplied CV reactor every 10 ms, so buffered
 output can advance even if no further datagrams arrive. Loss-free head packets
 can still leave immediately. No intentional TX shard spreading is added here;
 the existing TxMux airtime pacing remains responsible for sending MPDUs.
 
-Receive and transmit state are protected by the adapter mutex. Reactor timers
-capture a shared lifetime guard; cancellation invalidates callbacks already
-extracted by the timer scheduler, and close fences an active timer callback.
-The owner must serialize start/stop and detach transport ingress before
-destroying the endpoint. The unified HostEndpoint uses weak session callbacks,
-serializes ingress with close and defers queue-context release until a CV reactor
-scan can finish; close does not wait for a timed reactor acknowledgement.
+Receive and transmit state belong to the upstream CV reactor. Timers and queue
+callbacks acquire weak upstream references before processing. Destruction
+invalidates extracted callbacks, cancels timers, and removes queue registrations.
+Deferred queue leases keep raw reactor scan pointers alive until their scan ends.
+See [upstream-endpoint.md](upstream-endpoint.md) for ownership and replacement.
 
 ## Builds and tests
 

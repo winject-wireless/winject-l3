@@ -8,21 +8,23 @@ stop. The owner serializes start/stop on that reactor thread, or while stopped.
 
 App currently binds TxMux to its manager IO reactor. Queue upstream ingress can
 run on the host CV reactor and notify the IO reactor. This removes the dedicated
-`winject_tx` thread; it does not convert radio data/management sockets to queues
-or introduce an upstream RX queue. A fully queue-based deployment can bind the
-same TxMux to a CV reactor when the remaining transports support that model.
+`winject_tx` thread. Upstream RX queues move FEC/application delivery onto supplied
+CV reactors. Radio data/management sockets still use the IO reactor. A queue
+deployment can bind TxMux to a CV reactor when its radio transport supports it.
 
 ## Notifications and pacing
 
-Upstream TX queues remain bounded, non-reactive deques guarded by their existing
-mutex. The producer requests a tick when encoded/raw output first becomes
-available. Requests coalesce into one pending reactor wake. Request work after
-releasing queue/table locks, because a callback may be using those locks.
+`TxMux::make_tx_queue()` returns a bounded FIFO with a push callback that
+requests scheduler work automatically. The queue has no reactor binding or read
+callback interface. The caller passes this queue to the upstream
+constructor. Upstream pushes raw/encoded output immediately; TxMux accesses
+queue heads directly and never calls upstream TX methods. Notifications coalesce
+into one pending reactor wake. The queue releases its mutex before notifying.
 
-Startup discovers prequeued data. App explicitly requests work after adding or
-removing an upstream and after scheduling/configuration changes; queued radio
-address changes wake TxMux too. There is no former 5 ms fallback poll. A custom
-producer that pushes without notifying can leave data waiting indefinitely.
+Startup discovers prequeued data. App explicitly requests work after topology or
+scheduling changes; queued radio-address changes wake TxMux too. No periodic
+fallback polling is needed. Queue wake bindings become inert when TxMux is
+destroyed, even if a producer retains a queue handle.
 
 Each callback applies pending control events, schedules and builds MPDUs, and
 submits them through WifiUdp. Pacing still uses:
@@ -43,16 +45,12 @@ inserted between TxMux and WifiUdp.
 
 ## Shutdown
 
-`App::stop()` retains its signal-handler-safe behavior: set an atomic flag and
-stop/wake the IO reactor. Once that run returns, App stops manager console
-ingress, fences upstream input, and flushes partial FEC blocks. It then resumes
-the same reactor for a drain bounded to 500 ms.
-
-TxMux pacing timers continue sending during this drain. A shutdown-only 1 ms
-timer checks whether the pending output is empty or the deadline has expired;
-there is no synchronous tick/sleep loop. A second stop can interrupt the drain.
-Finally App cancels shutdown/TX scheduling. This bounds the drain wait, not the
-execution time of arbitrary transport callbacks.
+`App::stop()` sets an atomic flag and stops/wakes the IO reactor. Once that run
+returns, App stops management ingress, unregisters upstream queue handles,
+releases upstream instances, and stops TX scheduling. Teardown is lossy: partial
+FEC blocks and queued packets are discarded without a flush/drain interval.
+Upstream destructors unregister callbacks and cancel timers; in-flight callbacks
+hold shared leases until their current turn finishes.
 
 ## Reactor budget
 
