@@ -42,7 +42,7 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 |---|---|---|
 | `App` | [`App.*`](../src/manager/App.cpp) | Owns everything below; startup, radio programming sequence, metrics, console handlers |
 | `Config` | [`Config.*`](../src/manager/Config.cpp) | Parses the `winject.*`, `upstream-N.*` and `manager.*` keys |
-| `IOReactor` | [`IOReactor.h`](../src/manager/utils/IOReactor.h) | epoll reactor (`bfc::epoll_reactor`); runs all socket I/O and timers on one thread |
+| `IOReactor` | [`IOReactor.h`](../src/manager/utils/IOReactor.h) | epoll reactor (`bfc::epoll_reactor`); runs all socket I/O and timers on one thread. Teardown and `wake_up` ordering: [reactor-teardown.md](reactor-teardown.md) |
 | `ConsoleClient` | [`ConsoleClient.*`](../src/manager/console/ConsoleClient.cpp) | Radio m-plane client: correlated requests (`cmd:<u8>`), timeouts, `apply_radio`, `radio_caps_info` query |
 | `ConsoleService` | [`ConsoleService.*`](../src/manager/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender) |
 | `RadioManager` | [`RadioManager.*`](../src/manager/radio/RadioManager.cpp) | Keeps the radio in the configured state: PHY reconcile, filter reconcile, heartbeat, forward re-registration, TX pacing per modulation |
@@ -64,6 +64,10 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | `TxMux` TX thread | While data is queued, wakes at each pacing slot and takes the next frame. When idle it sleeps; an upstream whose queue goes from empty to non-empty wakes it, and it never sleeps longer than 5 ms (`k_tx_max_sleep`). Builds MPDUs from upstream TX queues and sends them through `WifiUdp`. Each frame is followed by (airtime of the whole frame, MPDU + FCS, from `PhyAirtime` + the modulation's inter-frame gap) / 90 %, so the link uses at most 90 % of the modulation's capacity. Up to two full-frame intervals lost to a late wakeup are made up |
 
 The two threads share `RadioUpstreamTable` (mutex) and each upstream's TX queue (per-upstream mutex).
+
+Cross-thread socket and registration changes on the main reactor should use
+`IOReactor::wake_up` so work runs after the current I/O handler batch; see
+[reactor-teardown.md](reactor-teardown.md).
 
 ### Data path: TX
 

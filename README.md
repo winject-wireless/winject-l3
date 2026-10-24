@@ -27,6 +27,7 @@ docs/fec-spreading.md   FEC block spreading: burst loss, sizing, bench results
 docs/radio-capa-support.md  radio_caps_info and FCS trailer modes (SIGNAL / ACTUAL)
 docs/no-traffic.md      Bench report: zero-traffic investigation and loss analysis
 docs/contributing.md    Code style, tests, and ./scripts/check_guidelines.sh
+docs/reactor-teardown.md  BFC reactor turn ordering and socket/queue teardown fences
 ```
 
 ## Code style and checks
