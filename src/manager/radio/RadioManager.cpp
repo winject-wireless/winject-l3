@@ -4,13 +4,13 @@
 #include "radio/PhyAirtime.h"
 #include "radio/RadioMplaneParse.h"
 #include "radio/TxMux.h"
-#include "radio/WifiUdp.h"
+#include "radio/RadioDplane.h"
 #include "utils/Log.h"
 
 namespace winject
 {
 
-void RadioManager::bind(Config* cfg, TxMux* tx_mux, WifiUdp* wifi,
+void RadioManager::bind(Config* cfg, TxMux* tx_mux, RadioDplane* wifi,
                         IOReactor* reactor)
 {
     this->cfg = cfg;

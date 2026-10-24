@@ -378,3 +378,148 @@ TEST_P(AppUpstreamReplacementTest,
 INSTANTIATE_TEST_SUITE_P(Transports, AppUpstreamReplacementTest,
                          ::testing::Bool());
 }  // namespace
+
+namespace
+{
+// The radio d-plane over registered queues: a fake radio peer on the shared
+// CV reactor loops every inject MPDU back as a forward frame, so data from a
+// queue upstream crosses the d-plane both ways and comes back out.
+TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
+{
+    using Queue = ReactiveLossyQueue;
+    using Registry =
+        bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>;
+    auto app_in = std::make_shared<Queue>();
+    auto app_out = std::make_shared<Queue>();
+    auto inject = std::make_shared<Queue>();
+    auto forward = std::make_shared<Queue>();
+    auto cv = std::make_shared<Upstream::Reactor>();
+    for (auto* q : {&app_in, &app_out, &inject, &forward})
+    {
+        (*q)->set_capacity(64);
+    }
+    ASSERT_TRUE(Registry::get_instance().add("qd-in", app_in));
+    ASSERT_TRUE(Registry::get_instance().add("qd-out", app_out));
+    ASSERT_TRUE(Registry::get_instance().add("qd-inject", inject));
+    ASSERT_TRUE(Registry::get_instance().add("qd-forward", forward));
+    ASSERT_TRUE(bfc::cv_reactor_registry::get_instance().add("qd-cv", cv));
+    struct RadioPeer
+    {
+        std::shared_ptr<Queue> inject;
+        std::shared_ptr<Queue> forward;
+        std::atomic<int> registrations{0};
+        std::atomic<int> injected{0};
+        void on_inject()
+        {
+            while (auto mpdu = inject->pop())
+            {
+                if (mpdu->size() == 1)
+                {
+                    ++registrations;
+                    continue;
+                }
+                ++injected;
+                // Signal FCS mode: a zero 4-byte trailer.
+                std::vector<uint8_t> frame(mpdu->u8(),
+                                           mpdu->u8() + mpdu->size());
+                frame.resize(frame.size() + 4);
+                forward->push(bfc::shared_sized_buffer::copy_from(
+                    frame.data(), frame.size()));
+            }
+        }
+    } peer{inject, forward};
+    auto& registrations = peer.registrations;
+    auto& injected = peer.injected;
+    cv->add_read_rdy(*inject,
+                     [p = &peer]
+                     {
+                         p->on_inject();
+                     });
+    struct Cleanup
+    {
+        std::shared_ptr<Upstream::Reactor> cv;
+        std::shared_ptr<Queue> inject;
+        std::thread thread;
+        ~Cleanup()
+        {
+            cv->stop();
+            thread.join();
+            cv->remove_read_rdy(*inject);
+            for (const char* name : {"qd-in", "qd-out", "qd-inject", "qd-forward"})
+            {
+                Registry::get_instance().rem(name);
+            }
+            bfc::cv_reactor_registry::get_instance().rem("qd-cv");
+        }
+    } cleanup{cv, inject, std::thread(
+                              [cv]
+                              {
+                                  cv->run();
+                              })};
+
+    // The m-plane stays UDP; nothing answers it here.
+    bfc::socket mplane(bfc::create_udp4());
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(mplane.bind(address), 0);
+    socklen_t len = sizeof(address);
+    ASSERT_EQ(
+        getsockname(mplane.fd(), reinterpret_cast<sockaddr*>(&address), &len),
+        0);
+    Config config = config_for(address);
+    config.radio_device.dplane = {};
+    config.radio_device.dplane_tx = "qd-inject";
+    config.radio_device.dplane_rx = "qd-forward";
+    config.radio_device.reactor = "qd-cv";
+    UpstreamConfig upstream;
+    upstream.mode = UpstreamMode::queue;
+    upstream.endpoint = {"qd-in", "qd-out"};
+    upstream.reactor = "qd-cv";
+    upstream.bus_tx = 1;
+    upstream.bus_rx = 1;
+    config.upstreams.push_back(upstream);
+
+    App app;
+    ASSERT_TRUE(app.load(config));
+    auto running = std::async(std::launch::async,
+                              [&]
+                              {
+                                  return app.run();
+                              });
+    struct Stop
+    {
+        App& app;
+        ~Stop()
+        {
+            app.stop();
+        }
+    } stop{app};
+    auto wait_for = [](auto pred)
+    {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!pred() && std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return pred();
+    };
+    ASSERT_TRUE(wait_for([&] { return registrations.load() > 0; }));
+
+    const uint8_t payload[] = {7, 8, 9};
+    app_in->push(bfc::shared_sized_buffer::copy_from(payload, sizeof(payload)));
+    ASSERT_TRUE(wait_for([&] { return app_out->has_data(); }));
+    auto delivered = app_out->pop();
+    ASSERT_TRUE(delivered);
+    EXPECT_EQ(std::vector<uint8_t>(delivered->u8(),
+                                   delivered->u8() + delivered->size()),
+              std::vector<uint8_t>(payload, payload + sizeof(payload)));
+    EXPECT_GE(injected.load(), 1);
+
+    app.stop();
+    ASSERT_EQ(running.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
+    EXPECT_EQ(running.get(), 0);
+}
+}  // namespace

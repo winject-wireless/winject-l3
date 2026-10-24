@@ -1,9 +1,7 @@
 #ifndef WINJECT_MANAGER_WIFI_QUEUE_H_
 #define WINJECT_MANAGER_WIFI_QUEUE_H_
 
-#include "radio/RadioDefs.h"
-#include "radio/RxEvent.h"
-#include "utils/IOReactor.h"
+#include "radio/RadioDplane.h"
 
 #include <atomic>
 #include <bfc/cv_reactor.hpp>
@@ -48,49 +46,28 @@ struct WifiQueueDplaneBinding
     std::string reactor;  // wakes both ends on queue activity
 };
 
-class WifiQueue
+class WifiQueue final : public RadioDplane
 {
 public:
-    using rx = std::function<void(bfc::shared_sized_buffer mpdu)>;
-    using idle = std::function<void()>;
-
     static constexpr size_t k_tx_mpdu_max = WIFI_RADIO_INJECT_MAX;
     static constexpr size_t k_rx_mpdu_max = WIFI_RADIO_RX_MAX;
 
     WifiQueue();
-    ~WifiQueue();
+    ~WifiQueue() override;
     WifiQueue(const WifiQueue&) = delete;
     WifiQueue& operator=(const WifiQueue&) = delete;
 
-    bool open(IOReactor& reactor, rx on_rx, idle on_idle = {});
+    bool open(IOReactor& reactor, rx on_rx, idle on_idle = {}) override;
     bool bind_dplane(const WifiQueueDplaneBinding& binding);
-    // UDP compat: no-op once bound; triggers register_forward when bound.
-    void set_tx_dplane(const sockaddr_in& dplane);
-    void post_rx_event(RxEvent ev);
-    bool register_forward();
-    void close();
-    bool send(const uint8_t* mpdu, size_t len);
+    // No destination to set: the queues are the d-plane.
+    void set_tx_dplane(const sockaddr_in& dplane) override;
+    // EventCtrlRecvSocketChange re-sends the forward registration.
+    void post_rx_event(RxEvent ev) override;
+    bool register_forward() override;
+    void close() override;
+    bool send(const uint8_t* mpdu, size_t len) override;
 
-    void set_fcs_mode(RadioFcsMode mode)
-    {
-        fcs_mode_acc.store(mode, std::memory_order_release);
-    }
-    RadioFcsMode fcs_mode() const
-    {
-        return fcs_mode_acc.load(std::memory_order_acquire);
-    }
-
-    struct counters_s
-    {
-        uint64_t tx_byte = 0;
-        uint64_t rx_byte = 0;
-        uint64_t tx_pkt = 0;
-        uint64_t rx_pkt = 0;
-        uint64_t fcs_error_pkt = 0;
-        uint64_t fcs_unknown_pkt = 0;
-        uint64_t wifi_tx_drops = 0;
-    };
-    counters_s peek_counters() const
+    counters_s peek_counters() const override
     {
         counters_s c;
         c.tx_byte = tx_byte_acc.load(std::memory_order_relaxed);
@@ -99,7 +76,7 @@ public:
         c.rx_pkt = rx_pkt_acc.load(std::memory_order_relaxed);
         c.fcs_error_pkt = fcs_error_pkt_acc.load(std::memory_order_relaxed);
         c.fcs_unknown_pkt = fcs_unknown_pkt_acc.load(std::memory_order_relaxed);
-        c.wifi_tx_drops = wifi_tx_drops_acc.load(std::memory_order_relaxed);
+        c.tx_drops = wifi_tx_drops_acc.load(std::memory_order_relaxed);
         return c;
     }
 
@@ -130,7 +107,6 @@ private:
     // Guarded by gate->mu.
     rx on_rx;
     idle on_idle;
-    std::atomic<RadioFcsMode> fcs_mode_acc{RadioFcsMode::unknown};
     std::atomic<uint64_t> tx_byte_acc{0};
     std::atomic<uint64_t> rx_byte_acc{0};
     std::atomic<uint64_t> tx_pkt_acc{0};

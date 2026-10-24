@@ -294,15 +294,39 @@ bool Config::load(const std::string& path, std::string* error)
         *error = "invalid radio.mplane";
         return false;
     }
-    std::string dplane_s;
-    if (!require_arg(parser, "radio.dplane", &dplane_s, error))
+    radio_device.dplane_tx = parser.arg("radio.dplane_tx").value_or("");
+    radio_device.dplane_rx = parser.arg("radio.dplane_rx").value_or("");
+    radio_device.reactor = parser.arg("radio.reactor").value_or("");
+    const bool dplane_queue = !radio_device.dplane_tx.empty() ||
+                              !radio_device.dplane_rx.empty() ||
+                              !radio_device.reactor.empty();
+    if (dplane_queue)
     {
-        return false;
+        if (radio_device.dplane_tx.empty() || radio_device.dplane_rx.empty() ||
+            radio_device.reactor.empty())
+        {
+            *error =
+                "radio.dplane_tx, radio.dplane_rx and radio.reactor go together";
+            return false;
+        }
+        if (parser.arg("radio.dplane"))
+        {
+            *error = "radio.dplane and radio.dplane_tx are exclusive";
+            return false;
+        }
     }
-    if (!parse_host_port(dplane_s, &radio_device.dplane))
+    else
     {
-        *error = "invalid radio.dplane";
-        return false;
+        std::string dplane_s;
+        if (!require_arg(parser, "radio.dplane", &dplane_s, error))
+        {
+            return false;
+        }
+        if (!parse_host_port(dplane_s, &radio_device.dplane))
+        {
+            *error = "invalid radio.dplane";
+            return false;
+        }
     }
     stats_sec = parser.as<unsigned>("winject.stats_sec").value_or(0);
     if (const char* env = std::getenv("WINJECT_STATS_SEC"))
@@ -556,7 +580,18 @@ bool Config::validate(std::string* error) const
     {
         return fail("radio mplane address is required");
     }
-    if (!ipv4_set(radio_device.dplane))
+    if (radio_device.dplane_is_queue())
+    {
+        if (radio_device.dplane_rx.empty() || radio_device.reactor.empty())
+        {
+            return fail("radio queue dplane needs tx, rx and reactor");
+        }
+        if (radio_device.dplane_tx == radio_device.dplane_rx)
+        {
+            return fail("radio dplane_tx and dplane_rx must differ");
+        }
+    }
+    else if (!ipv4_set(radio_device.dplane))
     {
         return fail("radio dplane address is required");
     }

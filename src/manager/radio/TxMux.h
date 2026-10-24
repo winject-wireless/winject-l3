@@ -28,7 +28,7 @@ inline constexpr size_t k_pacing_full_psdu_bytes = 1504;
 // Share of the modulation's airtime (frame airtime + inter-frame gap) that
 // TX pacing uses.
 inline constexpr uint32_t k_tx_airtime_share_pct = 90;
-class WifiUdp;
+class RadioDplane;
 
 class TxMux
 {
@@ -65,7 +65,7 @@ public:
     std::shared_ptr<BoundedLossyQueue> make_tx_queue(size_t capacity = 1024);
     void stop();
     void request_tick();
-    void post_send_socket_change(std::shared_ptr<WifiUdp> radio,
+    void post_send_socket_change(std::shared_ptr<RadioDplane> radio,
                                  const sockaddr_in& dplane);
     void log_stats(double interval_sec);
     uint64_t take_air_bytes();

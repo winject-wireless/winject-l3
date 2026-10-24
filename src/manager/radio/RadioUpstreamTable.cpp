@@ -1,7 +1,7 @@
 #include "radio/RadioUpstreamTable.h"
 
 #include "endpoint/Upstream.h"
-#include "radio/WifiUdp.h"
+#include "radio/RadioDplane.h"
 
 namespace winject
 {
@@ -19,7 +19,7 @@ bool RadioUpstreamTable::remove(size_t index)
 
 void RadioUpstreamTable::add(const std::shared_ptr<Upstream>& up,
                              const std::shared_ptr<BoundedLossyQueue>& tx_queue,
-                             const std::shared_ptr<WifiUdp>& radio,
+                             const std::shared_ptr<RadioDplane>& radio,
                              uint8_t bus_tx, uint8_t bus_rx, size_t budget)
 {
     std::lock_guard<std::mutex> lock(mu);
@@ -30,7 +30,7 @@ void RadioUpstreamTable::add(const std::shared_ptr<Upstream>& up,
 
 void RadioUpstreamTable::add(std::shared_ptr<ReactiveLossyQueue> rx_queue,
                              std::shared_ptr<BoundedLossyQueue> tx_queue,
-                             const std::shared_ptr<WifiUdp>& radio,
+                             const std::shared_ptr<RadioDplane>& radio,
                              uint8_t bus_tx, uint8_t bus_rx, size_t budget)
 {
     std::lock_guard<std::mutex> lock(mu);

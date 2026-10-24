@@ -105,7 +105,7 @@ Procedure for a new connection:
 |---|---|---|
 | `radio_device\|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] [fcs=AUTO\|SIGNAL\|ACTUAL]` | Set or read the radio the manager drives. Only `id=0`. Keys left out keep their value; `id=0` alone reads. Addresses cannot be cleared | `OK radio_device id=0 mplane=<ip:port> dplane=<ip:port> fcs=<mode>` |
 
-`mplane` and `dplane` are each a `host:port` (the radio m-plane console and the UDP d-plane for inject, registration, and forward). Config always sets both. A `radio_device` command may omit either key to keep the current address; neither can be cleared. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
+`mplane` and `dplane` are each a `host:port` (the radio m-plane console and the UDP d-plane for inject, registration, and forward). Config always sets `mplane`, and sets `dplane` unless the d-plane runs over in-process queues (`radio.dplane_tx` / `radio.dplane_rx` / `radio.reactor`); a queue d-plane is fixed at startup, so `dplane=` then fails with `EINVAL`. A `radio_device` command may omit either key to keep the current address; neither can be cleared. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
 
 These are forwarded to the radio's m-plane when the console is up and the protocol versions match; otherwise they reply `NOK ENODEV` or `NOK EPROTO`. `radio_caps_info` is the exception (see below).
 
@@ -131,6 +131,7 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `radio_fcs_mode` | FCS trailer mode in use: `0` unknown, `1` SIGNAL, `2` ACTUAL |
 | `radio_fcs_err_pkt` | Forwarded frames whose trailer check failed (dropped) |
 | `radio_fcs_unknown_pkt` | Forwarded frames dropped because the FCS mode was not known yet |
+| `radio_tx_drops` | Queue d-plane: oldest inject MPDUs evicted from a full inject queue (always 0 for UDP) |
 | `radio_proto_ok` | `1` when the connected radio's protocol `X.Y` matches the manager; `0` while unknown or mismatched |
 | `radio_version` | Radio `vX.Y.Z` from `version`, or `-` while unknown |
 | `tx_send_fail_mpdu`, `tx_send_fail_byt` | MPDUs the manager could not send to the radio (for example over 1472 bytes, or a socket error) |
@@ -199,7 +200,10 @@ Bench layout and scenarios: [configuration/scenario.md](../configuration/scenari
 | Key | Default | Meaning |
 |---|---|---|
 | `radio.mplane` | required | Radio m-plane `host:port` (ESP32 `:22`, Realtek `:2201`) |
-| `radio.dplane` | required | Radio d-plane `host:port` (ESP32 `:9000`, Realtek `:9000` / `:9003`) |
+| `radio.dplane` | required unless queue d-plane | Radio d-plane `host:port` (ESP32 `:9000`, Realtek `:9000` / `:9003`) |
+| `radio.dplane_tx` | | Queue d-plane: registry name of the inject queue (manager → radio). With `radio.dplane_rx` and `radio.reactor`, replaces `radio.dplane` (exclusive with it) |
+| `radio.dplane_rx` | | Queue d-plane: registry name of the forward queue (radio → manager); must differ from `radio.dplane_tx` |
+| `radio.reactor` | | Queue d-plane: the host's running `cv_reactor` (registry name), which wakes both ends |
 | `radio.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
 | `radio.modulation` | `DSS_1M_L` | PHY rate name, for example `OFDM_24M` |
 | `radio.power` | `20` | TX power, dBm |

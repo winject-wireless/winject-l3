@@ -10,7 +10,7 @@
 namespace winject
 {
 
-class WifiUdp;
+class RadioDplane;
 
 struct EventData
 {
@@ -18,7 +18,7 @@ struct EventData
 
 struct EventCtrlSendSocketChange
 {
-    std::shared_ptr<WifiUdp> radio;
+    std::shared_ptr<RadioDplane> radio;
     sockaddr_in dplane{};
 };
 

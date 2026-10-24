@@ -8,6 +8,8 @@
 #include "radio/RadioDefs.h"
 #include "radio/RadioMplaneParse.h"
 #include "radio/RxEvent.h"
+#include "radio/WifiQueue.h"
+#include "radio/WifiUdp.h"
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
 #include "utils/Version.h"
@@ -35,6 +37,17 @@ App::~App()
         upstream_reactor_thread.join();
     }
     tx_mux.stop();
+    close_radio();
+}
+
+void App::close_radio()
+{
+    // A queue d-plane's host reactor outlives the App and keeps delivering;
+    // close before rx_demux goes, even if a pending TX event holds the radio.
+    if (radio)
+    {
+        radio->close();
+    }
 }
 
 bool App::load(Config config)
@@ -78,20 +91,39 @@ bool App::add_upstream(const UpstreamConfig& uc)
 
 bool App::setup_radio()
 {
-    radio = std::make_shared<WifiUdp>();
-    if (!radio->open(*reactor,
-                     [this](bfc::shared_sized_buffer mpdu)
-                     {
-                         rx_demux.on_mpdu(std::move(mpdu));
-                     }))
+    const RadioDeviceConfig& d = cfg.radio_device;
+    // A queue d-plane delivers on its CV reactor thread, UDP on the IO thread;
+    // RxDemux takes the table lock either way.
+    auto on_rx = [this](bfc::shared_sized_buffer mpdu)
     {
-        return false;
+        rx_demux.on_mpdu(std::move(mpdu));
+    };
+    std::string dplane;
+    if (d.dplane_is_queue())
+    {
+        auto queue = std::make_shared<WifiQueue>();
+        if (!queue->open(*reactor, std::move(on_rx)) ||
+            !queue->bind_dplane(
+                WifiQueueDplaneBinding{d.dplane_tx, d.dplane_rx, d.reactor}))
+        {
+            return false;
+        }
+        radio = std::move(queue);
+        dplane = "queue:" + d.dplane_tx + "," + d.dplane_rx + "@" + d.reactor;
+    }
+    else
+    {
+        radio = std::make_shared<WifiUdp>();
+        if (!radio->open(*reactor, std::move(on_rx)))
+        {
+            return false;
+        }
+        dplane = console_format_ipv4_port(d.dplane);
     }
     apply_radio_dplane();
     apply_configured_fcs();
-    LOG_INF("radio dplane=%s fcs=%s",
-            console_format_ipv4_port(cfg.radio_device.dplane).c_str(),
-            console_format_radio_fcs(cfg.radio_device.fcs));
+    LOG_INF("radio dplane=%s fcs=%s", dplane.c_str(),
+            console_format_radio_fcs(d.fcs));
     return true;
 }
 
@@ -653,7 +685,7 @@ void App::refresh_host_metrics()
         ->store(tx_mux.pacing_interval_full_us());
     if (radio != nullptr)
     {
-        const WifiUdp::counters_s rc = radio->peek_counters();
+        const RadioDplane::counters_s rc = radio->peek_counters();
         metrics_registry.get_metrics<MetricU64>("radio_rx_pkt")
             ->store(rc.rx_pkt);
         metrics_registry.get_metrics<MetricU64>("radio_rx_byt")
@@ -666,6 +698,8 @@ void App::refresh_host_metrics()
             ->store(rc.fcs_error_pkt);
         metrics_registry.get_metrics<MetricU64>("radio_fcs_unknown_pkt")
             ->store(rc.fcs_unknown_pkt);
+        metrics_registry.get_metrics<MetricU64>("radio_tx_drops")
+            ->store(rc.tx_drops);
         const RadioFcsMode fcs = radio->fcs_mode();
         metrics_registry.get_metrics<MetricU64>("radio_fcs_mode")
             ->store(static_cast<uint64_t>(fcs));
@@ -894,6 +928,15 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
 {
     if (patch.id != 0)
     {
+        if (error != nullptr)
+        {
+            *error = k_einval;
+        }
+        return false;
+    }
+    if (patch.have_dplane && cfg.radio_device.dplane_is_queue())
+    {
+        // A queue d-plane is fixed at startup.
         if (error != nullptr)
         {
             *error = k_einval;
@@ -1512,6 +1555,7 @@ void App::begin_shutdown()
     radio_upstream_table.clear();
     upstreams.clear();
     tx_mux.stop();
+    close_radio();
 }
 
 int App::run()

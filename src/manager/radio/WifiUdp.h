@@ -1,9 +1,7 @@
 #ifndef WINJECT_MANAGER_WIFI_UDP_H_
 #define WINJECT_MANAGER_WIFI_UDP_H_
 
-#include "radio/RadioDefs.h"
-#include "radio/RxEvent.h"
-#include "utils/IOReactor.h"
+#include "radio/RadioDplane.h"
 #include "utils/NetUtil.h"
 
 #include <atomic>
@@ -17,46 +15,25 @@ namespace winject
 {
 
 // Opaque full-MPDU UDP transport to/from the ESP32 radio.
-class WifiUdp
+class WifiUdp final : public RadioDplane
 {
 public:
-    using rx = std::function<void(bfc::shared_sized_buffer mpdu)>;
-    using idle = std::function<void()>;
-
     static constexpr size_t k_tx_mpdu_max = WIFI_RADIO_INJECT_MAX;
     static constexpr size_t k_rx_mpdu_max = WIFI_RADIO_RX_MAX;
 
     WifiUdp() = default;
-    ~WifiUdp();
+    ~WifiUdp() override;
     WifiUdp(const WifiUdp&) = delete;
     WifiUdp& operator=(const WifiUdp&) = delete;
 
-    bool open(IOReactor& reactor, rx on_rx, idle on_idle = {});
-    void set_tx_dplane(const sockaddr_in& dplane);
-    void post_rx_event(RxEvent ev);
-    bool register_forward();
-    void close();
-    bool send(const uint8_t* mpdu, size_t len);
+    bool open(IOReactor& reactor, rx on_rx, idle on_idle = {}) override;
+    void set_tx_dplane(const sockaddr_in& dplane) override;
+    void post_rx_event(RxEvent ev) override;
+    bool register_forward() override;
+    void close() override;
+    bool send(const uint8_t* mpdu, size_t len) override;
 
-    void set_fcs_mode(RadioFcsMode mode)
-    {
-        fcs_mode_acc.store(mode, std::memory_order_release);
-    }
-    RadioFcsMode fcs_mode() const
-    {
-        return fcs_mode_acc.load(std::memory_order_acquire);
-    }
-
-    struct counters_s
-    {
-        uint64_t tx_byte = 0;
-        uint64_t rx_byte = 0;
-        uint64_t tx_pkt = 0;
-        uint64_t rx_pkt = 0;
-        uint64_t fcs_error_pkt = 0;
-        uint64_t fcs_unknown_pkt = 0;
-    };
-    counters_s peek_counters() const
+    counters_s peek_counters() const override
     {
         counters_s c;
         c.tx_byte = tx_byte_acc.load(std::memory_order_relaxed);
@@ -84,7 +61,6 @@ private:
     bool have_rx_dplane = false;
     rx on_rx;
     idle on_idle;
-    std::atomic<RadioFcsMode> fcs_mode_acc{RadioFcsMode::unknown};
     std::atomic<uint64_t> tx_byte_acc{0};
     std::atomic<uint64_t> rx_byte_acc{0};
     std::atomic<uint64_t> tx_pkt_acc{0};

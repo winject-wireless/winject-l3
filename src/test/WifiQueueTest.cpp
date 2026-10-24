@@ -342,6 +342,6 @@ TEST(WifiQueueTest, TxEvictionIsCounted)
     const auto mpdu = minimal_mpdu();
     ASSERT_TRUE(wifi.send(mpdu.data(), mpdu.size()));
     ASSERT_TRUE(wifi.send(mpdu.data(), mpdu.size()));
-    EXPECT_EQ(wifi.peek_counters().wifi_tx_drops, 1u);
+    EXPECT_EQ(wifi.peek_counters().tx_drops, 1u);
     EXPECT_EQ(dplane.inject->size(), 1u);
 }

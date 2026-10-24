@@ -54,7 +54,7 @@ enum class FecType
     RsBlockErasure,
 };
 
-// radio.fcs config (runtime mode is RadioFcsMode on WifiUdp).
+// radio.fcs config (runtime mode is RadioFcsMode on the radio d-plane).
 enum class RadioFcsConfig
 {
     auto_detect,
@@ -80,14 +80,26 @@ struct UpstreamConfig
     int fec_timeout_ms = 20;
 };
 
-// One radio the manager drives (docs/mplane.md § radio_device). Both
-// addresses are required. A radio_device command can change either one
-// and cannot clear them.
+// One radio the manager drives (docs/mplane.md § radio_device). The m-plane
+// is always UDP. The d-plane is UDP (radio.dplane) or, with all of
+// radio.dplane_tx, radio.dplane_rx and radio.reactor, in-process queues
+// (WifiQueue). A radio_device command can change a UDP address but not
+// clear it, and cannot change a queue d-plane.
 struct RadioDeviceConfig
 {
     sockaddr_in mplane{};  // radio.mplane host:port (ESP32 :22, Realtek :2201)
     sockaddr_in dplane{};  // radio.dplane host:port (ESP32 :9000)
+    // Queue d-plane: registry names of the inject (manager -> radio) and
+    // forward (radio -> manager) queues, and the host's running cv_reactor.
+    std::string dplane_tx;
+    std::string dplane_rx;
+    std::string reactor;
     RadioFcsConfig fcs = RadioFcsConfig::auto_detect;
+
+    bool dplane_is_queue() const
+    {
+        return !dplane_tx.empty();
+    }
 };
 
 struct Config

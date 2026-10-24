@@ -12,7 +12,7 @@ namespace winject
 {
 
 class Upstream;
-class WifiUdp;
+class RadioDplane;
 
 // One configured host upstream on the shared radio (not an MPDU PduSlot).
 struct RadioUpstreamEntry
@@ -23,7 +23,7 @@ struct RadioUpstreamEntry
     // Oldest packets the demux evicted from rx_queue.
     std::shared_ptr<std::atomic<uint64_t>> rx_queue_evictions;
     std::shared_ptr<BoundedLossyQueue> tx_queue;
-    std::shared_ptr<WifiUdp> radio;
+    std::shared_ptr<RadioDplane> radio;
     uint8_t bus_tx = 0;
     uint8_t bus_rx = 0;
     size_t budget = 0;

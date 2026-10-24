@@ -11,7 +11,7 @@
 #include "radio/RadioUpstreamTable.h"
 #include "radio/RxDemux.h"
 #include "radio/TxMux.h"
-#include "radio/WifiUdp.h"
+#include "radio/RadioDplane.h"
 #include "utils/IOReactor.h"
 #include "utils/MetricsRegistry.h"
 #include "utils/OneShotTimer.h"
@@ -97,6 +97,7 @@ private:
     bool console_radio_device(const ManagerRadioDeviceUpdate& patch,
                               ManagerRadioDeviceView* out, std::string* error);
     void apply_radio_dplane();
+    void close_radio();
     void apply_configured_fcs();
     void send_radio_unavailable_nok(ManagerConsoleReply reply) const;
     void on_radio_version(bool known, const WinjectVersion& v);
@@ -112,7 +113,7 @@ private:
     TxMux tx_mux{radio_upstream_table};
     RadioManager radio_manager;
     RxDemux rx_demux{radio_upstream_table};
-    std::shared_ptr<WifiUdp> radio;
+    std::shared_ptr<RadioDplane> radio;
     std::vector<std::shared_ptr<Upstream>> upstreams;
     std::shared_ptr<Upstream::Reactor> upstream_reactor =
         std::make_shared<Upstream::Reactor>();

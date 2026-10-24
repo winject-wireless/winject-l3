@@ -4,7 +4,7 @@
 #include "endpoint/Upstream.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
-#include "radio/WifiUdp.h"
+#include "radio/RadioDplane.h"
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
 
@@ -448,7 +448,7 @@ void TxMux::apply_events(TxEventQueue events)
     }
 }
 
-void TxMux::post_send_socket_change(std::shared_ptr<WifiUdp> radio,
+void TxMux::post_send_socket_change(std::shared_ptr<RadioDplane> radio,
                                     const sockaddr_in& dplane)
 {
     {

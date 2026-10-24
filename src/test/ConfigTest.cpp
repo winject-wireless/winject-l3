@@ -960,3 +960,82 @@ upstream-0.tx               = 127.0.0.1:21082
     EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9001u);
     std::remove(path.c_str());
 }
+
+namespace
+{
+std::string queue_dplane_conf(const std::string& radio_lines)
+{
+    return R"(
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain      = 1234
+upstream.size = 1
+upstream-0.mode     = UDP_STATIC_FORWARDING
+upstream-0.tx_bus   = b2
+upstream-0.rx_bus   = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx       = 0.0.0.0:22081
+upstream-0.tx       = 127.0.0.1:21082
+)" + radio_lines;
+}
+}  // namespace
+
+TEST(ConfigTest, LoadsQueueDplane)
+{
+    Config cfg;
+    std::string err;
+    ASSERT_TRUE(cfg.load(write_conf(queue_dplane_conf(R"(
+radio.dplane_tx = wifi_tx
+radio.dplane_rx = wifi_rx
+radio.reactor   = radio_cv
+)")),
+                         &err))
+        << err;
+    EXPECT_TRUE(cfg.radio_device.dplane_is_queue());
+    EXPECT_EQ(cfg.radio_device.dplane_tx, "wifi_tx");
+    EXPECT_EQ(cfg.radio_device.dplane_rx, "wifi_rx");
+    EXPECT_EQ(cfg.radio_device.reactor, "radio_cv");
+    EXPECT_TRUE(cfg.validate(&err)) << err;
+}
+
+TEST(ConfigTest, QueueDplaneNeedsAllThreeKeys)
+{
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(write_conf(queue_dplane_conf(R"(
+radio.dplane_tx = wifi_tx
+radio.dplane_rx = wifi_rx
+)")),
+                          &err));
+    EXPECT_EQ(err,
+              "radio.dplane_tx, radio.dplane_rx and radio.reactor go together");
+}
+
+TEST(ConfigTest, QueueDplaneExcludesUdpDplane)
+{
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(write_conf(queue_dplane_conf(R"(
+radio.dplane    = 192.168.32.1:9000
+radio.dplane_tx = wifi_tx
+radio.dplane_rx = wifi_rx
+radio.reactor   = radio_cv
+)")),
+                          &err));
+    EXPECT_EQ(err, "radio.dplane and radio.dplane_tx are exclusive");
+}
+
+TEST(ConfigTest, QueueDplaneRejectsSharedQueue)
+{
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(write_conf(queue_dplane_conf(R"(
+radio.dplane_tx = wifi
+radio.dplane_rx = wifi
+radio.reactor   = radio_cv
+)")),
+                          &err));
+    EXPECT_FALSE(err.empty());
+}
