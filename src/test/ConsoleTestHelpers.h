@@ -152,10 +152,10 @@ public:
             return false;
         }
         reactor->get_timer().wait_ms(10000,
-                                      [&]()
-                                      {
-                                          reactor->stop();
-                                      });
+                                     [&]()
+                                     {
+                                         reactor->stop();
+                                     });
         worker = std::thread(
             [&]()
             {

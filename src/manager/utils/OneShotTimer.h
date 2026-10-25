@@ -34,17 +34,17 @@ public:
             return;
         }
         const uint64_t seq = ++this->seq;
-        const IOTimerId id =
-            this->reactor->get_timer().wait_us(after.count() > 0 ? after.count() : 0,
-                                          [this, seq, fn = std::move(fn)]()
-                                          {
-                                              if (!armed_state || armed_state->seq != seq)
-                                              {
-                                                  return;
-                                              }
-                                              armed_state.reset();
-                                              fn();
-                                          });
+        const IOTimerId id = this->reactor->get_timer().wait_us(
+            after.count() > 0 ? after.count() : 0,
+            [this, seq, fn = std::move(fn)]()
+            {
+                if (!armed_state || armed_state->seq != seq)
+                {
+                    return;
+                }
+                armed_state.reset();
+                fn();
+            });
         armed_state = Armed{id, seq};
     }
 

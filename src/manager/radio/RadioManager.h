@@ -29,7 +29,8 @@ public:
     using DropConsoleFn = std::function<void()>;
     using ReconcileFilterFn = std::function<void(std::function<void(bool ok)>)>;
 
-    void bind(Config* cfg, TxMux* tx_mux, RadioDplane* wifi, IOReactor* reactor);
+    void bind(Config* cfg, TxMux* tx_mux, RadioDplane* wifi,
+              IOReactor* reactor);
     void set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reapply,
                          PingFn ping, DropConsoleFn drop_console);
     void set_reconcile_filter(ReconcileFilterFn reconcile);

@@ -25,7 +25,7 @@ class BoundedLossyQueue
 {
 public:
     explicit BoundedLossyQueue(size_t capacity = 1024,
-                                 bfc::light_function<void()> on_push = {})
+                               bfc::light_function<void()> on_push = {})
         : max_slots(capacity), on_push_fn(std::move(on_push))
     {
         slots.resize(max_slots);
