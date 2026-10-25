@@ -51,3 +51,44 @@ ensure_winject_manager() {
         return 1
     fi
 }
+
+# SIGTERM every winject-manager and wait until it has exited. The process
+# closes its radio m-plane session on the way out. This does not send
+# anything to a radio.
+stop_winject_managers() {
+    local timeout_s="${1:-15}"
+    local i
+    if ! pgrep -x winject-manager >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "stopping winject-manager..." >&2
+    pkill -TERM -x winject-manager 2>/dev/null || true
+    for i in $(seq 1 $((timeout_s * 10))); do
+        if ! pgrep -x winject-manager >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "error: winject-manager did not exit within ${timeout_s}s" >&2
+    pgrep -a -x winject-manager >&2 || true
+    return 1
+}
+
+# Block until the manager log shows it programmed the radio, which is when
+# that process holds the m-plane.
+wait_manager_radio() {
+    local log="${1:?manager log required}"
+    local timeout_s="${2:-30}"
+    local i
+    for i in $(seq 1 $((timeout_s * 4))); do
+        if [[ -f "$log" ]] && grep -q "radio programmed" "$log"; then
+            return 0
+        fi
+        sleep 0.25
+    done
+    echo "error: manager did not acquire the radio; tail $log" >&2
+    if [[ -f "$log" ]]; then
+        tail -30 "$log" >&2 || true
+    fi
+    return 1
+}

@@ -7,11 +7,11 @@ winject-manager is controlled two ways: a **configuration file** read at startup
 The manager m-plane is request/response and always client-initiated:
 
 ```
-client -> manager : request  (UDP datagram to manager.console_in)
+client -> manager : request  (UDP datagram to winject.console_in)
 client <- manager : response (UDP datagram to the request's source address)
 ```
 
-- The manager **binds** `manager.console_in`. Each reply is sent to the **source address and port** of the request. Clients use an ephemeral UDP socket: send to `console_in`, read the reply on the same socket.
+- The manager **binds** `winject.console_in`. Each reply is sent to the **source address and port** of the request. Clients use an ephemeral UDP socket: send to `console_in`, read the reply on the same socket.
 - Optional request prefix `cmd:<u8> ` (0–255). Replies are tagged `OK:<id>` / `NOK:<id>` with the same id. Ids are scoped per sender; a retransmitted tagged request still in flight is ignored. Too many in-flight requests → `NOK EBUSY` (tagged when the request was).
 - Untagged requests get untagged replies (one at a time per socket; no correlation).
 - One command per datagram, at most 511 bytes. Empty lines and lines starting with `#` are ignored (no reply).
@@ -29,7 +29,7 @@ Bench configs use loopback `console_in` per manager, for example A `127.0.0.1:24
 | `NOK EINVAL` | Missing, unknown, repeated, empty or out-of-range argument |
 | `NOK ENOENT` | Unknown upstream id |
 | `NOK EEXIST` | `add_upstream` with an id already in use |
-| `NOK ENODEV` | Radio command while no radio m-plane is configured or connected |
+| `NOK ENODEV` | Radio command while the radio m-plane is not connected |
 | `NOK ENODATA` | `radio_caps_info` while the FCS mode is not known yet |
 | `NOK ENOSYS` | Unknown command |
 | `NOK ECANCELED` | A forwarded radio command was dropped because the radio connection was reset (for example by `radio_device mplane=`) |
@@ -103,11 +103,11 @@ Procedure for a new connection:
 
 | Request | Description | Response |
 |---|---|---|
-| `radio_device\|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] [fcs=AUTO\|SIGNAL\|ACTUAL]` | Set or read the radio the manager drives. Only `id=0`. Keys left out keep their value; `id=0` alone reads. Addresses cannot be cleared | `OK radio_device id=0 mplane=<ip:port\|-> dplane=<ip:port\|-> fcs=<mode>` |
+| `radio_device\|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] [fcs=AUTO\|SIGNAL\|ACTUAL]` | Set or read the radio the manager drives. Only `id=0`. Keys left out keep their value; `id=0` alone reads. Addresses cannot be cleared | `OK radio_device id=0 mplane=<ip:port> dplane=<ip:port> fcs=<mode>` |
 
-`mplane` selects the radio m-plane (omit or use `winject.skip_console = 1` in config to leave it unset). `dplane` is the radio's single UDP port for inject, registration and forward. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
+`mplane` and `dplane` are each a `host:port` (the radio m-plane console and the UDP d-plane for inject, registration, and forward). Config always sets `mplane`, and sets `dplane` unless the d-plane runs over in-process queues (`radio.dplane_tx` / `radio.dplane_rx` / `radio.reactor`); a queue d-plane is fixed at startup, so `dplane=` then fails with `EINVAL`. A `radio_device` command may omit either key to keep the current address; neither can be cleared. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
 
-These are forwarded to the radio's m-plane when `radio_device` has an `mplane` address and the protocol versions match; otherwise they reply `NOK ENODEV` or `NOK EPROTO`. `radio_caps_info` is the exception (see below).
+These are forwarded to the radio's m-plane when the console is up and the protocol versions match; otherwise they reply `NOK ENODEV` or `NOK EPROTO`. `radio_caps_info` is the exception (see below).
 
 | Request | Description | Response |
 |---|---|---|
@@ -131,6 +131,7 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `radio_fcs_mode` | FCS trailer mode in use: `0` unknown, `1` SIGNAL, `2` ACTUAL |
 | `radio_fcs_err_pkt` | Forwarded frames whose trailer check failed (dropped) |
 | `radio_fcs_unknown_pkt` | Forwarded frames dropped because the FCS mode was not known yet |
+| `radio_tx_drops` | Queue d-plane: oldest inject MPDUs evicted from a full inject queue (always 0 for UDP) |
 | `radio_proto_ok` | `1` when the connected radio's protocol `X.Y` matches the manager; `0` while unknown or mismatched |
 | `radio_version` | Radio `vX.Y.Z` from `version`, or `-` while unknown |
 | `tx_send_fail_mpdu`, `tx_send_fail_byt` | MPDUs the manager could not send to the radio (for example over 1472 bytes, or a socket error) |
@@ -138,7 +139,17 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `rx_drop_domain` | Forwarded frames that are not winject frames of this domain |
 | `rx_drop_bus` | Slots whose LC bus matches no upstream `rx_bus` |
 | `upstream_<id>_air_rx_gap_loss` | Air RX sequence gaps on upstream `<id>` |
+| `upstream_<id>_air_rx_resyncs` | Air RX sequence jumped back more than 64 (peer restart); taken as the new reference, no loss counted |
 | `upstream_<id>_app_rx_oversize_pkt` | Application datagrams over 1445 bytes dropped on upstream `<id>` |
+| `upstream_<id>_app_delivery_attempts` | Decoded/raw datagrams handed to the application transport, including local failures |
+| `upstream_<id>_app_delivery_accepted` | Datagrams accepted locally by the socket or output queue; does not prove peer receipt |
+| `upstream_<id>_app_delivery_errors` | Local send failures (or unavailable output queue capacity) |
+| `upstream_<id>_app_delivery_no_peer` | Datagram deliveries dropped because a UDP server has not learned a peer |
+| `upstream_<id>_app_delivery_closed` | Delivery attempts that raced transport close |
+| `upstream_<id>_app_delivery_evictions` | Old output-queue entries evicted while accepting new entries |
+| `upstream_<id>_tx_queue_drops` | Oldest raw datagrams or encoded shards evicted from the bounded 1024-packet upstream TX queue |
+| `upstream_<id>_rx_queue_evictions` | Oldest air payloads evicted from the upstream's radio RX inbox by the demux |
+| `upstream_<id>_app_tx_queue_evictions` | Oldest app datagrams evicted from the app TX queue by a UDP receive (queue upstreams: counted by the app) |
 | `upstream_<id>_air_rx_fec_unexpected` | FEC shards (LC header F flag) received on upstream `<id>` while its FEC is disabled; still decoded. Non-zero means the two ends disagree on `fec.type` |
 
 Example (replies arrive on the same UDP socket you send from):
@@ -149,33 +160,65 @@ get_metrics keys=radio_tx_pkt,radio_rx_pkt,radio_proto_ok,radio_version
 
 ## Configuration file
 
-Run the manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`).
+Run the Linux manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`). That process parses the file in its `main` and calls `winject_l3::main(const Config&)`. An ESP-IDF host fills the same `Config` in code (`idf/example/main/main.cpp`) and does not pass argv.
 
-### Radio and manager (`winject.*`)
+### Format overview
+
+Keys fall into three namespaces:
+
+| Namespace | Purpose |
+|---|---|
+| `radio.*` | Radio the manager drives: `mplane` and `dplane` (`host:port`), PHY (`channel`, `modulation`, `power`), optional `cca` and `fcs` |
+| `winject.*` | Shared air domain and manager behaviour: required `domain`, optional `console_in` and `stats_sec` |
+| `upstream.size` + `upstream-N.*` | Application bridges: `mode`, `rx` / `tx`, `tx_bus` / `rx_bus`, scheduling, optional FEC; queue mode also needs `reactor` |
+
+`radio.mplane` and `radio.dplane` are independent: hosts and ports may differ (for example Realtek on `127.0.0.1` with console `2201` and d-plane `9000`). On every upstream, `rx` and `tx` use the same names for UDP `host:port` endpoints or, in `QUEUE_FORWARDING`, queue registry names.
+
+Minimal static UDP upstream:
+
+```ini
+radio.mplane = 192.168.253.11:22
+radio.dplane = 192.168.253.11:9000
+radio.channel = 1
+radio.modulation = OFDM_24M
+radio.power = 20
+winject.domain = 1234
+
+upstream.size = 1
+upstream-0.mode = UDP_STATIC_FORWARDING
+upstream-0.tx_bus = b2
+upstream-0.rx_bus = a1
+upstream-0.scheduler_budget = 4096
+upstream-0.rx = 0.0.0.0:22081
+upstream-0.tx = 127.0.0.1:21082
+```
+
+Bench layout and scenarios: [configuration/scenario.md](../configuration/scenario.md).
+
+### Radio (`radio.*`)
 
 | Key | Default | Meaning |
 |---|---|---|
-| `winject.device` | | Optional; with `console` and `dplane_port` sets `radio_device id=0` at startup |
-| `winject.console` | `22` | Radio m-plane UDP port (ESP32 `22`, Realtek `2201`) |
-| `winject.dplane_port` | `9000` | Radio d-plane port (`winject.inject_port` accepted as an alias) |
-| `winject.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
-| `winject.modulation` | `DSS_1M_L` | PHY rate name, for example `OFDM_24M` |
-| `winject.power` | `20` | TX power, dBm |
-| `winject.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
+| `radio.mplane` | required | Radio m-plane `host:port` (ESP32 `:22`, Realtek `:2201`) |
+| `radio.dplane` | required unless queue d-plane | Radio d-plane `host:port` (ESP32 `:9000`, Realtek `:9000` / `:9003`) |
+| `radio.dplane_tx` | | Queue d-plane: registry name of the inject queue (manager → radio). With `radio.dplane_rx` and `radio.reactor`, replaces `radio.dplane` (exclusive with it) |
+| `radio.dplane_rx` | | Queue d-plane: registry name of the forward queue (radio → manager); must differ from `radio.dplane_tx` |
+| `radio.reactor` | | Queue d-plane: the host's running `cv_reactor` (registry name), which wakes both ends |
+| `radio.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
+| `radio.modulation` | `DSS_1M_L` | PHY rate name, for example `OFDM_24M` |
+| `radio.power` | `20` | TX power, dBm |
+| `radio.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
+| `radio.fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
+
+### Link and manager (`winject.*`)
+
+| Key | Default | Meaning |
+|---|---|---|
 | `winject.domain` | required | 16-bit hex domain, non-zero; carried in Address 3 (see [winject.md](winject.md)) |
-| `winject.skip_console` | `0` | `1`: do not set `radio_device mplane` from the config |
-| `winject.radio_fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
 | `winject.stats_sec` | `0` | Log stream stats every N seconds; `0` = off. Overridden by the `WINJECT_STATS_SEC` environment variable |
+| `winject.console_in` | | `address:port` the manager binds for commands (replies go to the sender). Unset = the manager m-plane is off |
 
-TX pacing is not configurable: it follows `winject.modulation` at 90 % of its airtime (see [winject.md](winject.md)). The old keys `winject.max_rate_kbps`, `tx_gap_us`, `max_data_per_tick`, `tx_burst_size` and `tx_burst_interval_us` are ignored with a warning.
-
-### Manager console (`manager.*`)
-
-| Key | Meaning |
-|---|---|
-| `manager.console_in` | `address:port` the manager binds for commands (replies go to the sender) |
-
-If unset, the manager m-plane is off.
+TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airtime (see [winject.md](winject.md)).
 
 ### Upstreams (`upstream.*`, `upstream-N.*`)
 
@@ -183,19 +226,42 @@ If unset, the manager m-plane is off.
 
 | Key | Meaning |
 |---|---|
-| `upstream-N.mode` | `UDP_SERVER_FORWARDING`, `UDP_CLIENT_FORWARDING` or `UDP_STATIC_FORWARDING` (`UDP_GENERIC_FORWARDING` is an alias for static). Must match the addresses given |
-| `upstream-N.bind_address` (or `rx`) | `address:port` to receive application datagrams on. Server mode replies to the last sender |
-| `upstream-N.connect_address` (or `tx`) | `address:port` to send received air datagrams to. Client mode |
-| `upstream-N.tx_bus` | Bus stamped on this upstream's air traffic: 1–2 hex digits, non-zero (for example `b2`) |
-| `upstream-N.rx_bus` | Bus whose air traffic is delivered to this upstream. At least one of `tx_bus` / `rx_bus` is required |
+| `upstream-N.mode` | `UDP_SERVER_FORWARDING`, `UDP_CLIENT_FORWARDING`, `UDP_STATIC_FORWARDING`, or `QUEUE_FORWARDING`. UDP modes must match the addresses given. `UDP_GENERIC_FORWARDING` is rejected |
+| `upstream-N.rx` | UDP: `address:port` to receive application datagrams on (server mode replies to the last sender). Queue: registry name consumed (application datagrams toward the air; the sender's `queue_transport_tx`). `bind_address` and `queue_in` are rejected |
+| `upstream-N.tx` | UDP: `address:port` to send received air datagrams to. Queue: registry name produced (air datagrams toward the application; the sender's `queue_transport_rx`). Must differ from `rx`, and neither name may be reused. `connect_address` and `queue_out` are rejected |
+| `upstream-N.reactor` | Queue mode: name of the host's running `cv_reactor`. Several upstreams may share one reactor. UDP modes reject this key |
+| `upstream-N.tx_bus` | Bus stamped on this upstream's air traffic: 1–2 hex digits, non-zero (for example `b2`). `bus_tx` and `upstream_tx-N.bus` are rejected |
+| `upstream-N.rx_bus` | Bus whose air traffic is delivered to this upstream. At least one of `tx_bus` / `rx_bus` is required. `bus_rx` and `upstream_rx-N.bus` are rejected |
 | `upstream-N.scheduler_budget` | Scheduling share per TX pass, bytes (default 256; console `quanta`) |
 | `upstream-N.fec.type` | `NONE` or `RS_BLOCK_ERASURE` |
 | `upstream-N.fec.k`, `upstream-N.fec.n` | Data and total shards per block (`1 ≤ k < n ≤ 31`; 5-bit fields in the shard header) |
-| `upstream-N.fec.timeout_ms` | Close a partial block after this long (default 20) |
+| `upstream-N.fec.timeout_ms` | Close a partial block after this long (default 20; zero disables automatic closing) |
 
-Server mode has `bind_address` only, client mode `connect_address` only, static mode both. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).
+Server mode has `rx` only, client mode `tx` only, static mode both. `QUEUE_FORWARDING` has `rx`, `tx`, and `reactor`: `rx` and `tx` are queue names. The host registers both queues (nonzero capacity, distinct objects) on `bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>` and the reactor on `bfc::cv_reactor_registry` before the manager opens the upstream. The manager does not create or stop them. Each queue has one consumer. `add_upstream` remains a UDP upstream. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).
+
+### Legacy and removed keys
+
+Loading a file with any of these keys fails with an error that names the replacement or states the key is removed.
+
+| Old key | Replacement |
+|---|---|
+| `winject.channel`, `winject.modulation`, `winject.power`, `winject.cca`, `winject.radio_fcs` | `radio.channel`, `radio.modulation`, `radio.power`, `radio.cca`, `radio.fcs` |
+| `winject.console`, `radio.console` | `radio.mplane` (`host:port`) |
+| `winject.device`, `radio.dplane_port`, `winject.dplane_port`, `radio.inject_port`, `winject.inject_port`, `winject.forward_port`, `winject.forward_base` | `radio.dplane` (`host:port`) |
+| `manager.console_in` | `winject.console_in` |
+| `upstream-N.bind_address`, `upstream-N.connect_address` | `upstream-N.rx`, `upstream-N.tx` |
+| `upstream-N.queue_in`, `upstream-N.queue_out` | `upstream-N.rx`, `upstream-N.tx` |
+| `upstream-N.bus_tx`, `upstream-N.bus_rx`, `upstream_tx-N.bus`, `upstream_rx-N.bus` | `upstream-N.tx_bus`, `upstream-N.rx_bus` |
+| `upstream-N.mode = UDP_GENERIC_FORWARDING` | `UDP_STATIC_FORWARDING` |
+
+Removed with no replacement: `radio.device`, `radio.skip_console`, `winject.skip_console`, and the old TX pacing keys (`winject.max_rate_kbps`, `winject.tx_gap_us`, `winject.max_data_per_tick`, `winject.tx_burst_size`, `winject.tx_burst_interval_us`, `winject.local_ip`). The radio m-plane is always required.
 
 ## Related docs
 
 - Architecture, data paths and on-air framing: [winject.md](winject.md)
 - Code style and tests: [contributing.md](contributing.md)
+
+Upstream FEC updates reconstruct the upstream instance. Pending RX/TX/FEC data
+is discarded, learned UDP peers and per-instance counters reset, and fresh
+reactor callbacks are registered. Invalid updates leave the active instance
+intact. A scheduling-budget-only update preserves the instance.

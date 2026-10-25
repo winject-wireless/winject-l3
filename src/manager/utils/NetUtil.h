@@ -16,10 +16,12 @@ namespace winject
 constexpr size_t k_wifi_payload_max = 1448;
 static_assert(k_wifi_payload_max == WIFI_PAYLOAD_MAX,
               "k_wifi_payload_max must match WIFI_PAYLOAD_MAX");
-constexpr size_t k_lc_header_len = LCHeader::k_len;
-constexpr size_t k_stream_payload_max = k_wifi_payload_max - k_lc_header_len;
-static_assert(k_stream_payload_max + k_lc_header_len == k_wifi_payload_max,
-              "LCHeader must fit in one wifi payload");
+constexpr size_t k_route_header_len = RouteHeader::k_len;
+constexpr size_t k_upstream_air_header_len = UpstreamAirHeader::k_len;
+constexpr size_t k_lc_header_len = k_slot_prefix_len;
+constexpr size_t k_stream_payload_max = k_wifi_payload_max - k_slot_prefix_len;
+static_assert(k_stream_payload_max + k_slot_prefix_len == k_wifi_payload_max,
+              "slot prefix must fit in one wifi payload");
 
 bool parse_host_port(const std::string& text, sockaddr_in* out);
 bool parse_host(const std::string& text, in_addr* out);

@@ -4,51 +4,51 @@
 #include "radio/PhyAirtime.h"
 #include "radio/RadioMplaneParse.h"
 #include "radio/TxMux.h"
-#include "radio/WifiUdp.h"
+#include "radio/RadioDplane.h"
 #include "utils/Log.h"
 
 namespace winject
 {
 
-void RadioManager::bind(Config* cfg, TxMux* tx_mux, WifiUdp* wifi,
+void RadioManager::bind(Config* cfg, TxMux* tx_mux, RadioDplane* wifi,
                         IOReactor* reactor)
 {
-    cfg_ = cfg;
-    tx_mux_ = tx_mux;
-    wifi_ = wifi;
-    ping_timer_.bind(reactor);
-    pong_timer_.bind(reactor);
-    register_timer_.bind(reactor);
-    info_timer_.bind(reactor);
+    this->cfg = cfg;
+    this->tx_mux = tx_mux;
+    this->wifi = wifi;
+    ping_timer.bind(reactor);
+    pong_timer.bind(reactor);
+    register_timer.bind(reactor);
+    info_timer.bind(reactor);
 }
 
 void RadioManager::set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reapply,
                                    PingFn ping, DropConsoleFn drop_console)
 {
-    query_info_ = std::move(query);
-    reapply_ = std::move(reapply);
-    ping_ = std::move(ping);
-    drop_console_ = std::move(drop_console);
+    query_info = std::move(query);
+    this->reapply = std::move(reapply);
+    this->ping = std::move(ping);
+    this->drop_console = std::move(drop_console);
 }
 
 void RadioManager::set_reconcile_filter(ReconcileFilterFn reconcile)
 {
-    reconcile_filter_ = std::move(reconcile);
+    reconcile_filter = std::move(reconcile);
 }
 
 void RadioManager::configure_tx_mux()
 {
-    if (cfg_ == nullptr || tx_mux_ == nullptr)
+    if (cfg == nullptr || tx_mux == nullptr)
     {
         return;
     }
-    tx_mux_->configure(cfg_->domain);
-    sync_pacing_for_modulation(cfg_->modulation);
+    tx_mux->configure(cfg->domain);
+    sync_pacing_for_modulation(cfg->modulation);
 }
 
 void RadioManager::sync_pacing_for_modulation(const std::string& modulation)
 {
-    if (cfg_ == nullptr || tx_mux_ == nullptr)
+    if (cfg == nullptr || tx_mux == nullptr)
     {
         return;
     }
@@ -58,42 +58,42 @@ void RadioManager::sync_pacing_for_modulation(const std::string& modulation)
         return;
     }
     PhyMode mode;
-    if (!phy_mode_from_name(canonical, cfg_->channel, &mode))
+    if (!phy_mode_from_name(canonical, cfg->channel, &mode))
     {
         return;
     }
-    tx_mux_->set_phy_mode(mode);
+    tx_mux->set_phy_mode(mode);
     LOG_INF("tx pacing for %s (ch=%u)", canonical.c_str(),
-            static_cast<unsigned>(cfg_->channel));
+            static_cast<unsigned>(cfg->channel));
 }
 
 void RadioManager::on_phy_programmed()
 {
-    if (cfg_ == nullptr)
+    if (cfg == nullptr)
     {
         return;
     }
-    if (wifi_ != nullptr)
+    if (wifi != nullptr)
     {
-        wifi_->register_forward();
+        wifi->register_forward();
     }
-    sync_pacing_for_modulation(cfg_->modulation);
+    sync_pacing_for_modulation(cfg->modulation);
 }
 
 void RadioManager::on_console_up()
 {
     on_console_down();
-    ping_timer_.arm(k_ping_interval,
+    ping_timer.arm(k_ping_interval,
                     [this]()
                     {
                         on_ping_due();
                     });
-    register_timer_.arm(k_register_interval,
+    register_timer.arm(k_register_interval,
                         [this]()
                         {
                             on_register_due();
                         });
-    info_timer_.arm(k_radio_info_interval,
+    info_timer.arm(k_radio_info_interval,
                     [this]()
                     {
                         on_info_due();
@@ -102,40 +102,40 @@ void RadioManager::on_console_up()
 
 void RadioManager::on_console_down()
 {
-    gen_++;
-    ping_timer_.cancel();
-    pong_timer_.cancel();
-    register_timer_.cancel();
-    info_timer_.cancel();
+    gen++;
+    ping_timer.cancel();
+    pong_timer.cancel();
+    register_timer.cancel();
+    info_timer.cancel();
 }
 
 void RadioManager::on_ping_due()
 {
-    if (!ping_ || !drop_console_)
+    if (!ping || !drop_console)
     {
         return;
     }
-    pong_timer_.arm(k_pong_timeout,
+    pong_timer.arm(k_pong_timeout,
                     [this]()
                     {
                         on_pong_timeout();
                     });
-    const uint32_t gen = gen_;
-    ping_(
-        [this, gen](bool ok)
+    const uint32_t ping_gen = this->gen;
+    ping(
+        [this, ping_gen](bool ok)
         {
-            if (gen != gen_)
+            if (ping_gen != this->gen)
             {
                 return;
             }
-            pong_timer_.cancel();
+            pong_timer.cancel();
             if (!ok)
             {
                 LOG_WRN("console ping failed");
-                drop_console_();
+                drop_console();
                 return;
             }
-            ping_timer_.arm(k_ping_interval,
+            ping_timer.arm(k_ping_interval,
                             [this]()
                             {
                                 on_ping_due();
@@ -146,16 +146,16 @@ void RadioManager::on_ping_due()
 void RadioManager::on_pong_timeout()
 {
     LOG_WRN("console ping timeout");
-    drop_console_();
+    drop_console();
 }
 
 void RadioManager::on_register_due()
 {
-    if (wifi_ != nullptr)
+    if (wifi != nullptr)
     {
-        wifi_->register_forward();
+        wifi->register_forward();
     }
-    register_timer_.arm(k_register_interval,
+    register_timer.arm(k_register_interval,
                         [this]()
                         {
                             on_register_due();
@@ -164,19 +164,19 @@ void RadioManager::on_register_due()
 
 void RadioManager::on_info_due()
 {
-    info_timer_.arm(k_radio_info_interval,
+    info_timer.arm(k_radio_info_interval,
                     [this]()
                     {
                         on_info_due();
                     });
-    if (cfg_ == nullptr || !query_info_ || !reapply_)
+    if (cfg == nullptr || !query_info || !reapply)
     {
         return;
     }
 
-    if (reconcile_filter_)
+    if (reconcile_filter)
     {
-        reconcile_filter_(
+        reconcile_filter(
             [](bool ok)
             {
                 if (!ok)
@@ -186,11 +186,11 @@ void RadioManager::on_info_due()
             });
     }
 
-    const uint32_t gen = gen_;
-    query_info_(
-        [this, gen](bool ok, const ManagerRadioView& actual)
+    const uint32_t info_gen = this->gen;
+    query_info(
+        [this, info_gen](bool ok, const ManagerRadioView& actual)
         {
-            if (gen != gen_)
+            if (info_gen != this->gen)
             {
                 return;
             }
@@ -199,20 +199,20 @@ void RadioManager::on_info_due()
                 LOG_WRN("radio_info poll failed");
                 return;
             }
-            actual_ = actual;
-            if (radio_phy_matches_desired(actual_, cfg_->channel, cfg_->power_dbm,
-                                          cfg_->modulation))
+            this->actual = actual;
+            if (radio_phy_matches_desired(actual, cfg->channel, cfg->power_dbm,
+                                          cfg->modulation))
             {
                 return;
             }
             LOG_WRN(
                 "radio PHY mismatch (want ch=%u pwr=%d mod=%s; have ch=%u pwr=%d "
                 "mod=%s), reapplying",
-                static_cast<unsigned>(cfg_->channel),
-                static_cast<int>(cfg_->power_dbm), cfg_->modulation.c_str(),
-                static_cast<unsigned>(actual_.channel), actual_.tx_power,
-                actual_.modulation.c_str());
-            reapply_(
+                static_cast<unsigned>(cfg->channel),
+                static_cast<int>(cfg->power_dbm), cfg->modulation.c_str(),
+                static_cast<unsigned>(actual.channel), actual.tx_power,
+                actual.modulation.c_str());
+            reapply(
                 [](bool reapplied)
                 {
                     if (!reapplied)

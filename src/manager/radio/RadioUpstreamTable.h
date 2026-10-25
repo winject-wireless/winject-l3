@@ -13,15 +13,21 @@ namespace winject
 {
 
 class Upstream;
-class WifiUdp;
+class RadioDplane;
 
 // Per-upstream registration shared by TxMux (host→air) and RxDemux (air→host).
 class RadioUpstreamTable
 {
 public:
     void add(const std::shared_ptr<Upstream>& up,
-             const std::shared_ptr<WifiUdp>& radio, uint8_t bus_tx,
+             const std::shared_ptr<BoundedLossyQueue>& tx_queue,
+             const std::shared_ptr<RadioDplane>& radio, uint8_t bus_tx,
              uint8_t bus_rx, size_t budget);
+    void add(std::shared_ptr<ReactiveLossyQueue> rx_queue,
+             std::shared_ptr<BoundedLossyQueue> tx_queue,
+             const std::shared_ptr<RadioDplane>& radio, uint8_t bus_tx,
+             uint8_t bus_rx, size_t budget);
+    void clear();
     bool remove(size_t index);
     bool set_budget(size_t index, size_t budget);
     bool get_budget(size_t index, size_t* budget) const;
@@ -30,26 +36,26 @@ public:
 
     std::mutex& mutex()
     {
-        return mu_;
+        return mu;
     }
     const std::mutex& mutex() const
     {
-        return mu_;
+        return mu;
     }
     // Caller must hold mutex().
     std::vector<RadioUpstreamEntry>& entries()
     {
-        return entries_;
+        return upstream_entries;
     }
     // Caller must hold mutex().
     const std::vector<RadioUpstreamEntry>& entries() const
     {
-        return entries_;
+        return upstream_entries;
     }
 
 private:
-    mutable std::mutex mu_;
-    std::vector<RadioUpstreamEntry> entries_;
+    mutable std::mutex mu;
+    std::vector<RadioUpstreamEntry> upstream_entries;
 };
 
 }  // namespace winject

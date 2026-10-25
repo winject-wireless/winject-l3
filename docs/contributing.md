@@ -4,7 +4,7 @@
 
 - **C/C++:** [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) with **Allman braces** (opening `{` on its own line). When they conflict, Allman wins for braces.
 - **Formatting:** Root [`.clang-format`](../.clang-format). Format touched files with `clang-format -i` or rely on the check script below.
-- **Types:** PascalCase class/struct/enum names match **PascalCase** file names (e.g. `ConsoleService` in `ConsoleService.h`, `UdpEndpoint` in `UdpEndpoint.cpp`, entry `Main.cpp`, CMake helpers `BfcFetch.cmake` / `IsalEc.cmake`). **`CMakeLists.txt`** stays as-is (CMake requirement).
+- **Types:** PascalCase class/struct/enum names match **PascalCase** file names (e.g. `ConsoleService` in `ConsoleService.h`, `QueueUpstream` in `QueueUpstream.cpp`, entry `Main.cpp`, CMake helpers `BfcFetch.cmake` / `IsalEc.cmake`). **`CMakeLists.txt`** stays as-is (CMake requirement).
 - **802.11 MPDU:** Winject slot/domain stamping in [`src/manager/frames/Mpdu.*`](../src/manager/frames/) Manager code lives in `winject` (`App`, `Config`, `Mpdu`, radio/endpoint types, etc.); nested `winject::ieee_802_11` groups 802.11 layout; air LCP [`LCHeader`](../src/manager/frames/LCHeader.h) (logical channel bus + sequence) with counters on [`UpstreamStats`](../src/manager/endpoint/UpstreamStats.h). IEEE 802.11 layout in [`Frame.*`](../src/manager/frames/) (`Frame` in `winject::ieee_802_11`, from archived [winject](https://github.com/therooftopprinz/winject)). UDP transport: [`src/manager/radio/`](../src/manager/radio/).
 
 ## Refactors

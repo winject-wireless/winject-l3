@@ -8,6 +8,7 @@
 #include "radio/WifiUdp.h"
 #include "utils/IOReactor.h"
 
+#include <bfc/cv_reactor.hpp>
 #include <bfc/socket.hpp>
 #include <chrono>
 #include <deque>
@@ -25,44 +26,46 @@ using namespace winject;
 namespace
 {
 
-class QueueUpstream : public Upstream
+class QueueProducer
 {
 public:
-    std::deque<std::vector<uint8_t>> txq;
-    // Parallel to txq: whether each SDU is an FEC shard. Missing means raw.
-    std::deque<bool> txq_fec;
+    static constexpr uint8_t k_bus = 7;
 
-    void on_radio_rx(bfc::shared_sized_buffer /*pkt*/,
-                     bool /*is_fec*/) override
+    struct QueueFacade
     {
-    }
-
-    bool has_tx() override
-    {
-        return !txq.empty();
-    }
-
-    size_t get_tx_size() override
-    {
-        return txq.empty() ? 0 : txq.front().size();
-    }
-
-    bfc::sized_buffer pull_tx(size_t max, bool* is_fec) override
-    {
-        if (txq.empty() || txq.front().size() > max)
+        std::shared_ptr<BoundedLossyQueue> queue;
+        QueueProducer* owner = nullptr;
+        void push_back(const std::vector<uint8_t>& slot_payload)
         {
-            return bfc::sized_buffer();
+            queue->push(bfc::shared_sized_buffer::copy_from(
+                slot_payload.data(), slot_payload.size()));
         }
-        bfc::sized_buffer out(txq.front().size());
-        memcpy(out.data(), txq.front().data(), txq.front().size());
-        txq.pop_front();
-        *is_fec = !txq_fec.empty() && txq_fec.front();
-        if (!txq_fec.empty())
+        bool empty() const
         {
-            txq_fec.pop_front();
+            return !queue->has_data();
         }
-        return out;
+    } txq;
+    explicit QueueProducer(std::shared_ptr<BoundedLossyQueue> queue)
+        : txq{std::move(queue)}
+    {
+        txq.owner = this;
     }
+    void push_sdu(const std::vector<uint8_t>& sdu, bool fec = false)
+    {
+        txq.push_back(frame_sdu(sdu, fec));
+    }
+
+private:
+    friend struct QueueFacade;
+    std::vector<uint8_t> frame_sdu(const std::vector<uint8_t>& sdu, bool fec)
+    {
+        std::vector<uint8_t> slot(LCHeader::k_len + sdu.size());
+        LCHeader::write(slot.data(), k_bus, seq, fec);
+        seq = static_cast<uint16_t>((seq + 1) & LCHeader::k_seq_mask);
+        memcpy(slot.data() + LCHeader::k_len, sdu.data(), sdu.size());
+        return slot;
+    }
+    uint16_t seq = 0;
 };
 
 std::vector<uint8_t> make_sdu(size_t len, uint8_t tag)
@@ -81,118 +84,127 @@ class TxMuxHarness
 {
 public:
     explicit TxMuxHarness(size_t budget, const char* modulation = "OFDM_54M")
-        : radio_sock_(bfc::create_udp4()), mux_(table_)
+        : radio_sock(bfc::create_udp4()), tx_mux(upstream_table)
     {
         sockaddr_in bind_addr = {};
         bind_addr.sin_family = AF_INET;
         bind_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         bind_addr.sin_port = 0;
-        EXPECT_EQ(radio_sock_.bind(bind_addr), 0);
+        EXPECT_EQ(radio_sock.bind(bind_addr), 0);
         socklen_t len = sizeof(bind_addr);
-        getsockname(radio_sock_.fd(), reinterpret_cast<sockaddr*>(&bind_addr),
+        getsockname(radio_sock.fd(), reinterpret_cast<sockaddr*>(&bind_addr),
                     &len);
 
-        radio_ = std::make_shared<WifiUdp>();
-        EXPECT_TRUE(radio_->open(reactor_, [](bfc::shared_sized_buffer) {}));
-        radio_->set_tx_dplane(bind_addr);
+        radio_udp = std::make_shared<WifiUdp>();
+        EXPECT_TRUE(radio_udp->open(io_reactor, [](bfc::shared_sized_buffer) {}));
+        radio_udp->set_tx_dplane(bind_addr);
 
-        up_ = std::make_shared<QueueUpstream>();
-        table_.add(up_, radio_, k_bus, k_bus, budget);
-        mux_.configure(1);
+        producer = std::make_shared<QueueProducer>(tx_mux.make_tx_queue());
+        upstream_table.add(std::make_shared<ReactiveLossyQueue>(), producer->txq.queue,
+                           radio_udp, QueueProducer::k_bus, QueueProducer::k_bus,
+                           budget);
+        tx_mux.configure(1);
         PhyMode mode;
         EXPECT_TRUE(phy_mode_from_name(modulation, 1, &mode));
-        mux_.set_phy_mode(mode);
+        tx_mux.set_phy_mode(mode);
     }
 
     ~TxMuxHarness()
     {
-        radio_->close();
+        tx_mux.stop();
+        radio_udp->close();
     }
 
-    QueueUpstream& up()
+    QueueProducer& up()
     {
-        return *up_;
+        return *producer;
     }
 
     TxMux& mux()
     {
-        return mux_;
+        return tx_mux;
     }
 
     RadioUpstreamTable& table()
     {
-        return table_;
+        return upstream_table;
     }
 
-    // Collects until `count` SDUs arrived or `timeout` passed, without
-    // ticking (the TX thread, if started, does that).
+    void fail_radio_sends()
+    {
+        radio_udp->set_tx_dplane(sockaddr_in{});
+    }
+
+    IOReactor& reactor()
+    {
+        return io_reactor;
+    }
+    void collect_pending()
+    {
+        collect();
+    }
+    size_t received_count() const
+    {
+        return received_pdus.size();
+    }
+
+    // The test owns the reactor; TxMux must not create another thread.
+    size_t run_for(std::chrono::microseconds window)
+    {
+        tx_mux.start(io_reactor);
+        io_reactor.get_timer().wait_us(window.count(),
+                                     [this]()
+                                     {
+                                         io_reactor.stop();
+                                     });
+        io_reactor.run();
+        collect();
+        return received_pdus.size();
+    }
+
     size_t wait_received(size_t count, std::chrono::milliseconds timeout)
     {
         const auto end = std::chrono::steady_clock::now() + timeout;
-        while (received_.size() < count &&
+        while (received_pdus.size() < count &&
                std::chrono::steady_clock::now() < end)
         {
-            collect();
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            run_for(std::chrono::milliseconds(1));
         }
-        return received_.size();
+        return received_pdus.size();
     }
 
-    // Ticks every 100 us for `window`; returns the SDUs received.
-    size_t run_for(std::chrono::microseconds window)
-    {
-        const auto end = std::chrono::steady_clock::now() + window;
-        while (std::chrono::steady_clock::now() < end)
-        {
-            mux_.sync_tick();
-            collect();
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-        }
-        collect();
-        return received_.size();
-    }
-
-    // Ticks until the upstream queue is empty (or a deadline passes), then
-    // returns every SDU received on the radio socket. The sleep before each
-    // tick lets pacing credit build so one tick can send several MPDUs.
     std::vector<std::vector<uint8_t>> drain()
     {
-        const auto deadline =
+        tx_mux.start(io_reactor);
+        tx_mux.request_tick();
+        const auto end =
             std::chrono::steady_clock::now() + std::chrono::seconds(1);
-        while (std::chrono::steady_clock::now() < deadline)
+        while (!producer->txq.empty() && std::chrono::steady_clock::now() < end)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            mux_.sync_tick();
-            collect();
-            if (up_->txq.empty())
-            {
-                break;
-            }
+            run_for(std::chrono::milliseconds(2));
         }
         collect();
-        return received_;
+        return received_pdus;
     }
 
     // LC FEC flag and seq of every slot collected, in order.
     const std::vector<bool>& received_fec() const
     {
-        return received_fec_;
+        return received_fec_flags;
     }
     const std::vector<uint16_t>& received_seq() const
     {
-        return received_seq_;
+        return received_seq_nums;
     }
 
 private:
-    static constexpr uint8_t k_bus = 7;
-
     void collect()
     {
         uint8_t buf[WIFI_RADIO_INJECT_MAX + 64];
         for (;;)
         {
             const ssize_t n =
-                ::recv(radio_sock_.fd(), buf, sizeof(buf), MSG_DONTWAIT);
+                ::recv(radio_sock.fd(), buf, sizeof(buf), MSG_DONTWAIT);
             if (n <= 0)
             {
                 return;
@@ -210,23 +222,23 @@ private:
                 ASSERT_GE(slot.size(), LCHeader::k_len);
                 const uint8_t* p =
                     reinterpret_cast<const uint8_t*>(slot.data());
-                EXPECT_EQ(p[0], k_bus);
-                received_fec_.push_back(LCHeader::read_is_fec(p));
-                received_seq_.push_back(LCHeader::read_seq(p));
-                received_.emplace_back(p + LCHeader::k_len, p + slot.size());
+                EXPECT_EQ(p[0], QueueProducer::k_bus);
+                received_fec_flags.push_back(LCHeader::read_is_fec(p));
+                received_seq_nums.push_back(LCHeader::read_seq(p));
+                received_pdus.emplace_back(p + LCHeader::k_len, p + slot.size());
             }
         }
     }
 
-    IOReactor reactor_;
-    bfc::socket radio_sock_;
-    RadioUpstreamTable table_;
-    TxMux mux_;
-    std::shared_ptr<WifiUdp> radio_;
-    std::shared_ptr<QueueUpstream> up_;
-    std::vector<std::vector<uint8_t>> received_;
-    std::vector<bool> received_fec_;
-    std::vector<uint16_t> received_seq_;
+    IOReactor io_reactor;
+    bfc::socket radio_sock;
+    RadioUpstreamTable upstream_table;
+    TxMux tx_mux;
+    std::shared_ptr<WifiUdp> radio_udp;
+    std::shared_ptr<QueueProducer> producer;
+    std::vector<std::vector<uint8_t>> received_pdus;
+    std::vector<bool> received_fec_flags;
+    std::vector<uint16_t> received_seq_nums;
 };
 
 }  // namespace
@@ -240,7 +252,7 @@ TEST(TxMuxTest, SduNearShareLimitIsNotDropped)
         make_sdu(100, 1), make_sdu(96, 2), make_sdu(50, 3)};
     for (const auto& s : sdus)
     {
-        h.up().txq.push_back(s);
+        h.up().push_sdu(s);
     }
     EXPECT_EQ(h.drain(), sdus);
     EXPECT_TRUE(h.up().txq.empty());
@@ -253,7 +265,7 @@ TEST(TxMuxTest, SduExactlyBudgetIsNotDropped)
         make_sdu(98, 1), make_sdu(99, 2), make_sdu(100, 3)};
     for (const auto& s : sdus)
     {
-        h.up().txq.push_back(s);
+        h.up().push_sdu(s);
     }
     EXPECT_EQ(h.drain(), sdus);
 }
@@ -267,15 +279,14 @@ TEST(TxMuxTest, SduLargerThanBudgetIsSent)
         make_sdu(1000, 1), make_sdu(k_stream_payload_max, 2), make_sdu(10, 3)};
     for (const auto& s : sdus)
     {
-        h.up().txq.push_back(s);
+        h.up().push_sdu(s);
     }
     EXPECT_EQ(h.drain(), sdus);
     EXPECT_TRUE(h.up().txq.empty());
 }
 
-// The LC header FEC flag follows the upstream's per-SDU tag, whatever the SDU
-// bytes are, and one seq counter covers both kinds.
-TEST(TxMuxTest, StampsFecFlagPerSdu)
+// Pre-framed slot payloads pass through the mux with FEC flag and seq intact.
+TEST(TxMuxTest, ForwardsPreframedFecFlagPerSdu)
 {
     TxMuxHarness h(4096);
     std::vector<std::vector<uint8_t>> sdus = {
@@ -284,8 +295,7 @@ TEST(TxMuxTest, StampsFecFlagPerSdu)
     const std::vector<bool> fec = {false, true, true, false};
     for (size_t i = 0; i < sdus.size(); i++)
     {
-        h.up().txq.push_back(sdus[i]);
-        h.up().txq_fec.push_back(fec[i]);
+        h.up().push_sdu(sdus[i], fec[i]);
     }
     EXPECT_EQ(h.drain(), sdus);
     EXPECT_EQ(h.received_fec(), fec);
@@ -311,12 +321,11 @@ TEST(TxMuxTest, PacingIntervalIsAirtimePlusGapOverNinetyPercent)
 // so a backlog drains at the paced rate, not faster.
 TEST(TxMuxTest, BacklogDrainsAtPacedRate)
 {
-    const auto start = std::chrono::steady_clock::now();
     TxMuxHarness h(4096, "OFDM_24M");
     constexpr size_t k_sdu = 1400;
     for (int i = 0; i < 200; i++)
     {
-        h.up().txq.push_back(make_sdu(k_sdu, static_cast<uint8_t>(i)));
+        h.up().push_sdu(make_sdu(k_sdu, static_cast<uint8_t>(i)));
     }
     PhyMode mode;
     ASSERT_TRUE(phy_mode_from_name("OFDM_24M", 1, &mode));
@@ -324,57 +333,245 @@ TEST(TxMuxTest, BacklogDrainsAtPacedRate)
     const uint32_t iv_us =
         ((phy_txtime_us(mode, mpdu_len + 4) + 96) * 100 + 89) / 90;
 
+    // Time only the reactor run: setup before it (slow under TSan) is idle
+    // time the mux may make up by at most two intervals.
+    const auto start = std::chrono::steady_clock::now();
     const size_t sent = h.run_for(std::chrono::milliseconds(60));
     const auto elapsed_us =
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - start)
             .count();
     const size_t expected = static_cast<size_t>(elapsed_us / iv_us) + 1;
-    // Never faster than paced. A slow test loop (e.g. under TSAN) can lose
-    // slots beyond the two-interval catch-up, so the lower bound is loose.
-    EXPECT_LE(sent, expected + 1) << "iv_us=" << iv_us;
+    // Never faster than paced, apart from the two-interval catch-up.
+    EXPECT_LE(sent, expected + 2) << "iv_us=" << iv_us;
     EXPECT_GE(sent * 4, expected * 3) << "iv_us=" << iv_us;
 }
 
-// Data queued without a wake is still sent: the TX thread sleeps at most
-// k_tx_max_sleep.
-TEST(TxMuxTest, ThreadSendsUnwokenDataWithinMaxSleep)
+TEST(TxMuxTest, IdleHasNoPollingAndProducerWakeRunsOnIoReactor)
 {
     TxMuxHarness h(4096, "OFDM_24M");
-    h.mux().start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    {
-        std::lock_guard<std::mutex> lock(h.table().mutex());
-        h.up().txq.push_back(make_sdu(100, 1));
-    }
-    const auto start = std::chrono::steady_clock::now();
+    h.run_for(std::chrono::milliseconds(2));
+    int64_t deadline = 0;
+    EXPECT_FALSE(h.reactor().get_timer().get_next_deadline_us(deadline));
+    h.up().push_sdu(make_sdu(100, 1));
+    // The bound TX queue wakes the scheduler automatically after push.
     EXPECT_EQ(h.wait_received(1, std::chrono::milliseconds(100)), 1u);
-    const auto waited = std::chrono::steady_clock::now() - start;
-    EXPECT_LT(waited, k_tx_max_sleep + std::chrono::milliseconds(5));
-    h.mux().stop();
+    EXPECT_FALSE(h.reactor().get_timer().get_next_deadline_us(deadline));
 }
 
 // A scheduler budget below the SDU size (default 256) weights upstreams; it
 // must not cap the rate. One 1400 B SDU spends the share, and the next round
-// refills it while pacing is open, instead of the TX thread sleeping 5 ms.
+// refills it while pacing is open, instead of waiting for a periodic poll.
 TEST(TxMuxTest, SmallBudgetDoesNotCapRate)
 {
     TxMuxHarness h(256, "OFDM_24M");
     constexpr size_t k_frames = 40;
+    // Queue pushes wake TxMux, which takes the table lock: never push under it.
+    for (size_t i = 0; i < k_frames; i++)
     {
-        std::lock_guard<std::mutex> lock(h.table().mutex());
-        for (size_t i = 0; i < k_frames; i++)
-        {
-            h.up().txq.push_back(make_sdu(1400, static_cast<uint8_t>(i)));
-        }
+        h.up().push_sdu(make_sdu(1400, static_cast<uint8_t>(i)));
     }
     // Start behind schedule, as after any stall: pacing credit is open.
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    h.mux().start();
+    h.mux().start(h.reactor());
     h.mux().request_tick();
     // ~669 us per frame: ~27 ms paced; 40 x 5 ms = 200 ms if the share capped
     // each wake to one frame.
     EXPECT_EQ(h.wait_received(k_frames, std::chrono::milliseconds(80)),
               k_frames);
     h.mux().stop();
+}
+
+TEST(TxMuxTest, SharesCvReactorAndDrainsFromPacingTimers)
+{
+    TxMuxHarness h(256, "OFDM_24M");
+    bfc::cv_reactor<> cv;
+    for (int i = 0; i < 20; ++i)
+    {
+        h.up().push_sdu(make_sdu(1400, i));
+    }
+    h.mux().start(cv);
+    cv.get_timer().wait_ms(60,
+                           [&]()
+                           {
+                               cv.stop();
+                           });
+    cv.run();
+    h.collect_pending();
+    EXPECT_EQ(h.received_count(), 20u);
+    int64_t deadline = 0;
+    EXPECT_FALSE(cv.get_timer().get_next_deadline_us(deadline));
+    h.mux().stop();
+}
+
+// A coarse blocking reactor cannot honor sub-step wakeups. The mux must
+// batch using its existing bounded pacing credit rather than request those
+// wakeups or limit TX to one MPDU per coarse tick.
+TEST(TxMuxTest, CoarseTimerUsesReportedStepAndKeepsPacedThroughput)
+{
+    TxMuxHarness h(4096, "OFDM_24M");
+    struct CoarseReactor
+    {
+        static constexpr uint64_t minimum_timer_step() { return 1000; }
+        bfc::cv_reactor<> cv;
+        struct Timer
+        {
+            bfc::cv_reactor<>& cv;
+            size_t positive_arms = 0;
+            size_t sub_step_arms = 0;
+            auto wait_us(int64_t us, bfc::light_function<void()> fn)
+            {
+                if (us > 0)
+                {
+                    ++positive_arms;
+                    if (us < 1000 || us % 1000 != 0) ++sub_step_arms;
+                }
+                return cv.get_timer().wait_us(us, std::move(fn));
+            }
+            void cancel(std::pair<int64_t, uint64_t> id)
+            {
+                cv.get_timer().cancel(id);
+            }
+        } timer{cv};
+        auto& get_timer() { return timer; }
+        void wake_up(bfc::light_function<void()> fn)
+        {
+            cv.wake_up(std::move(fn));
+        }
+    } coarse;
+    for (int i = 0; i < 100; ++i)
+    {
+        h.up().push_sdu(make_sdu(1400, i));
+    }
+    h.mux().start(coarse);
+    // Collect frequently so the loopback socket does not become the limit.
+    const auto start = std::chrono::steady_clock::now();
+    coarse.cv.get_timer().wait_ms(60, [&] { coarse.cv.stop(); });
+    std::function<void()> collect;
+    collect = [&]
+    {
+        h.collect_pending();
+        coarse.cv.get_timer().wait_ms(2, [&collect] { collect(); });
+    };
+    coarse.cv.get_timer().wait_ms(2, [&collect] { collect(); });
+    coarse.cv.run();
+    h.collect_pending();
+    h.mux().stop();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - start).count();
+    // About 90 full SDUs fit in 60 ms; one per millisecond would deliver ~60.
+    // Allow scheduling noise, while catching that throughput regression.
+    const size_t expected = std::min<size_t>(100, elapsed / 669 + 1);
+    EXPECT_GE(h.received_count() * 4, expected * 3);
+    EXPECT_LE(h.received_count(), expected + 2);
+    EXPECT_GT(coarse.timer.positive_arms, 0u);
+    EXPECT_EQ(coarse.timer.sub_step_arms, 0u);
+}
+
+TEST(TxMuxTest, NotificationsAreCoalesced)
+{
+    TxMuxHarness h(4096);
+    struct Probe
+    {
+        static constexpr uint64_t minimum_timer_step()
+        {
+            return IOReactor::minimum_timer_step();
+        }
+        IOReactor& io;
+        size_t wakes = 0;
+        auto& get_timer()
+        {
+            return io.get_timer();
+        }
+        void wake_up(std::function<void()> cb)
+        {
+            ++wakes;
+            io.wake_up(std::move(cb));
+        }
+    } probe{h.reactor()};
+    h.mux().start(probe);
+    for (int i = 0; i < 100; ++i)
+    {
+        h.mux().request_tick();
+    }
+    EXPECT_EQ(probe.wakes, 1u);
+    h.run_for(std::chrono::milliseconds(1));
+    h.up().push_sdu(make_sdu(100, 1));
+    for (int i = 0; i < 100; ++i)
+    {
+        h.mux().request_tick();
+    }
+    EXPECT_EQ(probe.wakes, 2u);
+    EXPECT_EQ(h.run_for(std::chrono::milliseconds(2)), 1u);
+    h.mux().stop();
+}
+
+TEST(TxMuxTest, CrossThreadProducerWakesSharedReactor)
+{
+    TxMuxHarness h(4096);
+    h.run_for(std::chrono::milliseconds(1));
+    std::thread producer(
+        [&]()
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            h.up().push_sdu(make_sdu(100, 7));
+            h.mux().request_tick();
+        });
+    h.run_for(std::chrono::milliseconds(30));
+    producer.join();
+    EXPECT_EQ(h.received_count(), 1u);
+}
+
+TEST(TxMuxTest, StopCancelsPacingAndRestartFindsRemainingBacklog)
+{
+    TxMuxHarness h(256, "DSS_1M_L");
+    for (int i = 0; i < 5; ++i)
+    {
+        h.up().push_sdu(make_sdu(1400, i));
+    }
+    h.run_for(std::chrono::milliseconds(1));
+    ASSERT_FALSE(h.up().txq.empty());
+    h.mux().stop();
+    const size_t sent = h.received_count();
+    // Run IO without restarting TxMux; old callbacks must not transmit.
+    h.reactor().get_timer().wait_ms(20,
+                                    [&]()
+                                    {
+                                        h.reactor().stop();
+                                    });
+    h.reactor().run();
+    h.collect_pending();
+    EXPECT_EQ(h.received_count(), sent);
+    h.mux().start(h.reactor());
+    EXPECT_EQ(h.wait_received(5, std::chrono::milliseconds(150)), 5u);
+}
+
+TEST(TxMuxTest, PendingCallbackDoesNotTouchDestroyedMux)
+{
+    IOReactor reactor;
+    RadioUpstreamTable table;
+    auto mux = std::make_unique<TxMux>(table);
+    mux->start(reactor);
+    mux.reset();
+    reactor.get_timer().wait_ms(1,
+                                [&]()
+                                {
+                                    reactor.stop();
+                                });
+    reactor.run();
+}
+
+TEST(TxMuxTest, FailedSubmissionsDoNotStrandRemainingBacklog)
+{
+    TxMuxHarness h(4096, "OFDM_24M");
+    h.fail_radio_sends();
+    for (int i = 0; i < 5; ++i)
+    {
+        h.up().push_sdu(make_sdu(1400, i));
+    }
+    h.run_for(std::chrono::milliseconds(20));
+    EXPECT_TRUE(h.up().txq.empty());
+    EXPECT_EQ(h.mux().tx_send_fail_mpdu(), 5u);
+    int64_t deadline = 0;
+    EXPECT_FALSE(h.reactor().get_timer().get_next_deadline_us(deadline));
 }

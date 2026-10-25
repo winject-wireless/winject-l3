@@ -15,7 +15,7 @@ namespace winject
 
 class Config;
 class TxMux;
-class WifiUdp;
+class RadioDplane;
 
 // Owns TxMux pacing vs modulation, heartbeat, and periodic radio_info
 // drift/reapply.
@@ -29,7 +29,8 @@ public:
     using DropConsoleFn = std::function<void()>;
     using ReconcileFilterFn = std::function<void(std::function<void(bool ok)>)>;
 
-    void bind(Config* cfg, TxMux* tx_mux, WifiUdp* wifi, IOReactor* reactor);
+    void bind(Config* cfg, TxMux* tx_mux, RadioDplane* wifi,
+              IOReactor* reactor);
     void set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reapply,
                          PingFn ping, DropConsoleFn drop_console);
     void set_reconcile_filter(ReconcileFilterFn reconcile);
@@ -45,11 +46,11 @@ public:
 
     const ManagerRadioView& actual_phy() const
     {
-        return actual_;
+        return actual;
     }
     void set_actual_phy(const ManagerRadioView& view)
     {
-        actual_ = view;
+        actual = view;
     }
 
 private:
@@ -58,22 +59,22 @@ private:
     void on_register_due();
     void on_info_due();
 
-    Config* cfg_ = nullptr;
-    TxMux* tx_mux_ = nullptr;
-    WifiUdp* wifi_ = nullptr;
-    QueryRadioInfoFn query_info_;
-    ReapplyRadioFn reapply_;
-    PingFn ping_;
-    DropConsoleFn drop_console_;
-    ReconcileFilterFn reconcile_filter_;
-    ManagerRadioView actual_{};
+    Config* cfg = nullptr;
+    TxMux* tx_mux = nullptr;
+    RadioDplane* wifi = nullptr;
+    QueryRadioInfoFn query_info;
+    ReapplyRadioFn reapply;
+    PingFn ping;
+    DropConsoleFn drop_console;
+    ReconcileFilterFn reconcile_filter;
+    ManagerRadioView actual{};
     // Bumped on console up and down; a reply from an older console session
     // does nothing.
-    uint32_t gen_ = 0;
-    OneShotTimer ping_timer_;
-    OneShotTimer pong_timer_;
-    OneShotTimer register_timer_;
-    OneShotTimer info_timer_;
+    uint32_t gen = 0;
+    OneShotTimer ping_timer;
+    OneShotTimer pong_timer;
+    OneShotTimer register_timer;
+    OneShotTimer info_timer;
     // Next ping this long after the previous pong.
     static constexpr std::chrono::milliseconds k_ping_interval{250};
     static constexpr std::chrono::milliseconds k_pong_timeout{500};

@@ -28,6 +28,13 @@ const uint32_t* crc32_table()
     return table;
 }
 
+uint32_t load_le32(const uint8_t* p)
+{
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) |
+           (static_cast<uint32_t>(p[3]) << 24);
+}
+
 }  // namespace
 
 uint32_t wifi_fcs_compute(const uint8_t* mpdu, size_t len)
@@ -70,6 +77,24 @@ void wifi_fcs_store(const uint8_t* mpdu, size_t len, uint8_t out[4])
     out[1] = static_cast<uint8_t>(crc >> 8);
     out[2] = static_cast<uint8_t>(crc >> 16);
     out[3] = static_cast<uint8_t>(crc >> 24);
+}
+
+bool wifi_forward_trailer_ok(const uint8_t* frame, size_t len,
+                             RadioFcsMode mode)
+{
+    switch (mode)
+    {
+        case RadioFcsMode::actual:
+            return wifi_fcs_matches(frame, len);
+        case RadioFcsMode::signal:
+            if (frame == nullptr || len < 4)
+            {
+                return false;
+            }
+            return load_le32(frame + len - 4) == 0;
+        default:
+            return false;
+    }
 }
 
 }  // namespace winject

@@ -1,0 +1,6 @@
+#ifndef WINJECT_MANAGER_UPSTREAM_QUEUES_H_
+#define WINJECT_MANAGER_UPSTREAM_QUEUES_H_
+
+#include "utils/RadioQueues.h"
+
+#endif  // WINJECT_MANAGER_UPSTREAM_QUEUES_H_

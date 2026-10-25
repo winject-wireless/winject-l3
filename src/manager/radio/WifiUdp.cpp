@@ -12,29 +12,9 @@
 namespace winject
 {
 
-namespace
-{
-
-uint32_t load_le32(const uint8_t* p)
-{
-    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) |
-           (static_cast<uint32_t>(p[3]) << 24);
-}
-
-}  // namespace
-
 bool WifiUdp::forward_trailer_ok(const uint8_t* frame, size_t len) const
 {
-    switch (fcs_mode())
-    {
-        case RadioFcsMode::actual:
-            return wifi_fcs_matches(frame, len);
-        case RadioFcsMode::signal:
-            return load_le32(frame + len - 4) == 0;
-        default:
-            return false;
-    }
+    return wifi_forward_trailer_ok(frame, len, fcs_mode());
 }
 
 WifiUdp::~WifiUdp()
@@ -69,8 +49,8 @@ bool WifiUdp::open(IOReactor& reactor, rx on_rx, idle on_idle)
 
 void WifiUdp::set_tx_dplane(const sockaddr_in& dplane)
 {
-    tx_dplane_ = dplane;
-    have_tx_dplane_ = true;
+    tx_dplane = dplane;
+    have_tx_dplane = true;
 }
 
 void WifiUdp::post_rx_event(RxEvent ev)
@@ -101,23 +81,23 @@ void WifiUdp::handle_rx_event(const RxEvent& ev)
 
 bool WifiUdp::set_rx_dplane(const sockaddr_in& dplane)
 {
-    rx_dplane_ = dplane;
-    have_rx_dplane_ = true;
+    rx_dplane = dplane;
+    have_rx_dplane = true;
     return register_forward();
 }
 
 bool WifiUdp::register_forward()
 {
-    if (sock.fd() < 0 || !have_rx_dplane_)
+    if (sock.fd() < 0 || !have_rx_dplane)
     {
         return false;
     }
     static const uint8_t k_reg = 0;
     const bfc::const_buffer_view reg_view(
         reinterpret_cast<const std::byte*>(&k_reg), 1);
-    const ssize_t sent =
-        sock.send(reg_view, 0, reinterpret_cast<const sockaddr*>(&rx_dplane_),
-                  sizeof(rx_dplane_));
+    const ssize_t sent = sock.send(
+        reg_view, MSG_DONTWAIT, reinterpret_cast<const sockaddr*>(&rx_dplane),
+        sizeof(rx_dplane));
     if (sent < 0)
     {
         LOG_ERR("radio dplane_rx register failed: %s", strerror(errno));
@@ -136,13 +116,13 @@ void WifiUdp::close()
         }
         bfc::socket(std::move(sock));
     }
-    have_tx_dplane_ = false;
-    have_rx_dplane_ = false;
+    have_tx_dplane = false;
+    have_rx_dplane = false;
 }
 
 bool WifiUdp::send(const uint8_t* mpdu, size_t len)
 {
-    if (sock.fd() < 0 || !have_tx_dplane_ || mpdu == nullptr || len == 0)
+    if (sock.fd() < 0 || !have_tx_dplane || mpdu == nullptr || len == 0)
     {
         return false;
     }
@@ -152,15 +132,15 @@ bool WifiUdp::send(const uint8_t* mpdu, size_t len)
     }
     const bfc::const_buffer_view view(reinterpret_cast<const std::byte*>(mpdu),
                                       len);
-    const ssize_t sent =
-        sock.send(view, 0, reinterpret_cast<const sockaddr*>(&tx_dplane_),
-                  sizeof(tx_dplane_));
+    const ssize_t sent = sock.send(
+        view, MSG_DONTWAIT, reinterpret_cast<const sockaddr*>(&tx_dplane),
+        sizeof(tx_dplane));
     if (sent != static_cast<ssize_t>(len))
     {
         return false;
     }
-    tx_pkt_.fetch_add(1, std::memory_order_relaxed);
-    tx_byte_.fetch_add(len, std::memory_order_relaxed);
+    tx_pkt_acc.fetch_add(1, std::memory_order_relaxed);
+    tx_byte_acc.fetch_add(len, std::memory_order_relaxed);
     return true;
 }
 
@@ -172,17 +152,17 @@ void WifiUdp::on_forward()
     {
         sockaddr_in peer = {};
         socklen_t peer_len = sizeof(peer);
-        if (rx_buf_.capacity() < k_recv_capacity)
+        if (rx_buf.capacity() < k_recv_capacity)
         {
-            rx_buf_.reserve(k_recv_capacity);
+            rx_buf.reserve(k_recv_capacity);
         }
-        rx_buf_.resize(k_recv_capacity);
+        rx_buf.resize(k_recv_capacity);
         const ssize_t n =
-            sock.recv(rx_buf_, MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&peer),
+            sock.recv(rx_buf, MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&peer),
                       &peer_len);
         if (n >= 0)
         {
-            rx_buf_.resize(static_cast<size_t>(n));
+            rx_buf.resize(static_cast<size_t>(n));
         }
         if (n < 0)
         {
@@ -202,28 +182,28 @@ void WifiUdp::on_forward()
             continue;
         }
         any = true;
-        rx_pkt_.fetch_add(1, std::memory_order_relaxed);
-        rx_byte_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+        rx_pkt_acc.fetch_add(1, std::memory_order_relaxed);
+        rx_byte_acc.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
         const size_t len = static_cast<size_t>(n);
         if (len < 28 || len > k_rx_mpdu_max + 4)
         {
             continue;
         }
-        const uint8_t* frame = reinterpret_cast<const uint8_t*>(rx_buf_.data());
+        const uint8_t* frame = reinterpret_cast<const uint8_t*>(rx_buf.data());
         if (fcs_mode() == RadioFcsMode::unknown)
         {
-            fcs_unknown_pkt_.fetch_add(1, std::memory_order_relaxed);
+            fcs_unknown_pkt_acc.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
         if (!forward_trailer_ok(frame, len))
         {
-            fcs_error_pkt_.fetch_add(1, std::memory_order_relaxed);
+            fcs_error_pkt_acc.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
-        rx_buf_.resize(len - 4);
+        rx_buf.resize(len - 4);
         if (on_rx)
         {
-            on_rx(std::move(rx_buf_));
+            on_rx(std::move(rx_buf));
         }
     }
     if (any && on_idle)

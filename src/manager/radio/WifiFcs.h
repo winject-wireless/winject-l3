@@ -1,6 +1,8 @@
 #ifndef WINJECT_MANAGER_RADIO_WIFI_FCS_H_
 #define WINJECT_MANAGER_RADIO_WIFI_FCS_H_
 
+#include "radio/RadioDefs.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -12,6 +14,9 @@ uint32_t wifi_fcs_compute(const uint8_t* mpdu, size_t len);
 // frame = MPDU followed by its 4-byte FCS; len includes the FCS.
 bool wifi_fcs_matches(const uint8_t* frame, size_t len);
 void wifi_fcs_store(const uint8_t* mpdu, size_t len, uint8_t out[4]);
+// Forward path: frame is MPDU + 4-byte trailer (signal or actual FCS).
+bool wifi_forward_trailer_ok(const uint8_t* frame, size_t len,
+                             RadioFcsMode mode);
 
 }  // namespace winject
 

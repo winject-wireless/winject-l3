@@ -23,10 +23,10 @@ public:
     void on_mpdu(bfc::shared_sized_buffer mpdu);
 
 private:
-    RadioUpstreamTable& table_;
-    uint16_t domain_ = 0;
-    std::atomic<uint64_t> rx_drop_domain_{0};
-    std::atomic<uint64_t> rx_drop_bus_{0};
+    RadioUpstreamTable& table;
+    uint16_t domain = 0;
+    std::atomic<uint64_t> rx_drop_domain_total{0};
+    std::atomic<uint64_t> rx_drop_bus_total{0};
 };
 
 }  // namespace winject

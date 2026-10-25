@@ -39,10 +39,10 @@ ShardInfo info(const std::vector<uint8_t>& shard)
 }
 
 // Shard index (from each header) -> body, skipping the indices in drop.
-std::unordered_map<int, std::vector<uint8_t>> frags_except(
+std::unordered_map<int, bfc::shared_sized_buffer> frags_except(
     const std::vector<std::vector<uint8_t>>& air, const std::vector<int>& drop)
 {
-    std::unordered_map<int, std::vector<uint8_t>> out;
+    std::unordered_map<int, bfc::shared_sized_buffer> out;
     for (const auto& p : air)
     {
         const int idx = info(p).idx;
@@ -59,9 +59,7 @@ std::unordered_map<int, std::vector<uint8_t>> frags_except(
         {
             continue;
         }
-        out[idx] = std::vector<uint8_t>(
-            p.begin() + static_cast<long>(RsBlockErasure::k_header_len),
-            p.end());
+        out[idx] = bfc::shared_sized_buffer::copy_from(p.data(), p.size());
     }
     return out;
 }
@@ -69,9 +67,36 @@ std::unordered_map<int, std::vector<uint8_t>> frags_except(
 std::vector<std::vector<uint8_t>> feed(RsBlockErasure& dec,
                                        const std::vector<uint8_t>& shard)
 {
-    std::vector<std::vector<uint8_t>> payloads;
+    fec_vendor::fec_rx_payload_list payloads;
     dec.push_air(shard.data(), shard.size(), &payloads);
-    return payloads;
+    std::vector<std::vector<uint8_t>> out;
+    for (const auto& p : payloads)
+    {
+        out.emplace_back(p.u8(), p.u8() + p.size());
+    }
+    return out;
+}
+bool decode(RsBlockErasure& fec, int k, int n, int sn,
+            const std::unordered_map<int, bfc::shared_sized_buffer>& frags,
+            std::vector<std::vector<uint8_t>>* out, int* recovered)
+{
+    fec_vendor::fec_rx_payload_list decoded;
+    if (!fec.decode_block(k, n, sn, frags, &decoded, recovered))
+    {
+        return false;
+    }
+    out->clear();
+    for (const auto& p : decoded)
+    {
+        out->emplace_back(p.u8(), p.u8() + p.size());
+    }
+    return true;
+}
+bool decode(RsBlockErasure& fec,
+            const std::unordered_map<int, bfc::shared_sized_buffer>& frags,
+            std::vector<std::vector<uint8_t>>* out, int* recovered)
+{
+    return decode(fec, fec.k(), fec.n(), fec.k(), frags, out, recovered);
 }
 }  // namespace
 
@@ -101,7 +126,7 @@ TEST(FecTest, RoundtripNoLoss)
     auto frags = frags_except(air, {});
     std::vector<std::vector<uint8_t>> got;
     int rec = -1;
-    ASSERT_TRUE(fec.decode_block(frags, &got, &rec));
+    ASSERT_TRUE(decode(fec, frags, &got, &rec));
     EXPECT_EQ(rec, 0);
     EXPECT_EQ(got, orig);
 }
@@ -139,8 +164,9 @@ TEST(FecTest, HeaderWireLayout)
 TEST(FecTest, PackRejectsOutOfRange)
 {
     uint8_t h[RsBlockErasure::k_header_len] = {};
-    EXPECT_FALSE(RsBlockErasure::pack_header(h, 0, 0, 10, 32, 10));   // n > 31
-    EXPECT_FALSE(RsBlockErasure::pack_header(h, 0, 0, 10, 10, 10));   // n == k
+    EXPECT_FALSE(RsBlockErasure::pack_header(h, 0, 0, 10, 32, 10));  // n > 31
+    EXPECT_TRUE(RsBlockErasure::pack_header(h, 0, 0, 10, 10,
+                                            10));  // codec supports n == k
     EXPECT_FALSE(RsBlockErasure::pack_header(h, 0, 15, 10, 15, 10));  // idx
     EXPECT_FALSE(RsBlockErasure::pack_header(h, 0, 0, 10, 15, 0));    // sdu_n
     EXPECT_FALSE(RsBlockErasure::pack_header(h, 0, 0, 10, 15, 11));   // sdu_n
@@ -165,18 +191,18 @@ TEST(FecTest, RecoversFiveErasures)
     auto drop_data = frags_except(air, {0, 1, 2, 3, 4});
     std::vector<std::vector<uint8_t>> got;
     int rec = 0;
-    ASSERT_TRUE(fec.decode_block(drop_data, &got, &rec));
+    ASSERT_TRUE(decode(fec, drop_data, &got, &rec));
     EXPECT_EQ(rec, 5);
     EXPECT_EQ(got, orig);
 
     auto drop_parity = frags_except(air, {10, 11, 12, 13, 14});
     rec = -1;
-    ASSERT_TRUE(fec.decode_block(drop_parity, &got, &rec));
+    ASSERT_TRUE(decode(fec, drop_parity, &got, &rec));
     EXPECT_EQ(rec, 0);
     EXPECT_EQ(got, orig);
 
     auto drop_mix = frags_except(air, {1, 4, 8, 11, 14});
-    ASSERT_TRUE(fec.decode_block(drop_mix, &got, &rec));
+    ASSERT_TRUE(decode(fec, drop_mix, &got, &rec));
     EXPECT_EQ(got, orig);
 }
 
@@ -189,7 +215,7 @@ TEST(FecTest, SixErasuresFail)
     ASSERT_TRUE(fec.encode_block(orig, 2, &air));
     auto frags = frags_except(air, {0, 1, 2, 3, 4, 5});
     std::vector<std::vector<uint8_t>> got;
-    EXPECT_FALSE(fec.decode_block(frags, &got, nullptr));
+    EXPECT_FALSE(decode(fec, frags, &got, nullptr));
 }
 
 // A short block sends only its sdu_n data shards and the parity; the
@@ -212,11 +238,11 @@ TEST(FecTest, PartialBlockSkipsPads)
 
     std::vector<std::vector<uint8_t>> got;
     auto three_left = frags_except(air, {0, 1, 10, 12, 13});
-    ASSERT_TRUE(fec.decode_block(10, 15, 3, three_left, &got, nullptr));
+    ASSERT_TRUE(decode(fec, 10, 15, 3, three_left, &got, nullptr));
     EXPECT_EQ(got, orig);
 
     auto two_left = frags_except(air, {0, 1, 2, 10, 12, 13});
-    EXPECT_FALSE(fec.decode_block(10, 15, 3, two_left, &got, nullptr));
+    EXPECT_FALSE(decode(fec, 10, 15, 3, two_left, &got, nullptr));
 }
 
 TEST(FecTest, PartialBlockFromParityOnly)
@@ -235,7 +261,7 @@ TEST(FecTest, PartialBlockFromParityOnly)
     auto frags = frags_except(air, {0});
     std::vector<std::vector<uint8_t>> got;
     int rec = 0;
-    ASSERT_TRUE(fec.decode_block(5, 6, 1, frags, &got, &rec));
+    ASSERT_TRUE(decode(fec, 5, 6, 1, frags, &got, &rec));
     EXPECT_EQ(rec, 1);
     EXPECT_EQ(got, orig);
 }
@@ -318,7 +344,7 @@ TEST(FecTest, InvalidShardHeaderDropped)
     {
         EXPECT_TRUE(feed(dec, b).empty());
     }
-    EXPECT_EQ(dec.decode_fail(), bad.size());
+    EXPECT_EQ(dec.hdr_errors(), bad.size());
 }
 
 TEST(FecTest, MaxPayloadFitsWifi)
@@ -341,7 +367,7 @@ TEST(FecTest, MaxPayloadFitsWifi)
     }
     auto frags = frags_except(air, {0, 2, 9, 11, 13});
     std::vector<std::vector<uint8_t>> got;
-    ASSERT_TRUE(fec.decode_block(frags, &got, nullptr));
+    ASSERT_TRUE(decode(fec, frags, &got, nullptr));
     EXPECT_EQ(got, orig);
 }
 
@@ -366,13 +392,13 @@ TEST(FecTest, SystematicNativeSize)
     auto drop_largest = frags_except(air, {1});
     std::vector<std::vector<uint8_t>> got;
     int rec = 0;
-    ASSERT_TRUE(fec.decode_block(drop_largest, &got, &rec));
+    ASSERT_TRUE(decode(fec, drop_largest, &got, &rec));
     EXPECT_EQ(rec, 1);
     EXPECT_EQ(got, orig);
 
     auto drop_small = frags_except(air, {0});
     rec = -1;
-    ASSERT_TRUE(fec.decode_block(drop_small, &got, &rec));
+    ASSERT_TRUE(decode(fec, drop_small, &got, &rec));
     EXPECT_EQ(rec, 1);
     EXPECT_EQ(got, orig);
 }
@@ -407,28 +433,51 @@ TEST(FecTest, SduBaseAdvancesBySduN)
     EXPECT_EQ(enc.tx_sdu_seq(), 0x0005u);
 }
 
-TEST(FecTest, DuplicateBlockIdDroppedThenExpires)
+TEST(FecTest, DuplicateBlockRemainsSuppressedAfterIdle)
 {
-    RsBlockErasure enc;
-    RsBlockErasure dec;
+    RsBlockErasure enc, dec;
     ASSERT_TRUE(enc.init(1, 2, 1));
-    ASSERT_TRUE(dec.init(1, 2, 1));
-    const std::vector<uint8_t> orig = pkt(8, 0x11);
+    auto now = std::chrono::steady_clock::now();
+    dec.set_clock(
+        [&]()
+        {
+            return now;
+        });
+    const auto orig = pkt(8, 0x11);
     std::vector<std::vector<uint8_t>> air;
     enc.push_app(orig.data(), orig.size(), &air);
-    ASSERT_EQ(air.size(), 2u);
+    ASSERT_EQ(feed(dec, air[0]), std::vector<std::vector<uint8_t>>{orig});
+    EXPECT_TRUE(feed(dec, air[1]).empty());
+    now += std::chrono::seconds(10);
+    EXPECT_TRUE(feed(dec, air[0]).empty());
+}
 
-    std::vector<std::vector<uint8_t>> got;
-    dec.push_air(air[0].data(), air[0].size(), &got);
-    ASSERT_EQ(got, std::vector<std::vector<uint8_t>>{orig});
-
-    got.clear();
-    dec.push_air(air[0].data(), air[0].size(), &got);
-    dec.push_air(air[1].data(), air[1].size(), &got);
-    EXPECT_TRUE(got.empty());
-
-    std::this_thread::sleep_for(
-        std::chrono::milliseconds(dec.done_hold_ms() + 50));
-    dec.push_air(air[0].data(), air[0].size(), &got);
-    EXPECT_EQ(got, std::vector<std::vector<uint8_t>>{orig});
+// Golden bytes generated by the previous winject codec at 1f1a713.
+TEST(FecTest, VendoredEncoderPreservesExistingWireBytes)
+{
+    RsBlockErasure enc;
+    ASSERT_TRUE(enc.init(2, 3, 20));
+    const std::vector<std::vector<std::vector<uint8_t>>> blocks = {
+        {{1, 2, 3}, {9}}, {{1, 2, 3}}};
+    const std::vector<std::string> want = {
+        "123410c0100003010203", "123410c210000109",
+        "123410c410007b89018f0000000000000000000000", "123410c0080003010203",
+        "123410c408008f8e018f0000000000000000000000"};
+    std::vector<std::string> got;
+    for (const auto& block : blocks)
+    {
+        std::vector<std::vector<uint8_t>> shards;
+        ASSERT_TRUE(enc.encode_block(block, 0x1234, &shards));
+        for (const auto& shard : shards)
+        {
+            std::string hex;
+            for (uint8_t b : shard)
+            {
+                hex += "0123456789abcdef"[b >> 4];
+                hex += "0123456789abcdef"[b & 15];
+            }
+            got.push_back(std::move(hex));
+        }
+    }
+    EXPECT_EQ(got, want);
 }

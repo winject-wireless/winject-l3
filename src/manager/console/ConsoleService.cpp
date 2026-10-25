@@ -297,7 +297,8 @@ ConsoleService::~ConsoleService()
 }
 
 bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
-                           ManagerConsoleHandlers handlers, std::string* error)
+                           ManagerConsoleHandlers bound_handlers,
+                           std::string* error)
 {
     auto fail = [&](const char* msg) -> bool
     {
@@ -307,19 +308,20 @@ bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
         }
         return false;
     };
-    if (!handlers.add_upstream || !handlers.remove_upstream ||
-        !handlers.list_upstream || !handlers.update_upstream ||
-        !handlers.list_upstream_rx_stat || !handlers.list_upstream_tx_stat ||
-        !handlers.get_metrics || !handlers.radio_info ||
-        !handlers.radio_caps_info || !handlers.radio_stats ||
-        !handlers.radio_tx || !handlers.radio_reset || !handlers.config_slot ||
-        !handlers.radio_device)
+    if (!bound_handlers.add_upstream || !bound_handlers.remove_upstream ||
+        !bound_handlers.list_upstream || !bound_handlers.update_upstream ||
+        !bound_handlers.list_upstream_rx_stat ||
+        !bound_handlers.list_upstream_tx_stat ||
+        !bound_handlers.get_metrics || !bound_handlers.radio_info ||
+        !bound_handlers.radio_caps_info || !bound_handlers.radio_stats ||
+        !bound_handlers.radio_tx || !bound_handlers.radio_reset ||
+        !bound_handlers.config_slot || !bound_handlers.radio_device)
     {
         return fail("invalid manager console args");
     }
     stop();
     this->reactor = &reactor;
-    handlers_ = std::move(handlers);
+    this->handlers = std::move(bound_handlers);
     sock = bfc::socket(bfc::create_udp4());
     if (sock.fd() < 0)
     {
@@ -360,11 +362,11 @@ void ConsoleService::stop()
         }
         bfc::socket(std::move(sock));
     }
-    reactor = nullptr;
-    handlers_ = {};
-    routes_.clear();
-    in_flight_.clear();
-    next_l3_id_ = 1;
+    this->reactor = nullptr;
+    this->handlers = {};
+    routes.clear();
+    in_flight.clear();
+    next_l3_id = 1;
 }
 
 ConsoleService::PeerKey ConsoleService::peer_key(const sockaddr_in& peer)
@@ -392,37 +394,37 @@ void ConsoleService::send_to(const sockaddr_in& to, const char* text)
 uint32_t ConsoleService::open_route(const sockaddr_in& peer, bool has_id,
                                     uint8_t id)
 {
-    uint32_t l3_id = next_l3_id_++;
-    if (next_l3_id_ == 0)
+    uint32_t l3_id = next_l3_id++;
+    if (next_l3_id == 0)
     {
-        next_l3_id_ = 1;
+        next_l3_id = 1;
     }
     Route route;
     route.peer = peer;
     route.has_client_id = has_id;
     route.client_id = id;
-    routes_[l3_id] = route;
+    routes[l3_id] = route;
     if (has_id)
     {
-        in_flight_[{peer_key(peer), id}] = l3_id;
+        in_flight[{peer_key(peer), id}] = l3_id;
     }
     return l3_id;
 }
 
 void ConsoleService::respond(uint32_t l3_id, const std::string& text)
 {
-    const auto it = routes_.find(l3_id);
-    if (it == routes_.end())
+    const auto it = routes.find(l3_id);
+    if (it == routes.end())
     {
         LOG_WRN("manager console: reply for closed or unknown l3_id %" PRIu32,
                 l3_id);
         return;
     }
     const Route route = it->second;
-    routes_.erase(it);
+    routes.erase(it);
     if (route.has_client_id)
     {
-        in_flight_.erase({peer_key(route.peer), route.client_id});
+        in_flight.erase({peer_key(route.peer), route.client_id});
     }
     std::string wire = route.has_client_id
                            ? format_correlated_reply(route.client_id, text)
@@ -519,14 +521,14 @@ void ConsoleService::on_datagram()
     if (tagged)
     {
         const PeerKey pk = peer_key(peer);
-        const auto inflight = in_flight_.find({pk, client_id});
-        if (inflight != in_flight_.end())
+        const auto inflight = in_flight.find({pk, client_id});
+        if (inflight != in_flight.end())
         {
             LOG_WRN("manager console: drop retransmit cmd:%u", client_id);
             return;
         }
     }
-    if (routes_.size() >= k_max_routes)
+    if (routes.size() >= k_max_routes)
     {
         std::string nok = std::string("NOK ") + k_ebusy;
         if (tagged)
@@ -594,7 +596,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             return;
         }
         ManagerRadioDeviceView view;
-        if (!handlers_.radio_device(patch, &view, &err))
+        if (!handlers.radio_device(patch, &view, &err))
         {
             respond_nok(l3_id, err.c_str());
             return;
@@ -612,7 +614,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             respond_nok(l3_id, err.c_str());
             return;
         }
-        if (!handlers_.add_upstream(spec, &err))
+        if (!handlers.add_upstream(spec, &err))
         {
             respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
@@ -633,7 +635,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             return;
         }
         std::vector<ManagerUpstreamView> rows;
-        if (!handlers_.list_upstream(ids, &rows, &err))
+        if (!handlers.list_upstream(ids, &rows, &err))
         {
             respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
@@ -722,7 +724,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             return;
         }
         ManagerUpstreamView out;
-        if (!handlers_.update_upstream(patch, &out, &err))
+        if (!handlers.update_upstream(patch, &out, &err))
         {
             respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
@@ -746,7 +748,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             respond_nok(l3_id, k_einval);
             return;
         }
-        if (!handlers_.remove_upstream(id, &err))
+        if (!handlers.remove_upstream(id, &err))
         {
             respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
@@ -765,7 +767,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             return;
         }
         std::vector<ManagerUpstreamRxStatView> rows;
-        if (!handlers_.list_upstream_rx_stat(ids, &rows, &err))
+        if (!handlers.list_upstream_rx_stat(ids, &rows, &err))
         {
             respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
@@ -814,7 +816,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             return;
         }
         std::vector<ManagerUpstreamTxStatView> rows;
-        if (!handlers_.list_upstream_tx_stat(ids, &rows, &err))
+        if (!handlers.list_upstream_tx_stat(ids, &rows, &err))
         {
             respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
@@ -859,7 +861,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             return;
         }
         std::vector<ManagerMetricView> rows;
-        if (!handlers_.get_metrics(keys, &rows, &err))
+        if (!handlers.get_metrics(keys, &rows, &err))
         {
             respond_nok(l3_id, err.empty() ? "error" : err.c_str());
             return;
@@ -900,7 +902,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         {
             respond_nok(l3_id, msg);
         };
-        handlers_.radio_info(cr);
+        handlers.radio_info(cr);
         return;
     }
 
@@ -920,7 +922,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         {
             respond_nok(l3_id, msg);
         };
-        handlers_.radio_caps_info(cr);
+        handlers.radio_caps_info(cr);
         return;
     }
 
@@ -945,7 +947,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         {
             respond_nok(l3_id, msg);
         };
-        handlers_.radio_stats(cr);
+        handlers.radio_stats(cr);
         return;
     }
 
@@ -1007,7 +1009,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         {
             respond_nok(l3_id, msg);
         };
-        handlers_.radio_tx(patch, cr);
+        handlers.radio_tx(patch, cr);
         return;
     }
 
@@ -1032,7 +1034,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         {
             respond_nok(l3_id, msg);
         };
-        handlers_.radio_reset(cr);
+        handlers.radio_reset(cr);
         return;
     }
 
@@ -1074,7 +1076,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         {
             respond_nok(l3_id, msg);
         };
-        handlers_.config_slot(static_cast<uint8_t>(slot), cr);
+        handlers.config_slot(static_cast<uint8_t>(slot), cr);
         return;
     }
 

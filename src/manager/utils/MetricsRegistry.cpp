@@ -41,9 +41,9 @@ std::string to_string(const std::map<std::string, Metrics>& metrics)
 std::optional<Metrics> MetricsRegistry::get_metrics(
     const std::string& index) const
 {
-    std::lock_guard<std::mutex> lock(mu_);
-    const auto it = metrics_.find(index);
-    if (it == metrics_.end())
+    std::lock_guard<std::mutex> lock(mu);
+    const auto it = metrics.find(index);
+    if (it == metrics.end())
     {
         return std::nullopt;
     }
@@ -53,16 +53,16 @@ std::optional<Metrics> MetricsRegistry::get_metrics(
 std::map<std::string, Metrics> MetricsRegistry::getMetrics(
     const std::vector<std::string>& keys) const
 {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> lock(mu);
     if (keys.empty())
     {
-        return metrics_;
+        return metrics;
     }
     std::map<std::string, Metrics> filtered;
     for (const std::string& key : keys)
     {
-        const auto it = metrics_.find(key);
-        if (it != metrics_.end())
+        const auto it = metrics.find(key);
+        if (it != metrics.end())
         {
             filtered.emplace(it->first, it->second);
         }
@@ -76,12 +76,12 @@ void MetricsRegistry::remove_prefix(const std::string& prefix)
     {
         return;
     }
-    std::lock_guard<std::mutex> lock(mu_);
-    for (auto it = metrics_.begin(); it != metrics_.end();)
+    std::lock_guard<std::mutex> lock(mu);
+    for (auto it = metrics.begin(); it != metrics.end();)
     {
         if (it->first.rfind(prefix, 0) == 0)
         {
-            it = metrics_.erase(it);
+            it = metrics.erase(it);
         }
         else
         {

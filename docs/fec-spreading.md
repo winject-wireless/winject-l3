@@ -30,9 +30,10 @@ raw loss):
   FEC 1/3 repetition), the three copies of a packet arrive within microseconds of each other
   and are lost together: 34 % shard loss gave 22 % packet loss, against about 4 % if losses
   were independent.
-- **A slower link does not lower raw loss.** Spacing every frame in the L3 (`winject.tx_gap_us` up
-  to 1000 µs, or `winject.max_rate_kbps`) left raw loss at 15–16 %. It did halve block
-  failures (5.5 % → 3.4 %) by spreading each block over 22–26 ms, but it caps the whole link.
+- **A slower link does not lower raw loss.** Historical runs spaced every frame with removed manager
+  keys (`winject.tx_gap_us`, `winject.max_rate_kbps`; TX pacing is now fixed at 90 % of the
+  modulation airtime). That left raw loss at 15–16 %. It did halve block failures (5.5 % → 3.4 %)
+  by spreading each block over 22–26 ms, but it caps the whole link.
 
 ## How spreading works
 
@@ -129,7 +130,7 @@ run. Post-FEC loss is the receiver's lost-after-FEC count over application packe
   link report format change.
 - **L3 FEC.** The L3 encoder (`RsBlockErasure` in this repo) still sends a block's shards back
   to back. WireGuard over upstream 0 loses about 20–30 % of pings for that reason; the same
-  spreading in `TxMux` or `UdpEndpoint` would apply.
+  spreading in `TxMux` or `Upstream` would apply.
 - **Raw loss.** About 15 % raw loss on the bench link at short range is high. During the 22–32 ms
   gaps the GS adapter received nothing while an ESP32 sniffer still heard 25–35 frames. This is
   a separate radio-side investigation.

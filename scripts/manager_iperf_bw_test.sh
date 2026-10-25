@@ -8,7 +8,7 @@
 #            with radio_{a,b}.cfg first (scripts/realtek_radios.sh), then the
 #            managers with bw_{a,b}.cfg
 #   realtek-cross  radio A on this host, radio B on a peer (--b, --radio-b-ssh);
-#            managers on this host; winject.device = --a (default 127.0.0.1) and --b
+#            managers on this host; radio.mplane and radio.dplane hosts are --a and --b
 #
 # Topology (A→B):
 #   iperf -c 127.0.0.1:29000 -u  → manager A UDP_SERVER → air
@@ -86,8 +86,8 @@ Radio / host (esp32):
   --host IP         bench host / manager IP (auto-detect if omitted)
 
 Radio / host (realtek-cross):
-  --a IP            manager A winject.device (default: 127.0.0.1, radio A local)
-  --b IP            manager B winject.device / radio B LAN IP (default: 192.168.253.127)
+  --a IP            manager A radio.mplane and radio.dplane host (default: 127.0.0.1, radio A local)
+  --b IP            manager B radio.mplane and radio.dplane host (default: 192.168.253.127)
   --radio-b-ssh U@H ssh target to start/stop radio B (default: ubuntu@<--b>)
   --host IP         where managers and iperf run (default: auto via --b)
 
@@ -99,8 +99,9 @@ Radio PHY:
   --modulation M    radio modulation, e.g. OFDM_24M (default: from bw_{a,b}.cfg)
   --power DBM       radio TX power (default: from bw_{a,b}.cfg)
 
-The managers program the radios (PHY, CCA, domain filter) at startup; the
-script never talks to a radio's console directly.
+An existing winject-manager is stopped (SIGTERM) and waited on first. These
+managers then program the radios (PHY, CCA, domain filter). The script never
+talks to a radio's console directly.
 
 Test selection:
   --dir DIR         ab | ba | both | bidir  (default: both)
@@ -380,7 +381,11 @@ if [[ "$HOST_SET" -eq 0 ]]; then
   if [[ "$SCENARIO" == "realtek-cross" ]]; then
     host_probe="$RADIO_B"
   fi
-  HOST_IP="$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(('$host_probe', 22)); print(s.getsockname()[0]); s.close()")"
+  HOST_IP="$(ip -4 route get "$host_probe" | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  if [[ -z "$HOST_IP" ]]; then
+    echo "error: cannot find local address toward $host_probe" >&2
+    exit 1
+  fi
 fi
 
 ensure_winject_manager "$ROOT"
@@ -388,22 +393,23 @@ ensure_winject_manager "$ROOT"
 patch_conf() {
   local file="$1" device="$2" gci_in="$3"
   local -a sed_args=(
-    -e "s/^winject\.device.*/winject.device        = ${device}/"
+    -e "s/^\(radio\.mplane[[:space:]]*=[[:space:]]*\)[^:]*:/\1${device}:/" \
+    -e "s/^\(radio\.dplane[[:space:]]*=[[:space:]]*\)[^:]*:/\1${device}:/"
   )
   if [[ -n "$CHANNEL" ]]; then
-    sed_args+=(-e "s/^winject\.channel.*/winject.channel       = ${CHANNEL}/")
+    sed_args+=(-e "s/^radio\.channel.*/radio.channel       = ${CHANNEL}/")
   fi
   if [[ -n "$MODULATION" ]]; then
-    sed_args+=(-e "s/^winject\.modulation.*/winject.modulation    = ${MODULATION}/")
+    sed_args+=(-e "s/^radio\.modulation.*/radio.modulation    = ${MODULATION}/")
   fi
   if [[ -n "$POWER" ]]; then
-    sed_args+=(-e "s/^winject\.power.*/winject.power         = ${POWER}/")
+    sed_args+=(-e "s/^radio\.power.*/radio.power         = ${POWER}/")
   fi
   sed "${sed_args[@]}" "$file"
   if [[ -n "$CCA" ]]; then
-    printf 'winject.cca           = %s\n' "$CCA"
+    printf 'radio.cca           = %s\n' "$CCA"
   fi
-  printf 'manager.console_in    = 127.0.0.1:%s\n' "$gci_in"
+  printf 'winject.console_in    = 127.0.0.1:%s\n' "$gci_in"
 }
 
 CONF_A_RUN="$LOG_DIR/winject_a.conf"
@@ -443,15 +449,13 @@ stop_server() {
 
 cleanup() {
   stop_server
-  if [[ -n "${PID_A:-}" ]]; then kill "$PID_A" 2>/dev/null || true; fi
-  if [[ -n "${PID_B:-}" ]]; then kill "$PID_B" 2>/dev/null || true; fi
+  stop_winject_managers || true
   realtek_radios_stop
 }
 trap cleanup EXIT INT TERM
 
-# Match the process name only: -f would also match shells whose command line
-# mentions winject-manager (and kill the caller).
-pkill -x winject-manager 2>/dev/null || true
+# Release any manager that already holds the radios, then start this test's.
+stop_winject_managers
 for p in "$PORT_RECV_AB" "$PORT_RECV_BA" "$PORT_SEND_AB" "$PORT_SEND_BA"; do
   fuser -k "${p}/udp" 2>/dev/null || true
 done
@@ -477,24 +481,9 @@ PID_A=$!
 "$MANAGER" "$CONF_B_RUN" >"$LOG_DIR/manager_b.log" 2>&1 &
 PID_B=$!
 
-echo "waiting for managers..."
-for _ in $(seq 1 20); do
-  if grep -q "manager running" "$LOG_DIR/manager_a.log" \
-    && grep -q "manager running" "$LOG_DIR/manager_b.log"; then
-    break
-  fi
-  sleep 0.25
-done
-if ! grep -q "manager running" "$LOG_DIR/manager_a.log"; then
-  echo "manager A upstream setup failed; tail $LOG_DIR/manager_a.log"
-  tail -20 "$LOG_DIR/manager_a.log"
-  exit 1
-fi
-if ! grep -q "manager running" "$LOG_DIR/manager_b.log"; then
-  echo "manager B upstream setup failed; tail $LOG_DIR/manager_b.log"
-  tail -20 "$LOG_DIR/manager_b.log"
-  exit 1
-fi
+echo "waiting for test managers to acquire the radios..."
+wait_manager_radio "$LOG_DIR/manager_a.log"
+wait_manager_radio "$LOG_DIR/manager_b.log"
 
 wait_udp_listen() {
   local port="$1" deadline=$((SECONDS + 5))

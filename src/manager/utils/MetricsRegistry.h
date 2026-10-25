@@ -48,8 +48,8 @@ public:
     void remove_prefix(const std::string& prefix);
 
 private:
-    mutable std::mutex mu_;
-    std::map<std::string, Metrics> metrics_;
+    mutable std::mutex mu;
+    std::map<std::string, Metrics> metrics;
 };
 
 namespace detail
@@ -95,9 +95,9 @@ T MetricsRegistry::get_metrics(const std::string& index)
                       std::is_same<T, MetricF64>::value,
                   "get_metrics T must be MetricU64, MetricI64, or MetricF64");
 
-    std::lock_guard<std::mutex> lock(mu_);
-    const auto it = metrics_.find(index);
-    if (it != metrics_.end())
+    std::lock_guard<std::mutex> lock(mu);
+    const auto it = metrics.find(index);
+    if (it != metrics.end())
     {
         if (auto* existing = std::get_if<T>(&it->second))
         {
@@ -108,7 +108,7 @@ T MetricsRegistry::get_metrics(const std::string& index)
         return rebound;
     }
     const T created = detail::MetricTraits<T>::MakeDefault();
-    metrics_.emplace(index, created);
+    metrics.emplace(index, created);
     return created;
 }
 

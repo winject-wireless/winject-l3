@@ -10,7 +10,7 @@
 namespace winject
 {
 
-class WifiUdp;
+class RadioDplane;
 
 struct EventData
 {
@@ -18,7 +18,7 @@ struct EventData
 
 struct EventCtrlSendSocketChange
 {
-    std::shared_ptr<WifiUdp> radio;
+    std::shared_ptr<RadioDplane> radio;
     sockaddr_in dplane{};
 };
 
@@ -29,48 +29,48 @@ class TxEventQueue
 public:
     void push_data()
     {
-        if (q_.empty() || !std::holds_alternative<EventData>(q_.back()))
+        if (q.empty() || !std::holds_alternative<EventData>(q.back()))
         {
-            q_.emplace_back(EventData{});
+            q.emplace_back(EventData{});
         }
     }
 
     void push(TxEvent ev)
     {
-        q_.emplace_back(std::move(ev));
+        q.emplace_back(std::move(ev));
     }
 
     bool pop(TxEvent* out)
     {
-        if (q_.empty() || out == nullptr)
+        if (q.empty() || out == nullptr)
         {
             return false;
         }
-        *out = std::move(q_.front());
-        q_.pop_front();
+        *out = std::move(q.front());
+        q.pop_front();
         return true;
     }
 
     bool empty() const
     {
-        return q_.empty();
+        return q.empty();
     }
 
     void drop_data()
     {
         std::deque<TxEvent> kept;
-        for (auto& ev : q_)
+        for (auto& ev : q)
         {
             if (std::holds_alternative<EventCtrlSendSocketChange>(ev))
             {
                 kept.emplace_back(std::move(ev));
             }
         }
-        q_ = std::move(kept);
+        q = std::move(kept);
     }
 
 private:
-    std::deque<TxEvent> q_;
+    std::deque<TxEvent> q;
 };
 
 }  // namespace winject

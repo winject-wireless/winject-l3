@@ -29,11 +29,11 @@ std::string write_conf(const std::string& body)
 TEST(ConfigTest, LoadsStandaloneUdp)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_STATIC_FORWARDING
@@ -46,10 +46,18 @@ upstream-0.tx               = 127.0.0.1:21082
     Config cfg;
     std::string err;
     ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_TRUE(cfg.radio_device.have_mplane);
-    EXPECT_TRUE(cfg.radio_device.have_dplane);
     EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 22);
+    char mplane_ip[INET_ADDRSTRLEN] = {};
+    ASSERT_NE(inet_ntop(AF_INET, &cfg.radio_device.mplane.sin_addr, mplane_ip,
+                        sizeof(mplane_ip)),
+              nullptr);
+    EXPECT_STREQ(mplane_ip, "192.168.32.1");
     EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9000);
+    char dplane_ip[INET_ADDRSTRLEN] = {};
+    ASSERT_NE(inet_ntop(AF_INET, &cfg.radio_device.dplane.sin_addr, dplane_ip,
+                        sizeof(dplane_ip)),
+              nullptr);
+    EXPECT_STREQ(dplane_ip, "192.168.32.1");
     EXPECT_EQ(cfg.channel, 1);
     EXPECT_EQ(cfg.modulation, "OFDM_24M");
     EXPECT_EQ(cfg.power_dbm, 20);
@@ -63,17 +71,18 @@ upstream-0.tx               = 127.0.0.1:21082
     EXPECT_EQ(cfg.upstreams[0].bus_tx, 0xb2);
     EXPECT_EQ(cfg.upstreams[0].bus_rx, 0xa1);
     EXPECT_EQ(cfg.upstreams[0].fec_type, FecType::none);
+    EXPECT_EQ(cfg.upstreams[0].rx_queue_capacity, 1024u);
     std::remove(path.c_str());
 }
 
-TEST(ConfigTest, AcceptsLegacyUdpGenericForwardingMode)
+TEST(ConfigTest, RejectsUdpGenericForwardingMode)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_GENERIC_FORWARDING
@@ -84,10 +93,8 @@ upstream-0.tx               = 127.0.0.1:21082
 )");
     Config cfg;
     std::string err;
-    ASSERT_TRUE(cfg.load(path, &err)) << err;
-    ASSERT_EQ(cfg.upstreams.size(), 1u);
-    EXPECT_EQ(upstream_mode(cfg.upstreams[0].endpoint),
-              UpstreamMode::udp_static);
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("UDP_STATIC_FORWARDING"), std::string::npos);
     std::remove(path.c_str());
 }
 
@@ -99,19 +106,19 @@ TEST(ConfigTest, PhyRateKbps)
 TEST(ConfigTest, RejectsMixedEndpointKeys)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_CLIENT_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = a1
 upstream-0.scheduler_budget = 100
-upstream-0.connect_address  = 127.0.0.1:9
-upstream-0.bind_address     = 127.0.0.1:22081
+upstream-0.tx               = 127.0.0.1:9
+upstream-0.rx               = 127.0.0.1:22081
 )");
     Config cfg;
     std::string err;
@@ -120,21 +127,43 @@ upstream-0.bind_address     = 127.0.0.1:22081
     std::remove(path.c_str());
 }
 
+TEST(ConfigTest, RejectsLegacyAddressKeys)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_SERVER_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.bind_address     = 127.0.0.1:22081
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to upstream-0.rx"), std::string::npos);
+    std::remove(path.c_str());
+}
+
 TEST(ConfigTest, LoadsSameBusTxRx)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_CLIENT_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = b2
 upstream-0.scheduler_budget = 100
-upstream-0.connect_address  = 127.0.0.1:9
+upstream-0.tx               = 127.0.0.1:9
 )");
     Config cfg;
     std::string err;
@@ -145,11 +174,11 @@ upstream-0.connect_address  = 127.0.0.1:9
 TEST(ConfigTest, RejectsUnknownModulation)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = NOT_A_PHY
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = NOT_A_PHY
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 0
 )");
@@ -159,16 +188,15 @@ upstream.size = 0
     std::remove(path.c_str());
 }
 
-// TX pacing follows the modulation; the old pacing keys only log a warning,
-// so existing configs still load.
-TEST(ConfigTest, IgnoresRemovedPacingKeys)
+// TX pacing follows the modulation. The old pacing keys are rejected.
+TEST(ConfigTest, RejectsRemovedPacingKeys)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 winject.max_rate_kbps = 10000
 winject.tx_gap_us     = 99999
@@ -185,18 +213,19 @@ upstream-0.tx               = 127.0.0.1:21082
 )");
     Config cfg;
     std::string err;
-    EXPECT_TRUE(cfg.load(path, &err)) << err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("winject.max_rate_kbps is removed"), std::string::npos);
     std::remove(path.c_str());
 }
 
 TEST(ConfigTest, RejectsZeroDomain)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 0
 upstream.size = 0
 )");
@@ -209,18 +238,19 @@ upstream.size = 0
 TEST(ConfigTest, LoadsRsBlockErasure)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_SERVER_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = a1
 upstream-0.scheduler_budget = 4096
-upstream-0.bind_address     = 127.0.0.1:22081
+upstream-0.rx_queue_capacity = 17
+upstream-0.rx               = 127.0.0.1:22081
 upstream-0.fec.type         = RS_BLOCK_ERASURE
 upstream-0.fec.k            = 10
 upstream-0.fec.n            = 15
@@ -234,24 +264,25 @@ upstream-0.fec.timeout_ms   = 25
     EXPECT_EQ(cfg.upstreams[0].fec_k, 10);
     EXPECT_EQ(cfg.upstreams[0].fec_n, 15);
     EXPECT_EQ(cfg.upstreams[0].fec_timeout_ms, 25);
+    EXPECT_EQ(cfg.upstreams[0].rx_queue_capacity, 17u);
     std::remove(path.c_str());
 }
 
 TEST(ConfigTest, FecRejectsBadKn)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_SERVER_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = a1
 upstream-0.scheduler_budget = 100
-upstream-0.bind_address     = 127.0.0.1:22081
+upstream-0.rx               = 127.0.0.1:22081
 upstream-0.fec.type         = RS_BLOCK_ERASURE
 upstream-0.fec.k            = 15
 upstream-0.fec.n            = 10
@@ -266,18 +297,18 @@ upstream-0.fec.n            = 10
 TEST(ConfigTest, RejectsUnknownUpstreamMode)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = TCP_SERVER_FORWARDING
 upstream-0.tx_bus           = c3
 upstream-0.rx_bus           = d4
 upstream-0.scheduler_budget = 1024
-upstream-0.bind_address     = 127.0.0.1:22022
+upstream-0.rx               = 127.0.0.1:22022
 )");
     Config cfg;
     std::string err;
@@ -289,11 +320,11 @@ upstream-0.bind_address     = 127.0.0.1:22022
 TEST(ConfigTest, Channel14AcceptsDsss)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 14
-winject.modulation    = DSS_1M_L
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 14
+radio.modulation    = DSS_1M_L
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_STATIC_FORWARDING
@@ -327,14 +358,12 @@ TEST(ConfigTest, CanonicalModulation)
 TEST(ConfigTest, RadioFcsValuesAndSkipConsoleRule)
 {
     const std::string base = R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
-winject.local_ip      = 127.0.0.1
-winject.skip_console  = 1
 upstream.size = 1
 upstream-0.mode             = UDP_STATIC_FORWARDING
 upstream-0.tx_bus           = b2
@@ -344,25 +373,25 @@ upstream-0.rx               = 0.0.0.0:22081
 upstream-0.tx               = 127.0.0.1:21082
 )";
     {
-        const std::string path = write_conf(base);
+        const std::string path = write_conf(base + "radio.skip_console = 0\n");
         Config cfg;
         std::string err;
         EXPECT_FALSE(cfg.load(path, &err));
-        EXPECT_NE(err.find("radio_fcs"), std::string::npos);
+        EXPECT_NE(err.find("radio.skip_console is removed"), std::string::npos);
         std::remove(path.c_str());
     }
     {
-        std::string body = base + "winject.radio_fcs = signal\n";
+        std::string body = base + "radio.fcs = signal\n";
         const std::string path = write_conf(body);
         Config cfg;
         std::string err;
         ASSERT_TRUE(cfg.load(path, &err)) << err;
-        EXPECT_FALSE(cfg.radio_device.have_mplane);
+        EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 22);
         EXPECT_EQ(cfg.radio_device.fcs, RadioFcsConfig::signal);
         std::remove(path.c_str());
     }
     {
-        std::string body = base + "winject.radio_fcs = ACTUAL\n";
+        std::string body = base + "radio.fcs = ACTUAL\n";
         const std::string path = write_conf(body);
         Config cfg;
         std::string err;
@@ -371,7 +400,7 @@ upstream-0.tx               = 127.0.0.1:21082
         std::remove(path.c_str());
     }
     {
-        std::string body = base + "winject.radio_fcs = bogus\n";
+        std::string body = base + "radio.fcs = bogus\n";
         const std::string path = write_conf(body);
         Config cfg;
         std::string err;
@@ -383,11 +412,11 @@ upstream-0.tx               = 127.0.0.1:21082
 TEST(ConfigTest, Channel14RejectsOfdm)
 {
     const std::string path = write_conf(R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 14
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 14
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_STATIC_FORWARDING
@@ -407,11 +436,11 @@ upstream-0.tx               = 127.0.0.1:21082
 TEST(ConfigTest, CcaOptional)
 {
     const std::string base = R"(
-winject.device        = 192.168.32.1
-winject.console       = 22
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_STATIC_FORWARDING
@@ -430,7 +459,7 @@ upstream-0.tx               = 127.0.0.1:21082
         std::remove(path.c_str());
     }
     {
-        const std::string path = write_conf(base + "winject.cca = 0\n");
+        const std::string path = write_conf(base + "radio.cca = 0\n");
         Config cfg;
         std::string err;
         ASSERT_TRUE(cfg.load(path, &err)) << err;
@@ -439,7 +468,7 @@ upstream-0.tx               = 127.0.0.1:21082
         std::remove(path.c_str());
     }
     {
-        const std::string path = write_conf(base + "winject.cca = true\n");
+        const std::string path = write_conf(base + "radio.cca = true\n");
         Config cfg;
         std::string err;
         ASSERT_TRUE(cfg.load(path, &err)) << err;
@@ -448,22 +477,25 @@ upstream-0.tx               = 127.0.0.1:21082
         std::remove(path.c_str());
     }
     {
-        const std::string path = write_conf(base + "winject.cca = maybe\n");
+        const std::string path = write_conf(base + "radio.cca = maybe\n");
         Config cfg;
         std::string err;
         EXPECT_FALSE(cfg.load(path, &err));
-        EXPECT_NE(err.find("winject.cca"), std::string::npos);
+        EXPECT_NE(err.find("radio.cca"), std::string::npos);
         std::remove(path.c_str());
     }
 }
 
-TEST(ConfigTest, RadioDeviceOptional)
+TEST(ConfigTest, LoadsWinjectConsoleIn)
 {
     const std::string path = write_conf(R"(
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
+winject.console_in    = 127.0.0.1:2400
 upstream.size = 1
 upstream-0.mode             = UDP_STATIC_FORWARDING
 upstream-0.tx_bus           = b2
@@ -475,20 +507,443 @@ upstream-0.tx               = 127.0.0.1:21082
     Config cfg;
     std::string err;
     ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_FALSE(cfg.radio_device.have_mplane);
-    EXPECT_FALSE(cfg.radio_device.have_dplane);
+    EXPECT_EQ(cfg.console_in, "127.0.0.1:2400");
     std::remove(path.c_str());
 }
 
-TEST(ConfigTest, LoadsRadioDeviceFromLegacyKeys)
+TEST(ConfigTest, RejectsManagerConsoleKey)
 {
     const std::string path = write_conf(R"(
-winject.device        = 127.0.0.1
-winject.console       = 2201
-winject.dplane_port   = 9001
-winject.channel       = 1
-winject.modulation    = OFDM_24M
-winject.power         = 20
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+manager.console_in    = 127.0.0.1:2400
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to winject.console_in"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsLegacyBusKey)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_CLIENT_FORWARDING
+upstream-0.bus_tx           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.tx               = 127.0.0.1:9
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to upstream-0.tx_bus"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsInjectPortAlias)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.inject_port   = 9001
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_CLIENT_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.tx               = 127.0.0.1:9
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to radio.dplane"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsRadioDeviceKey)
+{
+    const std::string path = write_conf(R"(
+radio.device        = 192.168.32.1
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("radio.device is removed"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsMovedRadioKeys)
+{
+    const std::string path = write_conf(R"(
+winject.device        = 192.168.32.1
+radio.channel         = 1
+radio.modulation      = OFDM_24M
+radio.power           = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to radio.dplane"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsMissingDplane)
+{
+    const std::string path = write_conf(R"(
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("missing radio.dplane"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsDplanePortKey)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.dplane_port   = 9001
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to radio.dplane"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsDplaneWithoutPort)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("invalid radio.dplane"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, ValidateAcceptsFilledStruct)
+{
+    Config cfg;
+    cfg.channel = 1;
+    cfg.modulation = "OFDM_24M";
+    cfg.power_dbm = 20;
+    cfg.domain = 0x1234;
+    cfg.radio_device.mplane.sin_family = AF_INET;
+    ASSERT_EQ(
+        inet_pton(AF_INET, "192.168.253.11", &cfg.radio_device.mplane.sin_addr),
+        1);
+    cfg.radio_device.mplane.sin_port = htons(22);
+    cfg.radio_device.dplane.sin_family = AF_INET;
+    ASSERT_EQ(
+        inet_pton(AF_INET, "192.168.253.11", &cfg.radio_device.dplane.sin_addr),
+        1);
+    cfg.radio_device.dplane.sin_port = htons(9000);
+    UpstreamConfig u;
+    u.index = 0;
+    u.mode = UpstreamMode::udp_server;
+    u.bus_tx = 0xb2;
+    u.bus_rx = 0xa1;
+    u.scheduler_budget = 256;
+    u.endpoint.rx = "127.0.0.1:29000";
+    cfg.upstreams.push_back(u);
+    std::string err;
+    EXPECT_TRUE(cfg.validate(&err)) << err;
+
+    cfg.domain = 0;
+    EXPECT_FALSE(cfg.validate(&err));
+    EXPECT_NE(err.find("domain"), std::string::npos);
+
+    cfg.domain = 0x1234;
+    cfg.modulation = "ofdm_24m";
+    EXPECT_FALSE(cfg.validate(&err));
+    EXPECT_NE(err.find("modulation"), std::string::npos);
+
+    cfg.modulation = "OFDM_24M";
+    const sockaddr_in mplane = cfg.radio_device.mplane;
+    cfg.radio_device.mplane = {};
+    EXPECT_FALSE(cfg.validate(&err));
+    EXPECT_NE(err.find("mplane"), std::string::npos);
+
+    cfg.radio_device.mplane = mplane;
+    cfg.radio_device.dplane = {};
+    EXPECT_FALSE(cfg.validate(&err));
+    EXPECT_NE(err.find("dplane"), std::string::npos);
+}
+
+TEST(ConfigTest, LoadsQueueForwarding)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = QUEUE_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = video-to-radio
+upstream-0.tx               = radio-to-video
+upstream-0.reactor          = host-reactor
+upstream-0.fec.type         = RS_BLOCK_ERASURE
+upstream-0.fec.k            = 10
+upstream-0.fec.n            = 12
+)");
+    Config cfg;
+    std::string err;
+    ASSERT_TRUE(cfg.load(path, &err)) << err;
+    ASSERT_EQ(cfg.upstreams.size(), 1u);
+    EXPECT_EQ(cfg.upstreams[0].mode, UpstreamMode::queue);
+    EXPECT_EQ(cfg.upstreams[0].endpoint.rx, "video-to-radio");
+    EXPECT_EQ(cfg.upstreams[0].endpoint.tx, "radio-to-video");
+    EXPECT_EQ(cfg.upstreams[0].reactor, "host-reactor");
+    EXPECT_EQ(cfg.upstreams[0].fec_type, FecType::RsBlockErasure);
+    EXPECT_EQ(cfg.upstreams[0].fec_k, 10);
+    EXPECT_EQ(cfg.upstreams[0].fec_n, 12);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsQueueInKey)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = QUEUE_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.queue_in         = video-to-radio
+upstream-0.tx               = radio-to-video
+upstream-0.reactor          = host-reactor
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to upstream-0.rx"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsQueueForwardingWithoutAPair)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = QUEUE_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = video-to-radio
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("rx"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsSharedQueueNames)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 2
+upstream-0.mode             = QUEUE_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = shared
+upstream-0.tx               = radio-to-video
+upstream-0.reactor          = host-reactor
+upstream-1.mode             = QUEUE_FORWARDING
+upstream-1.tx_bus           = c3
+upstream-1.scheduler_budget = 100
+upstream-1.rx               = other-to-radio
+upstream-1.tx               = shared
+upstream-1.reactor          = host-reactor
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("queue name"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, PlanesAreIndependent)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9001
+radio.mplane        = 10.1.2.3:2201
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_CLIENT_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.tx               = 127.0.0.1:9
+)");
+    Config cfg;
+    std::string err;
+    ASSERT_TRUE(cfg.load(path, &err)) << err;
+    char ip[INET_ADDRSTRLEN] = {};
+    ASSERT_NE(
+        inet_ntop(AF_INET, &cfg.radio_device.mplane.sin_addr, ip, sizeof(ip)),
+        nullptr);
+    EXPECT_STREQ(ip, "10.1.2.3");
+    EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 2201);
+    ASSERT_NE(
+        inet_ntop(AF_INET, &cfg.radio_device.dplane.sin_addr, ip, sizeof(ip)),
+        nullptr);
+    EXPECT_STREQ(ip, "192.168.32.1");
+    EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9001);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsRadioConsoleKey)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.console       = 22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_CLIENT_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.tx               = 127.0.0.1:9
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("moved to radio.mplane"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, RejectsMplaneWithoutPort)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_CLIENT_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.scheduler_budget = 100
+upstream-0.tx               = 127.0.0.1:9
+)");
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(path, &err));
+    EXPECT_NE(err.find("invalid radio.mplane"), std::string::npos);
+    std::remove(path.c_str());
+}
+
+TEST(ConfigTest, LoadsMplaneHostPort)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 127.0.0.1:9001
+radio.mplane        = 127.0.0.1:2201
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
 winject.domain        = 1234
 upstream.size = 1
 upstream-0.mode             = UDP_STATIC_FORWARDING
@@ -501,8 +956,86 @@ upstream-0.tx               = 127.0.0.1:21082
     Config cfg;
     std::string err;
     ASSERT_TRUE(cfg.load(path, &err)) << err;
-    EXPECT_TRUE(cfg.radio_device.have_mplane);
     EXPECT_EQ(ntohs(cfg.radio_device.mplane.sin_port), 2201u);
     EXPECT_EQ(ntohs(cfg.radio_device.dplane.sin_port), 9001u);
     std::remove(path.c_str());
+}
+
+namespace
+{
+std::string queue_dplane_conf(const std::string& radio_lines)
+{
+    return R"(
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain      = 1234
+upstream.size = 1
+upstream-0.mode     = UDP_STATIC_FORWARDING
+upstream-0.tx_bus   = b2
+upstream-0.rx_bus   = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx       = 0.0.0.0:22081
+upstream-0.tx       = 127.0.0.1:21082
+)" + radio_lines;
+}
+}  // namespace
+
+TEST(ConfigTest, LoadsQueueDplane)
+{
+    Config cfg;
+    std::string err;
+    ASSERT_TRUE(cfg.load(write_conf(queue_dplane_conf(R"(
+radio.dplane_tx = wifi_tx
+radio.dplane_rx = wifi_rx
+radio.reactor   = radio_cv
+)")),
+                         &err))
+        << err;
+    EXPECT_TRUE(cfg.radio_device.dplane_is_queue());
+    EXPECT_EQ(cfg.radio_device.dplane_tx, "wifi_tx");
+    EXPECT_EQ(cfg.radio_device.dplane_rx, "wifi_rx");
+    EXPECT_EQ(cfg.radio_device.reactor, "radio_cv");
+    EXPECT_TRUE(cfg.validate(&err)) << err;
+}
+
+TEST(ConfigTest, QueueDplaneNeedsAllThreeKeys)
+{
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(write_conf(queue_dplane_conf(R"(
+radio.dplane_tx = wifi_tx
+radio.dplane_rx = wifi_rx
+)")),
+                          &err));
+    EXPECT_EQ(err,
+              "radio.dplane_tx, radio.dplane_rx and radio.reactor go together");
+}
+
+TEST(ConfigTest, QueueDplaneExcludesUdpDplane)
+{
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(write_conf(queue_dplane_conf(R"(
+radio.dplane    = 192.168.32.1:9000
+radio.dplane_tx = wifi_tx
+radio.dplane_rx = wifi_rx
+radio.reactor   = radio_cv
+)")),
+                          &err));
+    EXPECT_EQ(err, "radio.dplane and radio.dplane_tx are exclusive");
+}
+
+TEST(ConfigTest, QueueDplaneRejectsSharedQueue)
+{
+    Config cfg;
+    std::string err;
+    EXPECT_FALSE(cfg.load(write_conf(queue_dplane_conf(R"(
+radio.dplane_tx = wifi
+radio.dplane_rx = wifi
+radio.reactor   = radio_cv
+)")),
+                          &err));
+    EXPECT_FALSE(err.empty());
 }

@@ -4,11 +4,12 @@
 #include "console/ConsoleParse.h"
 #include "console/MplaneCorrelation.h"
 #include "console/MplaneErrno.h"
-#include "endpoint/UdpEndpoint.h"
 #include "frames/Mpdu.h"
 #include "radio/RadioDefs.h"
 #include "radio/RadioMplaneParse.h"
 #include "radio/RxEvent.h"
+#include "radio/WifiQueue.h"
+#include "radio/WifiUdp.h"
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
 #include "utils/Version.h"
@@ -16,22 +17,48 @@
 #include <algorithm>
 #include <cinttypes>
 #include <errno.h>
+#include <future>
+#include <optional>
+#include <stdexcept>
 #include <string.h>
 #include <sys/socket.h>
-#include <thread>
 #include <time.h>
 
 namespace winject
 {
 
-bool App::load(const std::string& path)
+App::~App()
+{
+    tx_mux.stop();
+    radio_upstream_table.clear();
+    upstreams.clear();
+    upstream_reactor->stop();
+    if (upstream_reactor_thread.joinable())
+    {
+        upstream_reactor_thread.join();
+    }
+    close_radio();
+}
+
+void App::close_radio()
+{
+    // A queue d-plane's host reactor outlives the App and keeps delivering;
+    // close before rx_demux goes, even if a pending TX event holds the radio.
+    if (radio)
+    {
+        radio->close();
+    }
+}
+
+bool App::load(Config config)
 {
     std::string err;
-    if (!cfg.load(path, &err))
+    if (!config.validate(&err))
     {
         LOG_ERR("%s", err.c_str());
         return false;
     }
+    cfg = std::move(config);
     return true;
 }
 
@@ -41,55 +68,81 @@ bool App::add_upstream(const UpstreamConfig& uc)
     {
         return false;
     }
-    auto up = std::make_shared<UdpEndpoint>();
-    if (!up->open(reactor, uc,
-                  [this]()
-                  {
-                      tx_mux_.request_tick();
-                  }))
+    auto tx_queue = tx_mux.make_tx_queue();
+    std::shared_ptr<Upstream> up;
+    try
     {
+        up = construct_upstream(uc, tx_queue);
+    }
+    catch (const std::exception& e)
+    {
+        LOG_ERR("upstream construction failed: %s", e.what());
         return false;
     }
-    radio_upstream_table_.add(up, radio, uc.bus_tx, uc.bus_rx,
+    radio_upstream_table.add(up, tx_queue, radio, uc.bus_tx, uc.bus_rx,
                               uc.scheduler_budget);
     upstreams.push_back(up);
-    LOG_INF("upstream-%zu bus_tx=%s bus_rx=%s", uc.index,
-            uc.bus_tx ? bus_to_string(uc.bus_tx).c_str() : "-",
+    tx_mux.request_tick();
+    LOG_INF("upstream-%zu type=%s bus_tx=%s bus_rx=%s", uc.index,
+            up->type_name(), uc.bus_tx ? bus_to_string(uc.bus_tx).c_str() : "-",
             uc.bus_rx ? bus_to_string(uc.bus_rx).c_str() : "-");
     return true;
 }
 
 bool App::setup_radio()
 {
-    radio = std::make_shared<WifiUdp>();
-    if (!radio->open(reactor,
-                     [this](bfc::shared_sized_buffer mpdu)
-                     {
-                         rx_demux_.on_mpdu(std::move(mpdu));
-                     }))
+    const RadioDeviceConfig& d = cfg.radio_device;
+    radio_queue_reactor.reset();
+    // A queue d-plane delivers on its CV reactor thread, UDP on the IO thread;
+    // RxDemux takes the table lock either way.
+    auto on_rx = [this](bfc::shared_sized_buffer mpdu)
     {
-        return false;
+        rx_demux.on_mpdu(std::move(mpdu));
+    };
+    std::string dplane;
+    if (d.dplane_is_queue())
+    {
+        radio_queue_reactor =
+            bfc::cv_reactor_registry::get_instance().get(d.reactor);
+        if (!radio_queue_reactor)
+        {
+            LOG_ERR("radio queue reactor %s: not registered", d.reactor.c_str());
+            return false;
+        }
+        auto queue = std::make_shared<WifiQueue>();
+        if (!queue->open(*reactor, std::move(on_rx)) ||
+            !queue->bind_dplane(
+                WifiQueueDplaneBinding{d.dplane_tx, d.dplane_rx, d.reactor}))
+        {
+            return false;
+        }
+        radio = std::move(queue);
+        dplane = "queue:" + d.dplane_tx + "," + d.dplane_rx + "@" + d.reactor;
+    }
+    else
+    {
+        radio = std::make_shared<WifiUdp>();
+        if (!radio->open(*reactor, std::move(on_rx)))
+        {
+            return false;
+        }
+        dplane = console_format_ipv4_port(d.dplane);
     }
     apply_radio_dplane();
     apply_configured_fcs();
-    std::string dplane_log = "-";
-    if (cfg.radio_device.have_dplane)
-    {
-        dplane_log = console_format_ipv4_port(cfg.radio_device.dplane);
-    }
-    LOG_INF("radio dplane=%s fcs=%s", dplane_log.c_str(),
-            console_format_radio_fcs(cfg.radio_device.fcs));
+    LOG_INF("radio dplane=%s fcs=%s", dplane.c_str(),
+            console_format_radio_fcs(d.fcs));
     return true;
 }
 
 void App::apply_radio_dplane()
 {
     const RadioDeviceConfig& d = cfg.radio_device;
-    if (!d.have_dplane || radio == nullptr)
+    if (radio == nullptr)
     {
         return;
     }
-    tx_mux_.post_send_socket_change(radio, d.dplane);
+    tx_mux.post_send_socket_change(radio, d.dplane);
     radio->post_rx_event(EventCtrlRecvSocketChange{d.dplane});
 }
 
@@ -120,9 +173,9 @@ bool App::setup_upstreams()
     {
         return false;
     }
-    radio_manager_.bind(&cfg, &tx_mux_, radio.get(), &reactor);
-    radio_manager_.configure_tx_mux();
-    rx_demux_.set_domain(cfg.domain);
+    radio_manager.bind(&cfg, &tx_mux, radio.get(), reactor.get());
+    radio_manager.configure_tx_mux();
+    rx_demux.set_domain(cfg.domain);
     for (const auto& uc : cfg.upstreams)
     {
         if (!add_upstream(uc))
@@ -133,52 +186,92 @@ bool App::setup_upstreams()
     return true;
 }
 
-bool App::set_upstream_fec(size_t index, FecType type, int k, int n,
-                           std::string* error)
+std::shared_ptr<Upstream> App::construct_upstream(
+    const UpstreamConfig& uc, const std::shared_ptr<BoundedLossyQueue>& tx_queue,
+    const Upstream::TxSequences* resume)
 {
-    auto fail = [&](const char* msg) -> bool
+    if (uc.mode != UpstreamMode::queue)
     {
-        if (error != nullptr)
+        auto up = std::make_shared<UDPUpstream>(upstream_reactor, reactor, uc,
+                                                tx_queue);
+        if (resume)
         {
-            *error = msg;
+            up->resume_tx_sequences(*resume);
         }
-        return false;
-    };
-    if (index >= upstreams.size() || !upstreams[index])
-    {
-        return fail("invalid upstream index");
+        up->bind_callbacks();
+        return up;
     }
-    UdpEndpoint* udp = upstreams[index].get();
-    if (!udp->set_fec(type, k, n, error))
+    using Registry =
+        bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>;
+    auto cv = bfc::cv_reactor_registry::get_instance().get(uc.reactor);
+    auto app_tx_queue = Registry::get_instance().get(uc.endpoint.rx);
+    auto app_rx_queue = Registry::get_instance().get(uc.endpoint.tx);
+    auto up = std::make_shared<QueueUpstream>(cv, uc, tx_queue, app_tx_queue,
+                                              app_rx_queue);
+    if (resume)
     {
-        return false;
+        up->resume_tx_sequences(*resume);
     }
-    if (index < cfg.upstreams.size())
-    {
-        cfg.upstreams[index].fec_type = type;
-        cfg.upstreams[index].fec_k = type == FecType::none ? 0 : k;
-        cfg.upstreams[index].fec_n = type == FecType::none ? 0 : n;
-    }
-    return true;
+    up->bind_callbacks();
+    return up;
 }
 
-bool App::get_upstream_fec(size_t index, FecType* type, int* k, int* n,
+bool App::replace_upstream(size_t index, const UpstreamConfig& uc,
                            std::string* error)
 {
-    auto fail = [&](const char* msg) -> bool
+    const auto original = cfg.upstreams[index];
     {
-        if (error != nullptr)
+        std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
+        radio_upstream_table.entries()[index] = {};
+    }
+    // The peer's sequencers see one unbroken stream across the swap.
+    std::optional<Upstream::TxSequences> sequences;
+    if (upstreams[index])
+    {
+        upstreams[index]->teardown();
+        sequences = upstreams[index]->tx_sequences();
+    }
+    upstreams[index].reset();
+    auto install = [&](const UpstreamConfig& config)
+    {
+        auto queue = tx_mux.make_tx_queue();
+        auto up = construct_upstream(config, queue,
+                                     sequences ? &*sequences : nullptr);
         {
-            *error = msg;
+            std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
+            radio_upstream_table.entries()[index] =
+                RadioUpstreamEntry{up,
+                                   up->rx_queue(),
+                                   up->rx_queue_eviction_counter(),
+                                   queue,
+                                   radio,
+                                   config.bus_tx,
+                                   config.bus_rx,
+                                   config.scheduler_budget};
+        }
+        upstreams[index] = std::move(up);
+    };
+    try
+    {
+        install(uc);
+    }
+    catch (const std::exception& e)
+    {
+        if (error)
+        {
+            *error = k_eio;
+        }
+        LOG_ERR("upstream replacement failed: %s", e.what());
+        try
+        {
+            install(original);
+        }
+        catch (const std::exception& rollback)
+        {
+            LOG_ERR("upstream restore failed: %s", rollback.what());
         }
         return false;
-    };
-    if (index >= upstreams.size() || !upstreams[index])
-    {
-        return fail("invalid upstream index");
     }
-    UdpEndpoint* udp = upstreams[index].get();
-    udp->get_fec(type, k, n);
     return true;
 }
 
@@ -197,7 +290,7 @@ bool App::set_upstream_scheduler_budget(size_t index, size_t budget,
     {
         return fail("invalid index or budget");
     }
-    if (!radio_upstream_table_.set_budget(index, budget))
+    if (!radio_upstream_table.set_budget(index, budget))
     {
         return fail("failed to set budget");
     }
@@ -205,6 +298,7 @@ bool App::set_upstream_scheduler_budget(size_t index, size_t budget,
     {
         cfg.upstreams[index].scheduler_budget = budget;
     }
+    tx_mux.request_tick();
     LOG_INF("upstream-%zu scheduler_budget=%zu", index, budget);
     return true;
 }
@@ -217,17 +311,17 @@ bool App::fill_upstream_view(size_t index, ManagerUpstreamView* out) const
         return false;
     }
     const UpstreamConfig& uc = cfg.upstreams[index];
-    const auto* udp = upstreams[index].get();
+    const auto* endpoint = upstreams[index].get();
     out->id = static_cast<uint8_t>(uc.index);
     out->bus_tx = uc.bus_tx;
     out->bus_rx = uc.bus_rx;
-    out->type = "UDP";
-    if (udp != nullptr)
+    out->type = uc.mode == UpstreamMode::queue ? "QUEUE" : "UDP";
+    if (endpoint != nullptr)
     {
-        out->rx = udp->peer_endpoints().rx;
-        out->tx = udp->peer_endpoints().tx;
-        out->fec_timeout_ms = udp->fec_timeout_ms();
-        udp->get_fec(&out->fec, &out->fec_k, &out->fec_n);
+        out->rx = endpoint->endpoint_rx();
+        out->tx = endpoint->endpoint_tx();
+        out->fec_timeout_ms = endpoint->fec_timeout_ms();
+        endpoint->get_fec(&out->fec, &out->fec_k, &out->fec_n);
     }
     else
     {
@@ -239,7 +333,7 @@ bool App::fill_upstream_view(size_t index, ManagerUpstreamView* out) const
         out->fec_timeout_ms = uc.fec_timeout_ms;
     }
     size_t budget = 0;
-    if (radio_upstream_table_.get_budget(index, &budget))
+    if (radio_upstream_table.get_budget(index, &budget))
     {
         out->quanta = budget;
     }
@@ -296,7 +390,8 @@ bool App::console_add_upstream(const ManagerUpstreamView& spec,
     uc.bus_tx = spec.bus_tx;
     uc.bus_rx = spec.bus_rx;
     uc.scheduler_budget = spec.quanta;
-    uc.endpoint = UdpPeerEndpoint{spec.rx, spec.tx};
+    uc.endpoint = EndpointAddress{spec.rx, spec.tx};
+    uc.mode = upstream_mode(uc.endpoint);
     uc.fec_type = spec.fec;
     uc.fec_k = spec.fec_k;
     uc.fec_n = spec.fec_n;
@@ -337,21 +432,14 @@ bool App::console_remove_upstream(uint8_t id, std::string* error)
     {
         return fail(k_enoent);
     }
-    if (!radio_upstream_table_.remove(index))
+    if (!radio_upstream_table.remove(index))
     {
         return fail(k_enoent);
     }
-    if (upstreams[index])
-    {
-        auto* udp = upstreams[index].get();
-        if (udp != nullptr)
-        {
-            udp->close();
-        }
-    }
     upstreams.erase(upstreams.begin() + static_cast<ptrdiff_t>(index));
+    tx_mux.request_tick();
     cfg.upstreams.erase(cfg.upstreams.begin() + static_cast<ptrdiff_t>(index));
-    metrics_registry_.remove_prefix("upstream_" + std::to_string(id) + "_");
+    metrics_registry.remove_prefix("upstream_" + std::to_string(id) + "_");
     return true;
 }
 
@@ -437,30 +525,18 @@ bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
     {
         return fail(k_einval);
     }
-    if (patch.have_quanta && !set_upstream_scheduler_budget(
-                                 index, candidate.scheduler_budget, error))
+    if (patch.have_fec || patch.have_k || patch.have_n ||
+        patch.have_fec_timeout)
     {
-        return fail(error != nullptr && !error->empty() ? error->c_str()
-                                                        : k_einval);
-    }
-    auto* udp = upstreams[index].get();
-    if (patch.have_fec_timeout)
-    {
-        if (udp == nullptr ||
-            !udp->set_fec_timeout_ms(candidate.fec_timeout_ms, error))
+        if (!replace_upstream(index, candidate, error))
         {
-            return fail(error != nullptr && !error->empty() ? error->c_str()
-                                                            : k_einval);
+            return false;
         }
     }
-    if (patch.have_fec || patch.have_k || patch.have_n)
+    else if (patch.have_quanta && !set_upstream_scheduler_budget(
+                                      index, candidate.scheduler_budget, error))
     {
-        if (!set_upstream_fec(index, candidate.fec_type, candidate.fec_k,
-                              candidate.fec_n, error))
-        {
-            return fail(error != nullptr && !error->empty() ? error->c_str()
-                                                            : k_einval);
-        }
+        return false;
     }
     cfg.upstreams[index] = candidate;
     if (out == nullptr || !fill_upstream_view(index, out))
@@ -488,16 +564,16 @@ std::vector<uint8_t> console_upstream_ids(const std::vector<uint8_t>& ids,
     return want;
 }
 
-void fill_upstream_fec_fields(const UdpEndpoint* udp, FecType* fec, int* k,
+void fill_upstream_fec_fields(const Upstream* endpoint, FecType* fec, int* k,
                               int* n)
 {
     if (fec == nullptr || k == nullptr || n == nullptr)
     {
         return;
     }
-    if (udp != nullptr)
+    if (endpoint != nullptr)
     {
-        udp->get_fec(fec, k, n);
+        endpoint->get_fec(fec, k, n);
         return;
     }
     *fec = FecType::none;
@@ -532,22 +608,22 @@ bool App::console_list_upstream_rx_stat(
             }
             return false;
         }
-        const auto* udp = upstreams[index].get();
+        const auto* endpoint = upstreams[index].get();
         ManagerUpstreamRxStatView row;
         row.id = id;
-        fill_upstream_fec_fields(udp, &row.fec, &row.fec_k, &row.fec_n);
-        if (udp != nullptr)
+        fill_upstream_fec_fields(endpoint, &row.fec, &row.fec_k, &row.fec_n);
+        if (endpoint != nullptr)
         {
-            row.rxbyt = udp->app_rx_bytes();
-            row.rxpkt = udp->app_rx_packets();
-            row.rx_oversize = udp->app_rx_oversize_pkt();
-            row.fec_rec = udp->fec_recovered();
-            row.fec_lost = udp->fec_decode_fail();
-            row.fec_rxbyt = udp->fec_air_rx_bytes();
-            row.fec_rxpkt = udp->fec_air_rx_packets();
+            row.rxbyt = endpoint->app_rx_bytes();
+            row.rxpkt = endpoint->app_rx_packets();
+            row.rx_oversize = endpoint->app_rx_oversize_pkt();
+            row.fec_rec = endpoint->fec_recovered();
+            row.fec_lost = endpoint->fec_decode_fail();
+            row.fec_rxbyt = endpoint->fec_air_rx_bytes();
+            row.fec_rxpkt = endpoint->fec_air_rx_packets();
         }
         uint64_t gap = 0;
-        if (radio_upstream_table_.peek_seq_lost(index, &gap))
+        if (radio_upstream_table.peek_seq_lost(index, &gap))
         {
             row.rxgap = gap;
         }
@@ -581,17 +657,18 @@ bool App::console_list_upstream_tx_stat(
             }
             return false;
         }
-        const auto* udp = upstreams[index].get();
+        const auto* endpoint = upstreams[index].get();
         ManagerUpstreamTxStatView row;
         row.id = id;
-        fill_upstream_fec_fields(udp, &row.fec, &row.fec_k, &row.fec_n);
-        if (udp != nullptr)
+        fill_upstream_fec_fields(endpoint, &row.fec, &row.fec_k, &row.fec_n);
+        if (endpoint != nullptr)
         {
-            row.txbyt = udp->app_tx_bytes();
-            row.txpkt = udp->app_tx_packets();
-            row.fec_txbyt = udp->fec_air_tx_bytes();
-            row.fec_txpkt = udp->fec_air_tx_packets();
-            udp->tx_pending_stats(&row.tx_pending_pkt, &row.tx_pending_byt);
+            row.txbyt = endpoint->app_tx_bytes();
+            row.txpkt = endpoint->app_tx_packets();
+            row.fec_txbyt = endpoint->fec_air_tx_bytes();
+            row.fec_txpkt = endpoint->fec_air_tx_packets();
+            endpoint->tx_pending_stats(&row.tx_pending_pkt,
+                                       &row.tx_pending_byt);
         }
         out->push_back(row);
     }
@@ -600,44 +677,46 @@ bool App::console_list_upstream_tx_stat(
 
 void App::refresh_host_metrics()
 {
-    metrics_registry_.get_metrics<MetricU64>("rx_drop_domain")
-        ->store(rx_demux_.rx_drop_domain());
-    metrics_registry_.get_metrics<MetricU64>("rx_drop_bus")
-        ->store(rx_demux_.rx_drop_bus());
-    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_mpdu")
-        ->store(tx_mux_.tx_send_fail_mpdu());
-    metrics_registry_.get_metrics<MetricU64>("tx_send_fail_byt")
-        ->store(tx_mux_.tx_send_fail_byt());
-    metrics_registry_.get_metrics<MetricU64>("tx_pacing_txtime_us")
-        ->store(tx_mux_.pacing_txtime_full_us());
-    metrics_registry_.get_metrics<MetricU64>("tx_pacing_gap_us")
-        ->store(tx_mux_.pacing_gap_us());
-    metrics_registry_.get_metrics<MetricU64>("tx_pacing_interval_us")
-        ->store(tx_mux_.pacing_interval_full_us());
+    metrics_registry.get_metrics<MetricU64>("rx_drop_domain")
+        ->store(rx_demux.rx_drop_domain());
+    metrics_registry.get_metrics<MetricU64>("rx_drop_bus")
+        ->store(rx_demux.rx_drop_bus());
+    metrics_registry.get_metrics<MetricU64>("tx_send_fail_mpdu")
+        ->store(tx_mux.tx_send_fail_mpdu());
+    metrics_registry.get_metrics<MetricU64>("tx_send_fail_byt")
+        ->store(tx_mux.tx_send_fail_byt());
+    metrics_registry.get_metrics<MetricU64>("tx_pacing_txtime_us")
+        ->store(tx_mux.pacing_txtime_full_us());
+    metrics_registry.get_metrics<MetricU64>("tx_pacing_gap_us")
+        ->store(tx_mux.pacing_gap_us());
+    metrics_registry.get_metrics<MetricU64>("tx_pacing_interval_us")
+        ->store(tx_mux.pacing_interval_full_us());
     if (radio != nullptr)
     {
-        const WifiUdp::counters_s rc = radio->peek_counters();
-        metrics_registry_.get_metrics<MetricU64>("radio_rx_pkt")
+        const RadioDplane::counters_s rc = radio->peek_counters();
+        metrics_registry.get_metrics<MetricU64>("radio_rx_pkt")
             ->store(rc.rx_pkt);
-        metrics_registry_.get_metrics<MetricU64>("radio_rx_byt")
+        metrics_registry.get_metrics<MetricU64>("radio_rx_byt")
             ->store(rc.rx_byte);
-        metrics_registry_.get_metrics<MetricU64>("radio_tx_pkt")
+        metrics_registry.get_metrics<MetricU64>("radio_tx_pkt")
             ->store(rc.tx_pkt);
-        metrics_registry_.get_metrics<MetricU64>("radio_tx_byt")
+        metrics_registry.get_metrics<MetricU64>("radio_tx_byt")
             ->store(rc.tx_byte);
-        metrics_registry_.get_metrics<MetricU64>("radio_fcs_err_pkt")
+        metrics_registry.get_metrics<MetricU64>("radio_fcs_err_pkt")
             ->store(rc.fcs_error_pkt);
-        metrics_registry_.get_metrics<MetricU64>("radio_fcs_unknown_pkt")
+        metrics_registry.get_metrics<MetricU64>("radio_fcs_unknown_pkt")
             ->store(rc.fcs_unknown_pkt);
+        metrics_registry.get_metrics<MetricU64>("radio_tx_drops")
+            ->store(rc.tx_drops);
         const RadioFcsMode fcs = radio->fcs_mode();
-        metrics_registry_.get_metrics<MetricU64>("radio_fcs_mode")
+        metrics_registry.get_metrics<MetricU64>("radio_fcs_mode")
             ->store(static_cast<uint64_t>(fcs));
     }
-    metrics_registry_.get_metrics<MetricU64>("radio_proto_ok")
-        ->store(radio_proto_ok_ ? 1u : 0u);
+    metrics_registry.get_metrics<MetricU64>("radio_proto_ok")
+        ->store(radio_proto_ok ? 1u : 0u);
     for (size_t i = 0; i < upstreams.size(); ++i)
     {
-        const UdpEndpoint* up = upstreams[i].get();
+        const Upstream* up = upstreams[i].get();
         if (up == nullptr)
         {
             continue;
@@ -649,15 +728,53 @@ void App::refresh_host_metrics()
         }
         const std::string gap_key =
             "upstream_" + std::to_string(view.id) + "_air_rx_gap_loss";
-        metrics_registry_.get_metrics<MetricU64>(gap_key)->store(
-            up->stats().air_rx_gap_loss);
+        const UpstreamStats air = up->stats();
+        metrics_registry.get_metrics<MetricU64>(gap_key)->store(
+            air.air_rx_gap_loss);
+        metrics_registry
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_air_rx_resyncs")
+            ->store(air.air_rx_resyncs);
         const std::string oversize_key =
             "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
-        metrics_registry_.get_metrics<MetricU64>(oversize_key)
+        metrics_registry.get_metrics<MetricU64>(oversize_key)
             ->store(up->app_rx_oversize_pkt());
+        metrics_registry
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_tx_queue_drops")
+            ->store(up->tx_queue_drops());
+        metrics_registry
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_rx_queue_evictions")
+            ->store(up->rx_queue_evictions());
+        metrics_registry
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_app_tx_queue_evictions")
+            ->store(up->tx_counters().app_queue_evictions);
+        const auto transport = up->rx_counters();
+        const std::string transport_prefix =
+            "upstream_" + std::to_string(view.id) + "_";
+        metrics_registry
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_attempts")
+            ->store(transport.delivery_attempts);
+        metrics_registry
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_accepted")
+            ->store(transport.accepted_packets);
+        metrics_registry
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_errors")
+            ->store(transport.send_errors);
+        metrics_registry
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_no_peer")
+            ->store(transport.no_peer_drops);
+        metrics_registry
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_closed")
+            ->store(transport.closed_drops);
+        metrics_registry
+            .get_metrics<MetricU64>(transport_prefix + "app_delivery_evictions")
+            ->store(transport.queue_evictions);
         const std::string fec_unexpected_key =
             "upstream_" + std::to_string(view.id) + "_air_rx_fec_unexpected";
-        metrics_registry_.get_metrics<MetricU64>(fec_unexpected_key)
+        metrics_registry.get_metrics<MetricU64>(fec_unexpected_key)
             ->store(up->fec_air_rx_unexpected());
     }
 }
@@ -676,7 +793,7 @@ bool App::console_get_metrics(const std::vector<std::string>& keys,
     }
     refresh_host_metrics();
     const std::map<std::string, Metrics> snapshot =
-        metrics_registry_.getMetrics(keys);
+        metrics_registry.getMetrics(keys);
     out->clear();
     const auto want_key = [&](const std::string& k) -> bool
     {
@@ -687,11 +804,11 @@ bool App::console_get_metrics(const std::vector<std::string>& keys,
     {
         ManagerMetricView row;
         row.key = "radio_version";
-        if (radio_version_known_)
+        if (radio_version_known)
         {
-            row.value = "v" + std::to_string(radio_version_.x) + "." +
-                        std::to_string(radio_version_.y) + "." +
-                        std::to_string(radio_version_.z);
+            row.value = "v" + std::to_string(radio_version.x) + "." +
+                        std::to_string(radio_version.y) + "." +
+                        std::to_string(radio_version.z);
         }
         else
         {
@@ -773,12 +890,7 @@ void App::apply_radio_caps_mplane(const MplaneResult& r)
 
 void App::send_radio_unavailable_nok(ManagerConsoleReply reply) const
 {
-    if (!cfg.radio_device.have_mplane)
-    {
-        reply.send_nok(k_enodev);
-        return;
-    }
-    if (radio_version_known_ && !radio_proto_ok_)
+    if (radio_version_known && !radio_proto_ok)
     {
         reply.send_nok(k_eproto);
         return;
@@ -788,26 +900,26 @@ void App::send_radio_unavailable_nok(ManagerConsoleReply reply) const
 
 void App::on_radio_version(bool known, const WinjectVersion& v)
 {
-    radio_version_known_ = known;
-    radio_version_ = v;
-    radio_proto_ok_ = known && protocol_compatible(v, own_version());
-    if (known && !radio_proto_ok_)
+    radio_version_known = known;
+    radio_version = v;
+    radio_proto_ok = known && protocol_compatible(v, own_version());
+    if (known && !radio_proto_ok)
     {
         log_proto_mismatch_once(v);
     }
-    if (known && radio_proto_ok_)
+    if (known && radio_proto_ok)
     {
-        proto_mismatch_logged_ = false;
+        proto_mismatch_logged = false;
     }
 }
 
 void App::log_proto_mismatch_once(const WinjectVersion& radio_ver)
 {
-    if (proto_mismatch_logged_)
+    if (proto_mismatch_logged)
     {
         return;
     }
-    proto_mismatch_logged_ = true;
+    proto_mismatch_logged = true;
     const WinjectVersion mgr = own_version();
     LOG_ERR(
         "radio is v%u.%u.%u, manager is v%u.%u.%u: protocol %u.%u != %u.%u, "
@@ -830,15 +942,22 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
         }
         return false;
     }
+    if (patch.have_dplane && cfg.radio_device.dplane_is_queue())
+    {
+        // A queue d-plane is fixed at startup.
+        if (error != nullptr)
+        {
+            *error = k_einval;
+        }
+        return false;
+    }
     RadioDeviceConfig next = cfg.radio_device;
     if (patch.have_mplane)
     {
-        next.have_mplane = true;
         next.mplane = patch.mplane;
     }
     if (patch.have_dplane)
     {
-        next.have_dplane = true;
         next.dplane = patch.dplane;
     }
     if (patch.have_fcs)
@@ -847,14 +966,12 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
     }
     const bool mplane_changed =
         patch.have_mplane &&
-        (!cfg.radio_device.have_mplane ||
-         cfg.radio_device.mplane.sin_addr.s_addr !=
+        (cfg.radio_device.mplane.sin_addr.s_addr !=
              patch.mplane.sin_addr.s_addr ||
          cfg.radio_device.mplane.sin_port != patch.mplane.sin_port);
     const bool dplane_changed =
         patch.have_dplane &&
-        (!cfg.radio_device.have_dplane ||
-         cfg.radio_device.dplane.sin_addr.s_addr !=
+        (cfg.radio_device.dplane.sin_addr.s_addr !=
              patch.dplane.sin_addr.s_addr ||
          cfg.radio_device.dplane.sin_port != patch.dplane.sin_port);
     const bool fcs_changed =
@@ -867,13 +984,10 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
     if (mplane_changed)
     {
         drop_console();
-        radio_version_known_ = false;
-        radio_proto_ok_ = false;
+        radio_version_known = false;
+        radio_proto_ok = false;
         apply_configured_fcs();
-        if (cfg.radio_device.have_mplane)
-        {
-            schedule_reconnect(std::chrono::milliseconds(0));
-        }
+        schedule_reconnect(std::chrono::milliseconds(0));
     }
     else if (fcs_changed)
     {
@@ -917,7 +1031,7 @@ void App::console_radio_info(ManagerConsoleReply reply)
             ManagerRadioView view;
             if (parse_radio_info_body(body, &view))
             {
-                radio_manager_.set_actual_phy(view);
+                radio_manager.set_actual_phy(view);
             }
             reply.send_text(body);
         });
@@ -1048,7 +1162,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
             if (patch.have_modulation)
             {
                 cfg.modulation = Config::canonical_modulation(patch.modulation);
-                radio_manager_.sync_pacing_for_modulation(cfg.modulation);
+                radio_manager.sync_pacing_for_modulation(cfg.modulation);
             }
             if (patch.have_cca)
             {
@@ -1058,7 +1172,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
             ManagerRadioView view;
             if (parse_radio_info_body(mplane_join_body(r1), &view))
             {
-                radio_manager_.set_actual_phy(view);
+                radio_manager.set_actual_phy(view);
             }
             console.send_save_slot(
                 cfg.config_slot,
@@ -1126,14 +1240,14 @@ void App::console_config_slot(uint8_t slot, ManagerConsoleReply reply)
 
 bool App::start_manager_console()
 {
-    if (cfg.manager_console_in.empty())
+    if (cfg.console_in.empty())
     {
         return true;
     }
     sockaddr_in in_addr = {};
-    if (!parse_host_port(cfg.manager_console_in, &in_addr))
+    if (!parse_host_port(cfg.console_in, &in_addr))
     {
-        LOG_ERR("manager console: invalid console_in");
+        LOG_ERR("manager console: invalid winject.console_in");
         return false;
     }
     ManagerConsoleHandlers handlers;
@@ -1208,7 +1322,7 @@ bool App::start_manager_console()
         return console_radio_device(patch, out, error);
     };
     std::string err;
-    if (!mgr_console.start(reactor, in_addr, std::move(handlers), &err))
+    if (!mgr_console.start(*reactor, in_addr, std::move(handlers), &err))
     {
         LOG_ERR("manager console: %s", err.c_str());
         return false;
@@ -1234,7 +1348,7 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
             {
                 if (r.error == "EPROTO")
                 {
-                    radio_proto_ok_ = false;
+                    radio_proto_ok = false;
                 }
                 if (done)
                 {
@@ -1242,7 +1356,7 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
                 }
                 return;
             }
-            radio_manager_.on_phy_programmed();
+            radio_manager.on_phy_programmed();
             if (done)
             {
                 done(true);
@@ -1273,7 +1387,7 @@ bool App::apply_console()
                 drop_console();
                 return;
             }
-            radio_manager_.on_phy_programmed();
+            radio_manager.on_phy_programmed();
         });
     return true;
 }
@@ -1282,17 +1396,17 @@ bool App::hold_console()
 {
     console.clear_pending();
     console_ok = true;
-    if (!reactor.add_read_rdy(console.fd(),
-                              [this]()
-                              {
-                                  on_console();
-                              }))
+    if (!reactor->add_read_rdy(console.fd(),
+                               [this]()
+                               {
+                                   on_console();
+                               }))
     {
         LOG_ERR("console epoll add failed");
         return false;
     }
-    reconnect_timer_.cancel();
-    radio_manager_.on_console_up();
+    reconnect_timer.cancel();
+    radio_manager.on_console_up();
     return true;
 }
 
@@ -1301,15 +1415,15 @@ void App::drop_console()
     const int fd = console.fd();
     if (fd >= 0)
     {
-        reactor.rem_read_rdy(fd);
-        reactor.rem_write_rdy(fd);
+        reactor->rem_read_rdy(fd);
+        reactor->rem_write_rdy(fd);
     }
-    radio_manager_.on_console_down();
+    radio_manager.on_console_down();
     console.cancel_pending();
     console.close();
-    console_deadline_timer_.cancel();
+    console_deadline_timer.cancel();
     console_ok = false;
-    if (cfg.radio_device.have_mplane && !reconnect_timer_.armed())
+    if (!reconnect_timer.armed())
     {
         schedule_reconnect(k_reconnect_interval);
     }
@@ -1317,10 +1431,10 @@ void App::drop_console()
 
 void App::schedule_reconnect(std::chrono::milliseconds after)
 {
-    reconnect_timer_.arm(after,
+    reconnect_timer.arm(after,
                          [this]()
                          {
-                             if (!cfg.radio_device.have_mplane || console_ok)
+                             if (console_ok)
                              {
                                  return;
                              }
@@ -1332,14 +1446,14 @@ void App::schedule_reconnect(std::chrono::milliseconds after)
 void App::on_console_request_deadline(
     std::chrono::steady_clock::time_point deadline)
 {
-    if (console_deadline_timer_.armed() && console_deadline_at_ <= deadline)
+    if (console_deadline_timer.armed() && console_deadline_at <= deadline)
     {
         return;
     }
-    console_deadline_at_ = deadline;
+    console_deadline_at = deadline;
     const auto after = std::chrono::duration_cast<std::chrono::microseconds>(
         deadline - std::chrono::steady_clock::now());
-    console_deadline_timer_.arm(
+    console_deadline_timer.arm(
         after,
         [this]()
         {
@@ -1422,7 +1536,7 @@ void App::arm_stats()
     {
         return;
     }
-    stats_timer_.arm(
+    stats_timer.arm(
         std::chrono::seconds(cfg.stats_sec),
         [this]()
         {
@@ -1432,70 +1546,55 @@ void App::arm_stats()
                     now - last_stats)
                     .count();
             last_stats = now;
-            tx_mux_.log_stats(elapsed_ms / 1000.0);
+            tx_mux.log_stats(elapsed_ms / 1000.0);
             arm_stats();
         });
 }
 
 void App::stop()
 {
-    stop_requested_.store(true);
-    reactor.stop();
+    stop_requested.store(true);
+    reactor->stop();
 }
 
-void App::flush_shutdown()
+void App::begin_shutdown()
 {
-    for (auto& up : upstreams)
-    {
-        if (up)
-        {
-            up->announce_down();
-        }
-    }
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-    size_t queued_bytes = 0;
-    while (std::chrono::steady_clock::now() < deadline)
-    {
-        bool pending = false;
-        for (const auto& up : upstreams)
-        {
-            if (up != nullptr && up->has_tx())
-            {
-                pending = true;
-                queued_bytes += up->get_tx_size();
-            }
-        }
-        if (!pending)
-        {
-            break;
-        }
-        tx_mux_.sync_tick();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    if (queued_bytes > 0)
-    {
-        LOG_INF("shutdown flush ended with ~%zu bytes still queued",
-                queued_bytes);
-    }
+    mgr_console.stop();
+    tx_mux.stop();
+    radio_upstream_table.clear();
+    upstreams.clear();
+    close_radio();
 }
 
 int App::run()
 {
     LOG_INF("winject-manager %s", WINJECT_VERSION_STRING);
+    auto started = std::make_shared<std::promise<void>>();
+    auto ready = started->get_future();
+    upstream_reactor->wake_up(
+        [started]
+        {
+            started->set_value();
+        });
+    upstream_reactor_thread = std::thread(
+        [cv = upstream_reactor]
+        {
+            cv->run();
+        });
+    ready.wait();
     if (!setup_upstreams())
     {
         return 1;
     }
-    reconnect_timer_.bind(&reactor);
-    console_deadline_timer_.bind(&reactor);
-    stats_timer_.bind(&reactor);
+    reconnect_timer.bind(reactor.get());
+    console_deadline_timer.bind(reactor.get());
+    stats_timer.bind(reactor.get());
     console.set_on_deadline(
         [this](std::chrono::steady_clock::time_point deadline)
         {
             on_console_request_deadline(deadline);
         });
-    radio_manager_.set_console_ops(
+    radio_manager.set_console_ops(
         [this](std::function<void(bool, const ManagerRadioView&)> done)
         {
             if (!console_ok)
@@ -1518,7 +1617,7 @@ int App::run()
                         done(false, view);
                         return;
                     }
-                    radio_manager_.set_actual_phy(view);
+                    radio_manager.set_actual_phy(view);
                     done(true, view);
                 });
         },
@@ -1541,7 +1640,7 @@ int App::run()
         {
             drop_console();
         });
-    radio_manager_.set_reconcile_filter(
+    radio_manager.set_reconcile_filter(
         [this](std::function<void(bool ok)> done)
         {
             if (!console_ok)
@@ -1570,18 +1669,11 @@ int App::run()
     {
         return 1;
     }
-    if (cfg.radio_device.have_mplane)
+    begin_console();
+    if (!console_ok)
     {
-        begin_console();
-        if (!console_ok)
-        {
-            LOG_WRN("waiting for radio m-plane %s",
-                    console_format_ipv4_port(cfg.radio_device.mplane).c_str());
-        }
-    }
-    else
-    {
-        LOG_INF("no radio m-plane configured; radio is not managed");
+        LOG_WRN("waiting for radio m-plane %s",
+                console_format_ipv4_port(cfg.radio_device.mplane).c_str());
     }
     ManagerRadioDeviceView rd_view;
     rd_view.id = 0;
@@ -1596,21 +1688,36 @@ int App::run()
             "stats logging every %u s (WINJECT_STATS_SEC or winject.stats_sec)",
             cfg.stats_sec);
     }
-    tx_mux_.start();
+    if (radio_queue_reactor)
+    {
+        // The host already runs this reactor for radio/upstream queues.
+        // Its native blocking wait avoids poll()'s sub-ms spin tail and
+        // keeps TX off the independently scheduled control-plane thread.
+        tx_mux.start(*radio_queue_reactor);
+        LOG_INF("TX scheduler: queue reactor %s, timer step %llu us",
+                cfg.radio_device.reactor.c_str(),
+                static_cast<unsigned long long>(
+                    radio_queue_reactor->minimum_timer_step()));
+    }
+    else
+    {
+        tx_mux.start(*reactor);
+    }
     arm_stats();
-    // stop() before reactor.run() set it running would be lost; the first
+    // stop() before reactor->run() set it running would be lost; the first
     // loop pass runs this and stops then.
-    reactor.get_timer().wait_us(0,
-                                [this]()
-                                {
-                                    if (stop_requested_.load())
-                                    {
-                                        reactor.stop();
-                                    }
-                                });
-    reactor.run();
-    tx_mux_.stop();
-    flush_shutdown();
+    reactor->get_timer().wait_us(0,
+                                 [this]()
+                                 {
+                                     if (stop_requested.load())
+                                     {
+                                         reactor->stop();
+                                     }
+                                 });
+    reactor->run();
+    begin_shutdown();
+    upstream_reactor->stop();
+    upstream_reactor_thread.join();
     return 0;
 }
 

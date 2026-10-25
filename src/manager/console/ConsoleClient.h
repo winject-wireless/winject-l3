@@ -42,12 +42,12 @@ public:
     }
     in_addr local_ip() const
     {
-        return local_ip_;
+        return bound_local_ip;
     }
 
     void set_default_timeout(std::chrono::milliseconds timeout)
     {
-        default_timeout_ = timeout;
+        default_timeout = timeout;
     }
 
     bool request(const std::string& mplane_line, DoneFn done);
@@ -66,7 +66,7 @@ public:
         std::function<void(std::chrono::steady_clock::time_point deadline)>;
     void set_on_deadline(DeadlineFn fn)
     {
-        on_deadline_ = std::move(fn);
+        on_deadline = std::move(fn);
     }
     void cancel_pending();
 
@@ -106,12 +106,12 @@ private:
     void chain_after(bool ok, const std::string& err, DoneFn next);
 
     bfc::socket sock;
-    in_addr local_ip_{};
+    in_addr bound_local_ip{};
     std::string pending;
-    uint8_t next_req_id_ = 1;
-    std::map<uint8_t, Pending> pending_reqs_;
-    std::chrono::milliseconds default_timeout_{3000};
-    DeadlineFn on_deadline_;
+    uint8_t next_req_id = 1;
+    std::map<uint8_t, Pending> pending_reqs;
+    std::chrono::milliseconds default_timeout{3000};
+    DeadlineFn on_deadline;
 };
 
 }  // namespace winject

@@ -30,8 +30,11 @@ add_executable(winject-tests
     MpduTest.cpp
     ConfigTest.cpp
     RsBlockErasureTest.cpp
+    VendoredFecTest.cpp
+    DatagramAirTest.cpp
+    UpstreamTest.cpp
+    AppShutdownTest.cpp
     NetUtilTest.cpp
-    UdpEndpointTest.cpp
     LCHeaderTest.cpp
     PhyAirtimeTest.cpp
     RxDemuxTest.cpp
@@ -43,18 +46,27 @@ add_executable(winject-tests
     RadioMplaneParseTest.cpp
     WifiFcsTest.cpp
     WifiUdpTest.cpp
+    WifiQueueTest.cpp
     TxEventQueueTest.cpp
     VersionTest.cpp
     MetricsRegistryTest.cpp
     TxMuxTest.cpp
     OneShotTimerTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/App.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Frame.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Mpdu.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/RsBlockErasure.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_block_erasure.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_block_erasure_rx.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_encode_scalar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/FecTx.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/FecRx.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UpstreamStats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/Upstream.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UdpEndpoint.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/DatagramAir.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UDPUpstream.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/QueueUpstream.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleClient.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/MplaneCorrelation.cpp
@@ -64,6 +76,7 @@ add_executable(winject-tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioUpstreamTable.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/TxMux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiUdp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiQueue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioMplaneParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/Log.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/NetUtil.cpp

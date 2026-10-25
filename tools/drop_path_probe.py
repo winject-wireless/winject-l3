@@ -303,7 +303,6 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--a", default="192.168.253.11")
     p.add_argument("--b", default="192.168.253.12")
-    p.add_argument("--host", default="192.168.253.106")
     p.add_argument("--mon", default="wlx3c789537952a")
     p.add_argument("--kbps", type=float, default=10000)
     p.add_argument("--duration", type=float, default=5.0)
@@ -338,57 +337,49 @@ def main() -> int:
     def write_conf(path: Path, role: str, device: str, dplane: int, cons_in: int) -> None:
         if role == "a":
             body = f"""
-winject.device        = {device}
-winject.local_ip      = {args.host}
-winject.console       = 22
-winject.channel       = {args.channel}
-winject.modulation    = OFDM_24M
-winject.power         = {args.power}
+radio.mplane        = {device}:22
+radio.dplane        = {device}:{dplane}
+radio.channel       = {args.channel}
+radio.modulation    = OFDM_24M
+radio.power         = {args.power}
 winject.domain        = 1234
-winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
-winject.skip_console  = 0
-winject.cca           = 0
-winject.dplane_port   = {dplane}
-manager.console_in    = 127.0.0.1:{cons_in}
+radio.cca           = 0
+winject.console_in    = 127.0.0.1:{cons_in}
 upstream.size = 2
 upstream-0.mode             = UDP_SERVER_FORWARDING
 upstream-0.tx_bus           = b2
 upstream-0.rx_bus           = a1
 upstream-0.scheduler_budget = 65536
-upstream-0.bind_address     = 127.0.0.1:29000
+upstream-0.rx               = 127.0.0.1:29000
 upstream-1.mode             = UDP_CLIENT_FORWARDING
 upstream-1.tx_bus           = c3
 upstream-1.rx_bus           = d4
 upstream-1.scheduler_budget = 65536
-upstream-1.connect_address  = 127.0.0.1:9001
+upstream-1.tx               = 127.0.0.1:9001
 """
         else:
             body = f"""
-winject.device        = {device}
-winject.local_ip      = {args.host}
-winject.console       = 22
-winject.channel       = {args.channel}
-winject.modulation    = OFDM_24M
-winject.power         = {args.power}
+radio.mplane        = {device}:22
+radio.dplane        = {device}:{dplane}
+radio.channel       = {args.channel}
+radio.modulation    = OFDM_24M
+radio.power         = {args.power}
 winject.domain        = 1234
-winject.max_rate_kbps = {int(args.kbps)}
 winject.stats_sec     = 1
-winject.skip_console  = 0
-winject.cca           = 0
-winject.dplane_port   = {dplane}
-manager.console_in    = 127.0.0.1:{cons_in}
+radio.cca           = 0
+winject.console_in    = 127.0.0.1:{cons_in}
 upstream.size = 2
 upstream-0.mode             = UDP_CLIENT_FORWARDING
 upstream-0.tx_bus           = a1
 upstream-0.rx_bus           = b2
 upstream-0.scheduler_budget = 65536
-upstream-0.connect_address  = 127.0.0.1:9002
+upstream-0.tx               = 127.0.0.1:9002
 upstream-1.mode             = UDP_SERVER_FORWARDING
 upstream-1.tx_bus           = d4
 upstream-1.rx_bus           = c3
 upstream-1.scheduler_budget = 65536
-upstream-1.bind_address     = 127.0.0.1:29001
+upstream-1.rx               = 127.0.0.1:29001
 """
         path.write_text(body)
 

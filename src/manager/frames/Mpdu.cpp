@@ -119,36 +119,36 @@ Mpdu::Mpdu(uint8_t* data, size_t len)
     {
         return;
     }
-    ieee_ = ieee_802_11::Frame(data, data + len);
-    ieee_.set_enable_fcs(false);
+    wlan_frame = ieee_802_11::Frame(data, data + len);
+    wlan_frame.set_enable_fcs(false);
 }
 
 size_t Mpdu::buffer_size() const
 {
-    if (ieee_.frame_control == nullptr || ieee_.last == nullptr)
+    if (wlan_frame.frame_control == nullptr || wlan_frame.last == nullptr)
     {
         return 0;
     }
     return static_cast<size_t>(
-        ieee_.last - reinterpret_cast<uint8_t*>(ieee_.frame_control));
+        wlan_frame.last - reinterpret_cast<uint8_t*>(wlan_frame.frame_control));
 }
 
 size_t Mpdu::frame_body_bytes() const
 {
-    if (ieee_.frame_body == nullptr)
+    if (wlan_frame.frame_body == nullptr)
     {
         return 0;
     }
-    auto& frame = const_cast<ieee_802_11::Frame&>(ieee_);
+    auto& frame = const_cast<ieee_802_11::Frame&>(wlan_frame);
     return frame.frame_body_size();
 }
 
 bool Mpdu::init_data_frame()
 {
-    if (data_frame_ready_)
+    if (data_frame_ready)
     {
-        return ieee_.frame_body != nullptr && ieee_.address1 != nullptr &&
-               ieee_.address2 != nullptr;
+        return wlan_frame.frame_body != nullptr && wlan_frame.address1 != nullptr &&
+               wlan_frame.address2 != nullptr;
     }
 
     if (buffer_size() < WIFI_HDR_LEN)
@@ -157,19 +157,19 @@ bool Mpdu::init_data_frame()
     }
 
     using namespace ieee_802_11;
-    ieee_.frame_control->protocol_type = FrameControl::E_TYPE_DATA;
-    ieee_.frame_control->flags = 0;
-    *ieee_.duration = 0;
-    ieee_.rescan();
+    wlan_frame.frame_control->protocol_type = FrameControl::E_TYPE_DATA;
+    wlan_frame.frame_control->flags = 0;
+    *wlan_frame.duration = 0;
+    wlan_frame.rescan();
 
-    if (ieee_.frame_body == nullptr || ieee_.address1 == nullptr ||
-        ieee_.address2 == nullptr)
+    if (wlan_frame.frame_body == nullptr || wlan_frame.address1 == nullptr ||
+        wlan_frame.address2 == nullptr)
     {
         return false;
     }
 
     const size_t hdr_len = static_cast<size_t>(
-        ieee_.frame_body - reinterpret_cast<uint8_t*>(ieee_.frame_control));
+        wlan_frame.frame_body - reinterpret_cast<uint8_t*>(wlan_frame.frame_control));
     if (buffer_size() < hdr_len)
     {
         return false;
@@ -179,35 +179,35 @@ bool Mpdu::init_data_frame()
     {
         return false;
     }
-    ieee_.set_body_size(static_cast<uint16_t>(payload));
-    data_frame_ready_ = true;
+    wlan_frame.set_body_size(static_cast<uint16_t>(payload));
+    data_frame_ready = true;
     return true;
 }
 
 bool Mpdu::rescan()
 {
-    bound_80211_ = false;
-    data_frame_ready_ = false;
+    bound_80211 = false;
+    data_frame_ready = false;
 
     if (buffer_size() < WIFI_HDR_LEN)
     {
         return false;
     }
 
-    ieee_.set_enable_fcs(false);
-    ieee_.rescan();
+    wlan_frame.set_enable_fcs(false);
+    wlan_frame.rescan();
 
     if (!validate_data_frame())
     {
         return false;
     }
-    if (ieee_.frame_body == nullptr)
+    if (wlan_frame.frame_body == nullptr)
     {
         return false;
     }
 
     const size_t hdr_len = static_cast<size_t>(
-        ieee_.frame_body - reinterpret_cast<uint8_t*>(ieee_.frame_control));
+        wlan_frame.frame_body - reinterpret_cast<uint8_t*>(wlan_frame.frame_control));
     if (buffer_size() < hdr_len)
     {
         return false;
@@ -217,7 +217,7 @@ bool Mpdu::rescan()
     {
         return false;
     }
-    ieee_.set_body_size(static_cast<uint16_t>(payload));
+    wlan_frame.set_body_size(static_cast<uint16_t>(payload));
 
     if (!unpack_slots_from_header())
     {
@@ -228,8 +228,8 @@ bool Mpdu::rescan()
         return false;
     }
 
-    data_frame_ready_ = true;
-    bound_80211_ = true;
+    data_frame_ready = true;
+    bound_80211 = true;
     return true;
 }
 
@@ -237,12 +237,12 @@ bool Mpdu::validate_data_frame() const
 {
     using namespace ieee_802_11;
 
-    if (ieee_.frame_control == nullptr)
+    if (wlan_frame.frame_control == nullptr)
     {
         return false;
     }
     const auto type =
-        ieee_.frame_control->protocol_type & FrameControl::E_TYPE_MASK;
+        wlan_frame.frame_control->protocol_type & FrameControl::E_TYPE_MASK;
     const auto mtype = type & FrameControl::E_MTYPE_MASK;
     if (mtype != FrameControl::E_MTYPE_DATA)
     {
@@ -252,7 +252,7 @@ bool Mpdu::validate_data_frame() const
     {
         return false;
     }
-    if (ieee_.frame_control->flags != 0)
+    if (wlan_frame.frame_control->flags != 0)
     {
         return false;
     }
@@ -261,17 +261,17 @@ bool Mpdu::validate_data_frame() const
 
 void Mpdu::refresh_slot_cache_from_header() const
 {
-    if (ieee_.address1 == nullptr || ieee_.address2 == nullptr)
+    if (wlan_frame.address1 == nullptr || wlan_frame.address2 == nullptr)
     {
         return;
     }
-    unpack_slot_sizes_from_addrs(ieee_.address1->address, ieee_.address2->address,
+    unpack_slot_sizes_from_addrs(wlan_frame.address1->address, wlan_frame.address2->address,
                                  slot_cache_);
 }
 
 bool Mpdu::unpack_slots_from_header()
 {
-    if (ieee_.address1 == nullptr || ieee_.address2 == nullptr)
+    if (wlan_frame.address1 == nullptr || wlan_frame.address2 == nullptr)
     {
         return false;
     }
@@ -281,17 +281,17 @@ bool Mpdu::unpack_slots_from_header()
 
 void Mpdu::pack_slots_to_header()
 {
-    if (ieee_.address1 == nullptr || ieee_.address2 == nullptr)
+    if (wlan_frame.address1 == nullptr || wlan_frame.address2 == nullptr)
     {
         return;
     }
-    pack_slot_sizes_to_addrs(ieee_.address1->address, ieee_.address2->address,
+    pack_slot_sizes_to_addrs(wlan_frame.address1->address, wlan_frame.address2->address,
                              slot_cache_);
 }
 
 bool Mpdu::validate_slot_payload_layout() const
 {
-    if (ieee_.frame_body == nullptr)
+    if (wlan_frame.frame_body == nullptr)
     {
         return false;
     }
@@ -356,7 +356,7 @@ uint16_t Mpdu::slot_payload_size(uint8_t slot_index) const
     {
         return 0;
     }
-    if (ieee_.address1 == nullptr || ieee_.address2 == nullptr)
+    if (wlan_frame.address1 == nullptr || wlan_frame.address2 == nullptr)
     {
         return 0;
     }
@@ -366,7 +366,7 @@ uint16_t Mpdu::slot_payload_size(uint8_t slot_index) const
 
 bfc::const_buffer_view Mpdu::get_slot_payload(uint8_t slot_index) const
 {
-    if (slot_index >= WIFI_PDU_SLOTS || ieee_.frame_body == nullptr)
+    if (slot_index >= WIFI_PDU_SLOTS || wlan_frame.frame_body == nullptr)
     {
         return bfc::const_buffer_view();
     }
@@ -389,12 +389,12 @@ bfc::const_buffer_view Mpdu::get_slot_payload(uint8_t slot_index) const
         return bfc::const_buffer_view();
     }
 
-    return bfc::const_buffer_view(ieee_.frame_body + off, slot_size);
+    return bfc::const_buffer_view(wlan_frame.frame_body + off, slot_size);
 }
 
 bfc::buffer_view Mpdu::get_slot_payload(uint8_t slot_index)
 {
-    if (slot_index >= WIFI_PDU_SLOTS || ieee_.frame_body == nullptr)
+    if (slot_index >= WIFI_PDU_SLOTS || wlan_frame.frame_body == nullptr)
     {
         return bfc::buffer_view();
     }
@@ -417,44 +417,44 @@ bfc::buffer_view Mpdu::get_slot_payload(uint8_t slot_index)
         return bfc::buffer_view();
     }
 
-    return bfc::buffer_view(ieee_.frame_body + off, slot_size);
+    return bfc::buffer_view(wlan_frame.frame_body + off, slot_size);
 }
 
 bool Mpdu::is_valid_winject_frame() const
 {
-    if (ieee_.address3 == nullptr)
+    if (wlan_frame.address3 == nullptr)
     {
         return false;
     }
-    return addr3_bytes_prefix_match(ieee_.address3->address);
+    return addr3_bytes_prefix_match(wlan_frame.address3->address);
 }
 
 uint16_t Mpdu::get_domain() const
 {
-    if (ieee_.address3 == nullptr)
+    if (wlan_frame.address3 == nullptr)
     {
         return 0;
     }
-    return read_addr3_domain(ieee_.address3->address);
+    return read_addr3_domain(wlan_frame.address3->address);
 }
 
 void Mpdu::set_domain(uint16_t domain)
 {
-    if (!init_data_frame() || ieee_.address3 == nullptr)
+    if (!init_data_frame() || wlan_frame.address3 == nullptr)
     {
         return;
     }
-    write_addr3_domain(ieee_.address3->address, domain);
+    write_addr3_domain(wlan_frame.address3->address, domain);
 }
 
 ieee_802_11::Frame& Mpdu::ieee()
 {
-    return ieee_;
+    return this->wlan_frame;
 }
 
 const ieee_802_11::Frame& Mpdu::ieee() const
 {
-    return ieee_;
+    return this->wlan_frame;
 }
 
 uint16_t next_tx_sequence()

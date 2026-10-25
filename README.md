@@ -9,14 +9,14 @@ Two radios speak this protocol:
 | ESP32 (WT32-ETH01) | [winject-radio-esp32](https://github.com/winject-wireless/winject-radio-esp32) | Its own board, reached over Ethernet | `SIGNAL` |
 | Realtek RTL8812AU | [winject-radio-realtek](https://github.com/winject-wireless/winject-radio-realtek) | A Linux host, one process per USB dongle, `rtl88xxau_wfb` driver | `ACTUAL` |
 
-Both expose the same UDP console and d-plane ports, so the manager drives either one with the same config keys. See [Realtek radio](#realtek-radio) for the settings that differ.
+Both speak the same radio protocol; the manager uses the same config schema for either (`radio.mplane`, `radio.dplane`, `radio.*` PHY keys, `winject.*`, `upstream-N.*`). See [docs/mplane.md](docs/mplane.md) for the full format and [Realtek radio](#realtek-radio) for settings that differ on RTL8812AU.
 
 ## Layout
 
 ```
 src/manager/            winject-manager binary (802.11 MPDU in frames/Mpdu.*, IEEE layout in frames/Frame.*)
 src/test/               Host unit tests (GoogleTest)
-configuration/          Manager configs: host_x86/, host_arm/ (video demo), winject-tests/<scenario>/ (bench pairs: esp32/, realtek/)
+configuration/          Manager configs: host_x86/, host_arm/ (video demo), winject-tests/<scenario>/ (bench); scenario.md
 scripts/                Bench scripts (bw/lat tests, ensure_manager.sh, check_guidelines.sh)
 tools/                  Python bench tools (radio_stats.py, bw_test.py, lat_test.py) and CMake toolchains
 docs/mplane.md         Manager config and m-plane (client console)
@@ -27,6 +27,7 @@ docs/fec-spreading.md   FEC block spreading: burst loss, sizing, bench results
 docs/radio-capa-support.md  radio_caps_info and FCS trailer modes (SIGNAL / ACTUAL)
 docs/no-traffic.md      Bench report: zero-traffic investigation and loss analysis
 docs/contributing.md    Code style, tests, and ./scripts/check_guidelines.sh
+docs/reactor-teardown.md  BFC reactor turn ordering and socket/queue teardown fences
 ```
 
 ## Code style and checks
@@ -54,9 +55,11 @@ The manager is built as a static library, `winject-l3`, with one entry point, pl
 ```cpp
 #include "WinjectL3.h"
 
-int winject_l3::main(int argc, char* argv[]);  // argv[1] = config path; blocks until stop()
-void winject_l3::stop();                       // any thread; main() then returns
+int winject_l3::main(const winject::Config& config);  // blocks until stop()
+void winject_l3::stop();                              // any thread; main() then returns
 ```
+
+`winject-manager`'s `main` reads `argv[1]` (default `winject.conf`), parses it into a `winject::Config`, and calls `winject_l3::main`. A host that already has the settings — the ESP32-P4 example — fills the struct and does not pass argv.
 
 The library builds without RTTI (`-fno-rtti`), as it does on ESP-IDF.
 
@@ -72,15 +75,15 @@ Differences from Linux:
 
 | Topic | ESP-IDF |
 |---|---|
-| Reactor | BFC `poll_reactor` instead of the epoll reactor: timers wait in whole milliseconds (FreeRTOS tick), not microseconds, so the manager ticks every 1 ms instead of 250 µs |
-| TX thread | Started with an 8 KB stack (`esp_pthread_set_cfg`); its pacing waits round up to the FreeRTOS tick |
+| Reactor | BFC `poll_reactor` handles UDP/control; queue data paths use the host's registered `cv_reactor`. Reactors report their timer resolution through `minimum_timer_step()` |
+| TX scheduler | Queue radios share `radio.reactor`; UDP radios use the IO reactor. Positive pacing waits round up to the chosen reactor's timer step, retaining the airtime schedule and bounded catch-up |
 | Sockets | 3 + one per upstream + 2 for the wake pipe; raise `CONFIG_LWIP_MAX_SOCKETS` (the example sets 16) |
 | `pipe()` | Missing in ESP-IDF; [`port/pipe.c`](idf/winject_l3/port/pipe.c) provides it as two connected loopback UDP sockets (BFC's reactor wakes itself through a pipe) |
 | Exceptions | The component compiles with `-fexceptions` because BFC throws on fatal errors; with the project's C++ exceptions off, such a throw aborts |
 | Signals | None: stop the manager with `winject_l3::stop()` (any task, also before `main` has started its loop) |
-| Config file | Read with `fopen`, so it must be on a mounted filesystem (e.g. LittleFS) |
+| Config | `app_main` fills a `winject::Config` and passes it to `winject_l3::main`. No config file and no argv |
 
-Configuration keys and the manager console are described in [docs/mplane.md](docs/mplane.md).
+Configuration keys and the manager console are described in [docs/mplane.md](docs/mplane.md) (format overview, per-key tables, legacy keys). Example trees: `configuration/host_x86/`, `configuration/host_arm/`, `configuration/winject-tests/<scenario>/` — see [configuration/scenario.md](configuration/scenario.md).
 
 Cross-build for Allwinner H3 / Orange Pi PC (32-bit armhf; needs the `arm-linux-gnueabihf` toolchain):
 
@@ -106,11 +109,10 @@ ctest --test-dir build_test_ci --output-on-failure
 Manager config for a Realtek radio on the same host:
 
 ```ini
-winject.device       = 127.0.0.1
-winject.console      = 2201        # the radio's net.console_port (not 22: sshd owns it on Linux)
-winject.dplane_port  = 9000        # the radio's net.dplane_port (inject + registration + forward)
-winject.radio_fcs    = actual      # or leave unset to auto-detect; never signal
-# no winject.cca = 0
+radio.mplane       = 127.0.0.1:2201  # host:port; the radio's net.console_port (not 22: sshd owns it on Linux)
+radio.dplane       = 127.0.0.1:9000  # host:port; the radio's net.dplane_port (inject + registration + forward)
+radio.fcs    = actual      # or leave unset to auto-detect; never signal
+# no radio.cca = 0
 ```
 
 You can also set the radio at runtime with `radio_device` on the manager m-plane (`mplane`, `dplane`, `fcs`). A second radio on the same host needs distinct console and d-plane ports. The bench pair uses 2201/9000 for radio A and 2202/9003 for radio B. Avoid 9001 and 9002, because `tools/bw_test.py` listens there.
@@ -119,10 +121,10 @@ Differences from the ESP32:
 
 | Topic | Realtek radio |
 |---|---|
-| CCA | `cca=false` is rejected (`NOK EINVAL`). Leave `winject.cca` unset or `1`, and do not pass `--no-cca` to the bench scripts |
+| CCA | `cca=false` is rejected (`NOK EINVAL`). Leave `radio.cca` unset or `1`, and do not pass `--no-cca` to the bench scripts |
 | Modulations | `DSS_*_L`, `CCK_*_L`, `OFDM_6M`…`OFDM_54M`, `OFDM_MCS0-7_LGI/SGI`. Short preamble (`*_S`) is rejected because the driver ignores it |
 | Channels | Whatever the dongle's regulatory domain allows, 2.4 and 5 GHz. The manager still accepts only 1–14 |
-| TX power | `winject.power` is mapped through a measured index table (`txpower.csv` in the radio repo). The driver's power override is global: **all Realtek radios on one host must use the same `winject.power`** |
+| TX power | `radio.power` is mapped through a measured index table (`txpower.csv` in the radio repo). The driver's power override is global: **all Realtek radios on one host must use the same `radio.power`** |
 | Radio tests | `test_wifi_*` / `test_ether_*` reply `NOK ENODEV`. They measure ESP32 Wi-Fi/EMAC contention, which this radio does not have |
 | Bad-FCS frames | Dropped by the driver before monitor mode, so on-air errors show up as lost frames rather than in `fcs_error_pkt` |
 
@@ -137,7 +139,7 @@ Measured throughput on the bench (two RTL8812AU, channel 13, 1400-byte payload, 
 
 The radios dropped no frames themselves on these runs, and the 4–10 % loss was all on air. These runs capped the manager with `winject.max_rate_kbps` (20000 on the ESP32 bench, 80000 on the Realtek one); that key has since been removed, and TX pacing is now fixed at 90 % of the modulation's airtime. `OFDM_24M` itself tops out near 18 Mbit/s of payload.
 
-`configuration/winject-tests/realtek/` holds the Realtek bench scenario. `bw_a.cfg` / `bw_b.cfg` are the manager configs, with the ports and FCS setting above. `radio_a.cfg` / `radio_b.cfg` are the radio configs, one per dongle, selected by interface name. Run it with `manager_iperf_bw_test.sh --scenario realtek` (see below). `manager_bw_test.sh` and `manager_lat_test.sh` only cover the ESP32 scenario for now.
+`configuration/winject-tests/realtek/` holds the Realtek bench scenario. `bw_a.cfg` / `bw_b.cfg` are **manager** configs (`radio.mplane`, `radio.dplane`, upstreams). `radio_a.cfg` / `radio_b.cfg` are **winject-radio-realtek** process configs (dongle `radio.device`, `net.console_port`, `net.dplane_port` — not read by winject-manager). Run it with `manager_iperf_bw_test.sh --scenario realtek` (see below). `manager_bw_test.sh` and `manager_lat_test.sh` only cover the ESP32 scenario for now.
 
 ## Bandwidth test (two radios)
 
@@ -169,7 +171,7 @@ Run it from an interactive terminal, in the winject-l3 checkout:
 |---|---|---|
 | `esp32` (default) | Two ESP32 boards on Ethernet (`--a` / `--b`) | Nothing: the radios are already running |
 | `realtek` | Two RTL8812AU dongles on this host | Builds [winject-radio-realtek](https://github.com/winject-wireless/winject-radio-realtek) and starts one instance per dongle with `radio_a.cfg` / `radio_b.cfg` under `sudo` |
-| `realtek-cross` | Radio A on this host, radio B on a peer (`--b`) | Starts radio A locally; starts radio B on `--radio-b-ssh` (default `ubuntu@<--b>`) with `net.bind = 0.0.0.0`. Both managers run on this host; `winject.device` for B is `--b`. |
+| `realtek-cross` | Radio A on this host, radio B on a peer (`--b`) | Starts radio A locally; starts radio B on `--radio-b-ssh` (default `ubuntu@<--b>`) with `net.bind = 0.0.0.0`. Both managers run on this host; the `radio.mplane` and `radio.dplane` hosts for B are `--b`. |
 
 ```bash
 ./scripts/manager_iperf_bw_test.sh --scenario realtek --bitrate 16M

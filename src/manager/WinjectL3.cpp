@@ -84,9 +84,8 @@ void stop()
     }
 }
 
-int main(int argc, char* argv[])
+int main(const winject::Config& config)
 {
-    const char* path = argc > 1 ? argv[1] : "winject.conf";
 #if !defined(ESP_PLATFORM)
     install_handler(SIGPIPE, SIG_IGN);
 #endif
@@ -102,11 +101,7 @@ int main(int argc, char* argv[])
     install_handler(SIGTERM, on_signal);
 #endif
     int rc = 1;
-    if (!instance->load(path))
-    {
-        LOG_ERR("usage: winject-manager <config>");
-    }
-    else
+    if (instance->load(config))
     {
         rc = instance->run();
     }

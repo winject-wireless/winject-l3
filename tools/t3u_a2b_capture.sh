@@ -20,28 +20,25 @@ iw dev "$MON" set freq 2412 HT20
 LOG="$(mktemp -d /tmp/t3u_cap_XXXX)"
 patch_conf() {
   local dev="$1" in="$2" out="$3"
-  sed -e "s/^winject\\.device.*/winject.device        = ${dev}/" \
-      -e "s/^winject\\.skip_console.*/winject.skip_console  = 0/" \
-      -e "s/^winject\\.channel.*/winject.channel       = 1/" \
-      -e "s/^winject\\.modulation.*/winject.modulation    = OFDM_24M/" \
-      -e "s/^winject\\.power.*/winject.power         = ${PWR}/" \
-      -e "s/^winject\\.cca.*/winject.cca           = 0/" \
+  sed -e "s/^\\(radio\\.mplane[[:space:]]*=[[:space:]]*\\)[^:]*:/\\1${dev}:/" \
+      -e "s/^\\(radio\\.dplane[[:space:]]*=[[:space:]]*\\)[^:]*:/\\1${dev}:/" \
+      -e "s/^radio\\.channel.*/radio.channel       = 1/" \
+      -e "s/^radio\\.modulation.*/radio.modulation    = OFDM_24M/" \
+      -e "s/^radio\\.power.*/radio.power         = ${PWR}/" \
+      -e "s/^radio\\.cca.*/radio.cca           = 0/" \
       "$in"
-  printf 'manager.console_in    = 127.0.0.1:%s\n' "$out"
+  printf 'winject.console_in    = 127.0.0.1:%s\n' "$out"
 }
 
 patch_conf 192.168.253.11 "$ROOT/configuration/winject-tests/esp32/lat_udp_a.cfg" 2400 >"$LOG/a.conf"
 patch_conf 192.168.253.12 "$ROOT/configuration/winject-tests/esp32/lat_udp_b.cfg" 2410 >"$LOG/b.conf"
 
 pkill -f "tcpdump -i ${MON}" 2>/dev/null || true
-pkill -x winject-manager 2>/dev/null || true
-sleep 1
+stop_winject_managers
 "$MANAGER" "$LOG/a.conf" >"$LOG/a.log" 2>&1 &
 "$MANAGER" "$LOG/b.conf" >"$LOG/b.log" 2>&1 &
-for _ in $(seq 1 40); do
-  grep -q "manager running" "$LOG/a.log" && grep -q "manager running" "$LOG/b.log" && break
-  sleep 0.25
-done
+wait_manager_radio "$LOG/a.log"
+wait_manager_radio "$LOG/b.log"
 
 rm -f "$PCAP"
 CAP_SEC=$((5 + 2))
@@ -57,7 +54,7 @@ if [[ ! -s "$PCAP" ]] && [[ -s "$LOG/tcpdump.err" ]]; then
   echo "tcpdump stderr:" >&2
   tail -5 "$LOG/tcpdump.err" >&2
 fi
-pkill -x winject-manager 2>/dev/null || true
+stop_winject_managers || true
 
 echo "pcap=$PCAP"
 grep "A->B sent" "$LOG/bw.out" || true

@@ -15,17 +15,21 @@ enum class UpstreamMode
     udp_static,
     udp_client,
     udp_server,
+    // In-process datagrams via named lossy queues. See QueueUpstream.
+    queue,
 };
 
-// UDP peer endpoints: both set = static; rx only = server bind; tx only =
-// client connect.
-struct UdpPeerEndpoint
+// rx/tx are a UDP host:port, or QUEUE_FORWARDING registry names.
+// UDP: both set = static; rx only = server bind; tx only = client connect.
+// Queue: both required and distinct. rx is consumed (app toward air);
+// tx is produced (air toward app).
+struct EndpointAddress
 {
     std::string rx;
     std::string tx;
 };
 
-inline UpstreamMode upstream_mode(const UdpPeerEndpoint& endpoint)
+inline UpstreamMode upstream_mode(const EndpointAddress& endpoint)
 {
     const bool has_rx = !endpoint.rx.empty();
     const bool has_tx = !endpoint.tx.empty();
@@ -50,7 +54,7 @@ enum class FecType
     RsBlockErasure,
 };
 
-// winject.radio_fcs config (runtime mode is RadioFcsMode on WifiUdp).
+// radio.fcs config (runtime mode is RadioFcsMode on the radio d-plane).
 enum class RadioFcsConfig
 {
     auto_detect,
@@ -61,25 +65,41 @@ enum class RadioFcsConfig
 struct UpstreamConfig
 {
     size_t index = 0;
-    UdpPeerEndpoint endpoint;
+    UpstreamMode mode = UpstreamMode::udp_static;
+    // UDP host:port, or queue registry names when mode is queue.
+    EndpointAddress endpoint;
+    // QUEUE_FORWARDING: the host's running cv_reactor. Empty for UDP.
+    std::string reactor;
     uint8_t bus_tx = 0;
     uint8_t bus_rx = 0;
     size_t scheduler_budget = 256;
+    size_t rx_queue_capacity = 1024;
     FecType fec_type = FecType::none;
     int fec_k = 0;
     int fec_n = 0;
     int fec_timeout_ms = 20;
 };
 
-// One radio the manager drives (docs/mplane.md § radio_device). Each address
-// starts unset; once set it can change but not be cleared.
+// One radio the manager drives (docs/mplane.md § radio_device). The m-plane
+// is always UDP. The d-plane is UDP (radio.dplane) or, with all of
+// radio.dplane_tx, radio.dplane_rx and radio.reactor, in-process queues
+// (WifiQueue). A radio_device command can change a UDP address but not
+// clear it, and cannot change a queue d-plane.
 struct RadioDeviceConfig
 {
-    bool have_mplane = false;
-    sockaddr_in mplane{};  // radio m-plane (ESP32 :22, Realtek :2201)
-    bool have_dplane = false;
-    sockaddr_in dplane{};  // radio d-plane: inject, registration, forward
+    sockaddr_in mplane{};  // radio.mplane host:port (ESP32 :22, Realtek :2201)
+    sockaddr_in dplane{};  // radio.dplane host:port (ESP32 :9000)
+    // Queue d-plane: registry names of the inject (manager -> radio) and
+    // forward (radio -> manager) queues, and the host's running cv_reactor.
+    std::string dplane_tx;
+    std::string dplane_rx;
+    std::string reactor;
     RadioFcsConfig fcs = RadioFcsConfig::auto_detect;
+
+    bool dplane_is_queue() const
+    {
+        return !dplane_tx.empty();
+    }
 };
 
 struct Config
@@ -88,19 +108,22 @@ struct Config
     uint8_t channel = 1;
     std::string modulation = "DSS_1M_L";
     int8_t power_dbm = 20;
-    // Radio CCA, sent with the PHY when cca_explicit (winject.cca present).
+    // Radio CCA, sent with the PHY when cca_explicit (radio.cca present).
     bool cca = false;
     bool cca_explicit = false;
     // Shared air domain (Addr3); 0 = unset / invalid.
     uint16_t domain = 0;
     // Radio config slot for save/load (0 = scratch pad until config slot=).
     uint8_t config_slot = 0;
-    // Local UDP management console. Empty = disabled.
-    // console_in = bind address for m-plane commands; replies go to the sender.
-    std::string manager_console_in;
+    // winject.console_in. Empty disables the manager m-plane.
+    // Bind address for commands; replies go to the sender.
+    std::string console_in;
     std::vector<UpstreamConfig> upstreams;
 
     bool load(const std::string& path, std::string* error);
+    // Checks a Config already in memory (a parsed file or one filled in by
+    // the host). load() runs this after parsing.
+    bool validate(std::string* error) const;
 
     static bool validate_upstreams(const std::vector<UpstreamConfig>& upstreams,
                                    std::string* error);
