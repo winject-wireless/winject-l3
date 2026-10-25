@@ -26,9 +26,9 @@ void RadioManager::set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reappl
                                    PingFn ping, DropConsoleFn drop_console)
 {
     query_info = std::move(query);
-    reapply = std::move(reapply);
-    ping = std::move(ping);
-    drop_console = std::move(drop_console);
+    this->reapply = std::move(reapply);
+    this->ping = std::move(ping);
+    this->drop_console = std::move(drop_console);
 }
 
 void RadioManager::set_reconcile_filter(ReconcileFilterFn reconcile)
