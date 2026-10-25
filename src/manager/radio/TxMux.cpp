@@ -411,6 +411,7 @@ struct TxMux::ReactorState
     Wake wake;
     Arm arm;
     Cancel cancel;
+    uint64_t timer_step_us = 1;
     std::optional<TimerId> timer;
     uint64_t generation = 0;
     // Protected by TxMux::wake_mu, independently of the callback gate.
@@ -458,7 +459,7 @@ void TxMux::post_send_socket_change(std::shared_ptr<RadioDplane> radio,
     notify_reactor();
 }
 
-void TxMux::start_on(Wake wake, Arm arm, Cancel cancel)
+void TxMux::start_on(uint64_t timer_step_us, Wake wake, Arm arm, Cancel cancel)
 {
     {
         std::lock_guard<std::mutex> lock(wake_mu);
@@ -471,6 +472,7 @@ void TxMux::start_on(Wake wake, Arm arm, Cancel cancel)
         state->wake = std::move(wake);
         state->arm = std::move(arm);
         state->cancel = std::move(cancel);
+        state->timer_step_us = std::max<uint64_t>(1, timer_step_us);
         reactor_state = std::move(state);
     }
     request_tick();  // also discovers data queued before the reactor was bound
@@ -588,13 +590,25 @@ void TxMux::on_reactor(const std::shared_ptr<ReactorState>& state, bool wake)
     {
         return;  // no periodic polling and no timer while idle
     }
-    const auto delay = std::chrono::duration_cast<std::chrono::microseconds>(
-                           deadline - std::chrono::steady_clock::now())
-                           .count();
+    auto delay = std::max<int64_t>(
+        0, std::chrono::ceil<std::chrono::microseconds>(
+               deadline - std::chrono::steady_clock::now()).count());
+    // The caller chooses to wait late on a coarse reactor. Do not change
+    // next_tx_at: its airtime schedule and bounded catch-up preserve the
+    // average rate when a coarse wake releases more than one MPDU.
+    if (delay > 0)
+    {
+        const uint64_t remainder =
+            static_cast<uint64_t>(delay) % state->timer_step_us;
+        if (remainder != 0)
+        {
+            delay += state->timer_step_us - remainder;
+        }
+    }
     const auto generation = state->generation;
     std::weak_ptr<ReactorState> weak = state;
     state->timer = state->arm(
-        std::max<int64_t>(0, delay),
+        delay,
         [weak, generation]()
         {
             if (auto current = weak.lock())

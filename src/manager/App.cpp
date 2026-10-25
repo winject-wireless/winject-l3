@@ -29,6 +29,7 @@ namespace winject
 
 App::~App()
 {
+    tx_mux.stop();
     radio_upstream_table.clear();
     upstreams.clear();
     upstream_reactor->stop();
@@ -36,7 +37,6 @@ App::~App()
     {
         upstream_reactor_thread.join();
     }
-    tx_mux.stop();
     close_radio();
 }
 
@@ -92,6 +92,7 @@ bool App::add_upstream(const UpstreamConfig& uc)
 bool App::setup_radio()
 {
     const RadioDeviceConfig& d = cfg.radio_device;
+    radio_queue_reactor.reset();
     // A queue d-plane delivers on its CV reactor thread, UDP on the IO thread;
     // RxDemux takes the table lock either way.
     auto on_rx = [this](bfc::shared_sized_buffer mpdu)
@@ -101,6 +102,13 @@ bool App::setup_radio()
     std::string dplane;
     if (d.dplane_is_queue())
     {
+        radio_queue_reactor =
+            bfc::cv_reactor_registry::get_instance().get(d.reactor);
+        if (!radio_queue_reactor)
+        {
+            LOG_ERR("radio queue reactor %s: not registered", d.reactor.c_str());
+            return false;
+        }
         auto queue = std::make_shared<WifiQueue>();
         if (!queue->open(*reactor, std::move(on_rx)) ||
             !queue->bind_dplane(
@@ -1552,9 +1560,9 @@ void App::stop()
 void App::begin_shutdown()
 {
     mgr_console.stop();
+    tx_mux.stop();
     radio_upstream_table.clear();
     upstreams.clear();
-    tx_mux.stop();
     close_radio();
 }
 
@@ -1680,7 +1688,21 @@ int App::run()
             "stats logging every %u s (WINJECT_STATS_SEC or winject.stats_sec)",
             cfg.stats_sec);
     }
-    tx_mux.start(*reactor);
+    if (radio_queue_reactor)
+    {
+        // The host already runs this reactor for radio/upstream queues.
+        // Its native blocking wait avoids poll()'s sub-ms spin tail and
+        // keeps TX off the independently scheduled control-plane thread.
+        tx_mux.start(*radio_queue_reactor);
+        LOG_INF("TX scheduler: queue reactor %s, timer step %llu us",
+                cfg.radio_device.reactor.c_str(),
+                static_cast<unsigned long long>(
+                    radio_queue_reactor->minimum_timer_step()));
+    }
+    else
+    {
+        tx_mux.start(*reactor);
+    }
     arm_stats();
     // stop() before reactor->run() set it running would be lost; the first
     // loop pass runs this and stops then.

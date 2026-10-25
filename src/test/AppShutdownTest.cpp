@@ -407,8 +407,10 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
     {
         std::shared_ptr<Queue> inject;
         std::shared_ptr<Queue> forward;
+        std::shared_ptr<Upstream::Reactor> reactor;
         std::atomic<int> registrations{0};
         std::atomic<int> injected{0};
+        std::atomic<bool> saw_tx_deadline{false};
         void on_inject()
         {
             while (auto mpdu = inject->pop())
@@ -419,6 +421,11 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
                     continue;
                 }
                 ++injected;
+                int64_t deadline = 0;
+                if (reactor->get_timer().get_next_deadline_us(deadline))
+                {
+                    saw_tx_deadline = true;
+                }
                 // Signal FCS mode: a zero 4-byte trailer.
                 std::vector<uint8_t> frame(mpdu->u8(),
                                            mpdu->u8() + mpdu->size());
@@ -427,7 +434,7 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
                     frame.data(), frame.size()));
             }
         }
-    } peer{inject, forward};
+    } peer{inject, forward, cv};
     auto& registrations = peer.registrations;
     auto& injected = peer.injected;
     cv->add_read_rdy(*inject,
@@ -517,9 +524,32 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
               std::vector<uint8_t>(payload, payload + sizeof(payload)));
     EXPECT_GE(injected.load(), 1);
 
+    // A backlogged queue radio must pace TX on the host's data reactor,
+    // rather than on the manager's separately scheduled IO/control thread.
+    std::vector<uint8_t> full_sdu(1400, 0x5a);
+    for (int i = 0; i < 20; ++i)
+    {
+        app_in->push(bfc::shared_sized_buffer::copy_from(full_sdu.data(),
+                                                       full_sdu.size()));
+    }
+    ASSERT_TRUE(wait_for([&] { return injected.load() >= 21; }));
+    EXPECT_TRUE(peer.saw_tx_deadline.load());
+
+    // Stop with another paced batch outstanding. The host owns this
+    // reactor, so App teardown must cancel its TX work without stopping it.
+    for (int i = 0; i < 20; ++i)
+    {
+        app_in->push(bfc::shared_sized_buffer::copy_from(full_sdu.data(),
+                                                       full_sdu.size()));
+    }
     app.stop();
     ASSERT_EQ(running.wait_for(std::chrono::seconds(2)),
               std::future_status::ready);
     EXPECT_EQ(running.get(), 0);
+    auto alive = std::make_shared<std::promise<void>>();
+    auto alive_future = alive->get_future();
+    cv->wake_up([alive] { alive->set_value(); });
+    EXPECT_EQ(alive_future.wait_for(std::chrono::seconds(2)),
+              std::future_status::ready);
 }
 }  // namespace

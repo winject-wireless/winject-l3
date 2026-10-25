@@ -404,11 +404,79 @@ TEST(TxMuxTest, SharesCvReactorAndDrainsFromPacingTimers)
     h.mux().stop();
 }
 
+// A coarse blocking reactor cannot honor sub-step wakeups. The mux must
+// batch using its existing bounded pacing credit rather than request those
+// wakeups or limit TX to one MPDU per coarse tick.
+TEST(TxMuxTest, CoarseTimerUsesReportedStepAndKeepsPacedThroughput)
+{
+    TxMuxHarness h(4096, "OFDM_24M");
+    struct CoarseReactor
+    {
+        static constexpr uint64_t minimum_timer_step() { return 1000; }
+        bfc::cv_reactor<> cv;
+        struct Timer
+        {
+            bfc::cv_reactor<>& cv;
+            size_t positive_arms = 0;
+            size_t sub_step_arms = 0;
+            auto wait_us(int64_t us, bfc::light_function<void()> fn)
+            {
+                if (us > 0)
+                {
+                    ++positive_arms;
+                    if (us < 1000 || us % 1000 != 0) ++sub_step_arms;
+                }
+                return cv.get_timer().wait_us(us, std::move(fn));
+            }
+            void cancel(std::pair<int64_t, uint64_t> id)
+            {
+                cv.get_timer().cancel(id);
+            }
+        } timer{cv};
+        auto& get_timer() { return timer; }
+        void wake_up(bfc::light_function<void()> fn)
+        {
+            cv.wake_up(std::move(fn));
+        }
+    } coarse;
+    for (int i = 0; i < 100; ++i)
+    {
+        h.up().push_sdu(make_sdu(1400, i));
+    }
+    h.mux().start(coarse);
+    // Collect frequently so the loopback socket does not become the limit.
+    const auto start = std::chrono::steady_clock::now();
+    coarse.cv.get_timer().wait_ms(60, [&] { coarse.cv.stop(); });
+    std::function<void()> collect;
+    collect = [&]
+    {
+        h.collect_pending();
+        coarse.cv.get_timer().wait_ms(2, [&collect] { collect(); });
+    };
+    coarse.cv.get_timer().wait_ms(2, [&collect] { collect(); });
+    coarse.cv.run();
+    h.collect_pending();
+    h.mux().stop();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - start).count();
+    // About 90 full SDUs fit in 60 ms; one per millisecond would deliver ~60.
+    // Allow scheduling noise, while catching that throughput regression.
+    const size_t expected = std::min<size_t>(100, elapsed / 669 + 1);
+    EXPECT_GE(h.received_count() * 4, expected * 3);
+    EXPECT_LE(h.received_count(), expected + 2);
+    EXPECT_GT(coarse.timer.positive_arms, 0u);
+    EXPECT_EQ(coarse.timer.sub_step_arms, 0u);
+}
+
 TEST(TxMuxTest, NotificationsAreCoalesced)
 {
     TxMuxHarness h(4096);
     struct Probe
     {
+        static constexpr uint64_t minimum_timer_step()
+        {
+            return IOReactor::minimum_timer_step();
+        }
         IOReactor& io;
         size_t wakes = 0;
         auto& get_timer()

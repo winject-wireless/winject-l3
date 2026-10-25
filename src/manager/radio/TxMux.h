@@ -42,12 +42,13 @@ public:
     uint32_t pacing_gap_us() const;
     // Spacing between full-size frames: (airtime + gap) / 90 %.
     uint32_t pacing_interval_full_us() const;
-    // Owner calls start/stop on the chosen reactor thread or while stopped.
+    // Binding posts the first turn; all TX work runs on the chosen reactor.
     // Producers request work after releasing their queue/table locks.
     template <typename Reactor>
     void start(Reactor& reactor)
     {
         start_on(
+            reactor.minimum_timer_step(),
             [&reactor](Callback fn)
             {
                 reactor.wake_up(std::move(fn));
@@ -81,7 +82,7 @@ private:
     using Arm = std::function<TimerId(int64_t, Callback)>;
     using Cancel = std::function<void(TimerId)>;
     struct ReactorState;
-    void start_on(Wake wake, Arm arm, Cancel cancel);
+    void start_on(uint64_t timer_step_us, Wake wake, Arm arm, Cancel cancel);
     void notify_reactor();
     void on_reactor(const std::shared_ptr<ReactorState>& state, bool wake);
     bool has_pending_tx_locked() const;

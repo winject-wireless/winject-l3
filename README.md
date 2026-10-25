@@ -75,8 +75,8 @@ Differences from Linux:
 
 | Topic | ESP-IDF |
 |---|---|
-| Reactor | BFC `poll_reactor` instead of the epoll reactor: timers wait in whole milliseconds (FreeRTOS tick), not microseconds, so the manager ticks every 1 ms instead of 250 µs |
-| TX thread | Started with an 8 KB stack (`esp_pthread_set_cfg`); its pacing waits round up to the FreeRTOS tick |
+| Reactor | BFC `poll_reactor` handles UDP/control; queue data paths use the host's registered `cv_reactor`. Reactors report their timer resolution through `minimum_timer_step()` |
+| TX scheduler | Queue radios share `radio.reactor`; UDP radios use the IO reactor. Positive pacing waits round up to the chosen reactor's timer step, retaining the airtime schedule and bounded catch-up |
 | Sockets | 3 + one per upstream + 2 for the wake pipe; raise `CONFIG_LWIP_MAX_SOCKETS` (the example sets 16) |
 | `pipe()` | Missing in ESP-IDF; [`port/pipe.c`](idf/winject_l3/port/pipe.c) provides it as two connected loopback UDP sockets (BFC's reactor wakes itself through a pipe) |
 | Exceptions | The component compiles with `-fexceptions` because BFC throws on fatal errors; with the project's C++ exceptions off, such a throw aborts |

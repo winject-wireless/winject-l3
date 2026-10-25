@@ -114,6 +114,9 @@ private:
     RadioManager radio_manager;
     RxDemux rx_demux{radio_upstream_table};
     std::shared_ptr<RadioDplane> radio;
+    // Queue radio TX shares the host's blocking data-plane reactor. In
+    // particular, ESP-IDF poll() must not spin on sub-ms pacing deadlines.
+    std::shared_ptr<Upstream::Reactor> radio_queue_reactor;
     std::vector<std::shared_ptr<Upstream>> upstreams;
     std::shared_ptr<Upstream::Reactor> upstream_reactor =
         std::make_shared<Upstream::Reactor>();
