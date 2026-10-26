@@ -90,6 +90,7 @@ private:
     bool emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares);
     bool note_build_fail(size_t body_bytes);
     uint32_t frame_interval_us(size_t psdu_bytes) const;
+    void update_pacing_credit_locked();
     void handle_event(TxEvent& ev);
     TxEventQueue take_events();
     void apply_events(TxEventQueue events);
@@ -100,6 +101,8 @@ private:
     PhyMode phy{};
     uint32_t gap_us = 96;
     uint32_t pacing_credit_us = 0;
+    // The bound reactor's minimum_timer_step(); 1 until start().
+    uint64_t reactor_step_us = 1;
     // Set by emit_mpdu when pacing (next_tx_at) refused a frame.
     bool pacing_blocked = false;
     uint16_t domain = 0;

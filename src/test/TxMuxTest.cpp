@@ -468,6 +468,63 @@ TEST(TxMuxTest, CoarseTimerUsesReportedStepAndKeepsPacedThroughput)
     EXPECT_EQ(coarse.timer.sub_step_arms, 0u);
 }
 
+// On FreeRTOS a timed wait also sleeps one tick more than asked, so a 1 ms
+// step reactor wakes up to ~2 ms apart. Two full frames of credit (1392 us at
+// OFDM_24M) is less than that gap, so the schedule's lag was clamped and
+// intervals were lost: ~93% of the paced rate here, against ~99% with credit
+// for three steps.
+TEST(TxMuxTest, TickLateCoarseTimerKeepsPacedThroughput)
+{
+    TxMuxHarness h(4096, "OFDM_24M");
+    struct TickLateReactor
+    {
+        static constexpr uint64_t minimum_timer_step() { return 1000; }
+        bfc::cv_reactor<> cv;
+        struct Timer
+        {
+            bfc::cv_reactor<>& cv;
+            auto wait_us(int64_t us, bfc::light_function<void()> fn)
+            {
+                return cv.get_timer().wait_us(us > 0 ? us + 1000 : us,
+                                              std::move(fn));
+            }
+            void cancel(std::pair<int64_t, uint64_t> id)
+            {
+                cv.get_timer().cancel(id);
+            }
+        } timer{cv};
+        auto& get_timer() { return timer; }
+        void wake_up(bfc::light_function<void()> fn)
+        {
+            cv.wake_up(std::move(fn));
+        }
+    } late;
+    for (int i = 0; i < 200; ++i)
+    {
+        h.up().push_sdu(make_sdu(1400, i));
+    }
+    h.mux().start(late);
+    const auto start = std::chrono::steady_clock::now();
+    late.cv.get_timer().wait_ms(100, [&] { late.cv.stop(); });
+    std::function<void()> collect;
+    collect = [&]
+    {
+        h.collect_pending();
+        late.cv.get_timer().wait_ms(2, [&collect] { collect(); });
+    };
+    late.cv.get_timer().wait_ms(2, [&collect] { collect(); });
+    late.cv.run();
+    h.collect_pending();
+    h.mux().stop();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - start).count();
+    // ~150 full SDUs fit in 100 ms at the paced rate; the clamped schedule
+    // delivered 140-142.
+    const size_t expected = std::min<size_t>(200, elapsed / 669 + 1);
+    EXPECT_GE(h.received_count() * 100, expected * 97);
+    EXPECT_LE(h.received_count(), expected + 4);
+}
+
 TEST(TxMuxTest, NotificationsAreCoalesced)
 {
     TxMuxHarness h(4096);
