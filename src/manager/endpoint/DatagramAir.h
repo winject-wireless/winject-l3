@@ -30,6 +30,7 @@ class DatagramAir
 {
 public:
     using DeliverApp = std::function<void(const uint8_t* data, size_t len)>;
+    using DeliverOwnedApp = std::function<void(bfc::shared_sized_buffer)>;
     using Reactor = bfc::cv_reactor<>;
     using FecTimer = Reactor::timer_t;
 
@@ -42,7 +43,8 @@ public:
     bool start(std::shared_ptr<BoundedLossyQueue> tx_queue,
                DeliverApp deliver_app, std::shared_ptr<Reactor> reactor,
                const UpstreamConfig& cfg, uint8_t route_bus,
-               UpstreamStats* tx_stats, std::mutex* tx_stats_mu);
+               UpstreamStats* tx_stats, std::mutex* tx_stats_mu,
+               DeliverOwnedApp deliver_owned_app = {});
     void stop();
     // Next FEC SDU id. Read or set it only while no data path runs (before
     // the reactor sees this instance, or after stop()).
@@ -143,6 +145,7 @@ private:
     UpstreamStats* tx_stats = nullptr;
     std::mutex* tx_stats_mu = nullptr;
     DeliverApp deliver_app;
+    DeliverOwnedApp deliver_owned_app;
     FecTx fec_tx;
     FecRx fec_rx;
     std::atomic<uint64_t> tx_queue_drops_acc{0};

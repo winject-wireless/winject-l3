@@ -41,14 +41,19 @@ QueueUpstream::QueueUpstream(std::shared_ptr<Reactor> reactor,
         throw std::invalid_argument("upstream queue already has a consumer");
     }
     claimed = true;
+    app_transport_ =
+        std::make_shared<UpstreamQueue>(this->app_tx_queue, this->app_rx_queue,
+                                        this->rx_queue_eviction_counter());
 }
 QueueUpstream::~QueueUpstream()
 {
+    app_transport_->disconnect();
     unbind_callbacks();
     release_claim();
 }
 void QueueUpstream::teardown()
 {
+    app_transport_->disconnect();
     Upstream::teardown();
     release_claim();
 }
@@ -63,6 +68,11 @@ void QueueUpstream::release_claim()
 }
 void QueueUpstream::deliver_datagram(const uint8_t* data, size_t len)
 {
+    deliver_owned_datagram(bfc::shared_sized_buffer::copy_from(data, len));
+}
+void QueueUpstream::deliver_owned_datagram(bfc::shared_sized_buffer packet)
+{
+    const size_t len = packet.size();
     std::lock_guard<std::mutex> lock(rx_counters_mu);
     ++stored_rx_counters.delivery_attempts;
     const auto capacity = app_rx_queue->capacity();
@@ -71,11 +81,12 @@ void QueueUpstream::deliver_datagram(const uint8_t* data, size_t len)
         ++stored_rx_counters.send_errors;
         return;
     }
-    if (app_rx_queue->push(bfc::shared_sized_buffer::copy_from(data, len)) >=
-        capacity)
+    if (app_rx_queue->push(std::move(packet)) >= capacity)
     {
         ++stored_rx_counters.queue_evictions;
+        ++app_transport_->rx_evictions;
     }
+    ++app_transport_->rx_packets;
     ++stored_rx_counters.accepted_packets;
     stored_rx_counters.accepted_bytes += len;
 }

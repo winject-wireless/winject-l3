@@ -206,6 +206,17 @@ std::shared_ptr<Upstream> App::construct_upstream(
     auto cv = bfc::cv_reactor_registry::get_instance().get(uc.reactor);
     auto app_tx_queue = Registry::get_instance().get(uc.endpoint.rx);
     auto app_rx_queue = Registry::get_instance().get(uc.endpoint.tx);
+    // No registry names: L3 owns the queues and publishes them through
+    // on_upstream_queue (Config::validate requires the callback).
+    if (uc.endpoint.rx.empty() && uc.endpoint.tx.empty() &&
+        uc.reactor.empty() && cfg.on_upstream_queue)
+    {
+        cv = upstream_reactor;
+        app_tx_queue = std::make_shared<ReactiveLossyQueue>();
+        app_rx_queue = std::make_shared<ReactiveLossyQueue>();
+        app_tx_queue->set_capacity(uc.rx_queue_capacity);
+        app_rx_queue->set_capacity(uc.rx_queue_capacity);
+    }
     auto up = std::make_shared<QueueUpstream>(cv, uc, tx_queue, app_tx_queue,
                                               app_rx_queue);
     if (resume)
@@ -213,6 +224,10 @@ std::shared_ptr<Upstream> App::construct_upstream(
         up->resume_tx_sequences(*resume);
     }
     up->bind_callbacks();
+    if (cfg.on_upstream_queue)
+    {
+        cfg.on_upstream_queue(uc.index, up->app_transport());
+    }
     return up;
 }
 

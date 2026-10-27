@@ -1,6 +1,8 @@
 #ifndef WINJECT_MANAGER_CONFIG_H_
 #define WINJECT_MANAGER_CONFIG_H_
 
+#include <functional>
+#include <memory>
 #include <netinet/in.h>
 #include <stdint.h>
 #include <string>
@@ -9,6 +11,8 @@
 
 namespace winject
 {
+
+class UpstreamQueue;
 
 enum class UpstreamMode
 {
@@ -119,6 +123,10 @@ struct Config
     // Bind address for commands; replies go to the sender.
     std::string console_in;
     std::vector<UpstreamConfig> upstreams;
+    // Empty queue endpoint names: L3 creates the app transport and publishes
+    // it.
+    std::function<void(size_t, std::shared_ptr<UpstreamQueue>)>
+        on_upstream_queue;
 
     bool load(const std::string& path, std::string* error);
     // Checks a Config already in memory (a parsed file or one filled in by

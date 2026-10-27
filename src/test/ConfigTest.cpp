@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "endpoint/UpstreamQueue.h"
 
 #include <arpa/inet.h>
 #include <cstdio>
@@ -747,6 +748,35 @@ TEST(ConfigTest, ValidateAcceptsFilledStruct)
     cfg.radio_device.dplane = {};
     EXPECT_FALSE(cfg.validate(&err));
     EXPECT_NE(err.find("dplane"), std::string::npos);
+}
+
+TEST(ConfigTest, ValidateOwnedQueueNeedsCallback)
+{
+    Config cfg;
+    cfg.domain = 0xb00b;
+    cfg.modulation = "OFDM_24M";
+    cfg.radio_device.mplane.sin_family = AF_INET;
+    cfg.radio_device.mplane.sin_port = htons(22);
+    cfg.radio_device.mplane.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    cfg.radio_device.dplane = cfg.radio_device.mplane;
+    cfg.radio_device.dplane.sin_port = htons(9000);
+    UpstreamConfig u;
+    u.index = 1;
+    u.mode = UpstreamMode::queue;
+    u.bus_tx = 0xd4;
+    u.bus_rx = 0xc3;
+    cfg.upstreams.push_back(u);
+    std::string err;
+    EXPECT_FALSE(cfg.validate(&err));  // no names and nobody to own the queue
+    cfg.on_upstream_queue = [](size_t, std::shared_ptr<UpstreamQueue>) {};
+    EXPECT_TRUE(cfg.validate(&err)) << err;
+    cfg.upstreams[0].endpoint.rx = "partial";
+    EXPECT_FALSE(cfg.validate(&err));  // partly named is not owned
+    cfg.upstreams[0].endpoint.tx = "partial";
+    cfg.upstreams[0].reactor = "reactor";
+    EXPECT_FALSE(cfg.validate(&err));  // named endpoints still must differ
+    cfg.upstreams[0].endpoint.tx = "other";
+    EXPECT_TRUE(cfg.validate(&err)) << err;
 }
 
 TEST(ConfigTest, LoadsQueueForwarding)
