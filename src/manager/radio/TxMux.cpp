@@ -76,7 +76,7 @@ void TxMux::set_phy_mode(const PhyMode& mode)
         std::lock_guard<std::mutex> lock(table.mutex());
         phy = mode;
         gap_us = phy_default_gap_us(mode);
-        pacing_credit_us = frame_interval_us(k_pacing_full_psdu_bytes) * 2;
+        update_pacing_credit_locked();
         next_tx_at = std::chrono::steady_clock::now();
         LOG_INF("tx pacing: (%" PRIu32 "us+%" PRIu32 "us)/%" PRIu32
                 "%% = %" PRIu32 "us per full frame",
@@ -85,6 +85,18 @@ void TxMux::set_phy_mode(const PhyMode& mode)
                 frame_interval_us(k_pacing_full_psdu_bytes));
     }
     request_tick();
+}
+
+// Catch-up a late wakeup may claim. Two full frames, or three timer steps on
+// a coarse reactor: waits are rounded up to a step there, and a FreeRTOS
+// condition variable sleeps one tick more, so wakeups come up to ~2 steps
+// apart. With less credit than that gap the schedule's lag is clamped and the
+// missed intervals are lost, so TX runs below the paced rate.
+void TxMux::update_pacing_credit_locked()
+{
+    pacing_credit_us = static_cast<uint32_t>(
+        std::max<uint64_t>(frame_interval_us(k_pacing_full_psdu_bytes) * 2ULL,
+                           reactor_step_us * 3));
 }
 
 uint32_t TxMux::frame_interval_us(size_t psdu_bytes) const
@@ -301,7 +313,7 @@ bool TxMux::emit_mpdu(size_t primary, std::vector<size_t>& schedule_shares)
     }
     // Whole frame on air: MPDU + 4-byte FCS.
     const uint32_t interval_us = frame_interval_us(mpdu_len + 4);
-    // Up to two full-frame intervals missed by a late wakeup are made up.
+    // Intervals missed by a late wakeup are made up to pacing_credit_us.
     const auto floor_time = now - std::chrono::microseconds(pacing_credit_us);
     next_tx_at = std::max(next_tx_at, floor_time) +
                   std::chrono::microseconds(interval_us);
@@ -474,6 +486,11 @@ void TxMux::start_on(uint64_t timer_step_us, Wake wake, Arm arm, Cancel cancel)
         state->cancel = std::move(cancel);
         state->timer_step_us = std::max<uint64_t>(1, timer_step_us);
         reactor_state = std::move(state);
+    }
+    {
+        std::lock_guard<std::mutex> lock(table.mutex());
+        reactor_step_us = std::max<uint64_t>(1, timer_step_us);
+        update_pacing_credit_locked();
     }
     request_tick();  // also discovers data queued before the reactor was bound
 }
