@@ -91,7 +91,7 @@ Procedure for a new connection:
 
 | Request | Description | Response |
 |---|---|---|
-| `list_upstream_rx_stat\|lur [ids=<u8>,...]` | RX counters per upstream | `N=<count> T=<epoch µs>`, then per upstream: `upstream_rx_stat id=<u8> rxbyt=<u64> rxpkt=<u64> rx_oversize=<u64> rxgap=<u64> fec=... fec_rec=<u64> fec_lost=<u64> fec_rxbyt=<u64> fec_rxpkt=<u64> fec_rxgap=<u64>` |
+| `list_upstream_rx_stat\|lur [ids=<u8>,...]` | RX counters per upstream | `N=<count> T=<epoch µs>`, then per upstream: `upstream_rx_stat id=<u8> rxbyt=<u64> rxpkt=<u64> rx_oversize=<u64> rxgap=<u64> fec=... fec_rec=<u64> fec_lost=<u64> fec_rxbyt=<u64> fec_rxpkt=<u64> fec_rxgap=<u64> rx_push_drop=<u64>` (queue mode: deliveries that evicted the oldest datagram from the app RX queue; 0 otherwise) |
 | `list_upstream_tx_stat\|lut [ids=<u8>,...]` | TX counters per upstream, including what is still queued | `N=<count> T=<epoch µs>`, then per upstream: `upstream_tx_stat id=<u8> txbyt=<u64> txpkt=<u64> fec=... fec_txbyt=<u64> fec_txpkt=<u64> tx_pending_byt=<u64> tx_pending_pkt=<u64>` |
 | `get_metrics\|gm [keys=<key>,...]` | Snapshot of manager and d-plane counters (§ `get_metrics` keys), optionally filtered by a comma-separated key list | `N=<count> T=<epoch µs>`, then one `key=value` line per metric |
 

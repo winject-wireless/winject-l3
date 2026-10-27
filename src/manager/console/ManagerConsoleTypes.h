@@ -60,6 +60,9 @@ struct ManagerUpstreamRxStatView
     uint64_t fec_rxbyt = 0;
     uint64_t fec_rxpkt = 0;
     uint64_t fec_rxgap = 0;
+    // Queue mode: deliveries that evicted the oldest datagram from the app's
+    // RX queue (the app did not drain it in time). 0 for other modes.
+    uint64_t rx_push_drop = 0;
 };
 
 struct ManagerUpstreamTxStatView
