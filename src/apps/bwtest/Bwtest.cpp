@@ -152,6 +152,16 @@ void Bwtest::clear()
     rcv_byt_.store(0);
 }
 
+bool Bwtest::add_command(const std::string& name, Command command)
+{
+    if (name == "test_send" || name == "stats" || name == "clr" || !command)
+    {
+        return false;
+    }
+    commands_[name] = std::move(command);
+    return true;
+}
+
 std::string Bwtest::handle_command(const std::string& line)
 {
     std::istringstream in(line);
@@ -192,7 +202,24 @@ std::string Bwtest::handle_command(const std::string& line)
         clear();
         return "ok\n";
     }
-    return "error unknown command (test_send, stats, clr)\n";
+    const auto it = commands_.find(cmd);
+    if (it != commands_.end())
+    {
+        std::string args;
+        std::getline(in >> std::ws, args);
+        while (!args.empty() && (args.back() == '\n' || args.back() == '\r' ||
+                                 args.back() == ' '))
+        {
+            args.pop_back();
+        }
+        return it->second(args);
+    }
+    std::string known = "test_send, stats, clr";
+    for (const auto& entry : commands_)
+    {
+        known += ", " + entry.first;
+    }
+    return "error unknown command (" + known + ")\n";
 }
 
 int main(const Config& config)
@@ -229,6 +256,14 @@ int main(const Config& config)
 
     g_stop.store(false);
     Bwtest bwtest(config.upstream, config.payload_bytes);
+    for (const auto& entry : config.commands)
+    {
+        if (!bwtest.add_command(entry.first, entry.second))
+        {
+            fprintf(stderr, "bwtest: command %s ignored\n",
+                    entry.first.c_str());
+        }
+    }
     std::thread receiver(
         [&bwtest]
         {

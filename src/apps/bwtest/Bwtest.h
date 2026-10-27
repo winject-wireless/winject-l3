@@ -6,6 +6,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -18,6 +20,10 @@
 namespace app_bwtest
 {
 
+// An app command on the tester's console: gets the text after the command
+// name, returns the reply (newline-terminated).
+using Command = std::function<std::string(const std::string& args)>;
+
 struct Config
 {
     std::shared_ptr<winject::UpstreamQueue> upstream;
@@ -25,6 +31,9 @@ struct Config
     std::string console = "0.0.0.0:5100";
     // Datagram size; at most winject::k_stream_payload_max.
     size_t payload_bytes = 1400;
+    // Extra console commands from the host app (e.g. video_start). Names of
+    // the tester's own commands are ignored.
+    std::map<std::string, Command> commands;
 };
 
 struct Stats
@@ -56,6 +65,8 @@ public:
     size_t poll_receive();
     Stats stats() const;
     void clear();
+    // Adds an app command; false (and ignored) for a built-in name.
+    bool add_command(const std::string& name, Command command);
     // One console command in, its reply out (newline-terminated).
     std::string handle_command(const std::string& line);
 
@@ -77,6 +88,7 @@ private:
     std::atomic<uint64_t> rcv_pkt_{0};
     std::atomic<uint64_t> rcv_byt_{0};
     uint32_t send_seq_ = 0;
+    std::map<std::string, Command> commands_;
 };
 
 // Runs the console and the receive poller until stop(). Blocks; returns 0,

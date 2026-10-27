@@ -117,3 +117,27 @@ TEST_F(BwtestTest, ConsoleCommands)
     EXPECT_EQ(bw->handle_command("stats"),
               "snd_pkt 50\nsnd_byt 5000\nsnd_drop 0\nrcv_pkt 0\nrcv_byt 0\n");
 }
+
+TEST_F(BwtestTest, AppCommands)
+{
+    make(16);
+    std::string got;
+    EXPECT_TRUE(bw->add_command("video_stop",
+                                [&got](const std::string& args)
+                                {
+                                    got = args;
+                                    return std::string("ok\n");
+                                }));
+    EXPECT_FALSE(bw->add_command("clr",
+                                 [](const std::string&)
+                                 {
+                                     return std::string("x\n");
+                                 }));
+    EXPECT_EQ(bw->handle_command("video_stop now \r\n"), "ok\n");
+    EXPECT_EQ(got, "now");
+    EXPECT_EQ(bw->handle_command("video_stop"), "ok\n");
+    EXPECT_EQ(got, "");
+    EXPECT_EQ(bw->handle_command("clr"), "ok\n");
+    EXPECT_EQ(bw->handle_command("nope"),
+              "error unknown command (test_send, stats, clr, video_stop)\n");
+}
