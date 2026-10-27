@@ -159,6 +159,10 @@ protected:
              std::shared_ptr<ReactiveLossyQueue> app_tx_queue = {});
     // Executed only by the supplied CV reactor, including FEC timer delivery.
     virtual void deliver_datagram(const uint8_t* data, size_t len) = 0;
+    virtual void deliver_owned_datagram(bfc::shared_sized_buffer packet)
+    {
+        deliver_datagram(packet.u8(), packet.size());
+    }
     void unbind_callbacks();
     // False once teardown starts: a handler already dispatched stops early.
     bool active() const

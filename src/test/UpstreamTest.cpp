@@ -144,6 +144,67 @@ TEST_F(UpstreamTest, SharedOwnershipAndQueueOnlyRadioInterface)
     EXPECT_EQ(bytes(*received), (std::vector<uint8_t>{1, 2, 3}));
     EXPECT_EQ(up->rx_counters().accepted_packets, 1u);
 }
+TEST_F(UpstreamTest, RadioRxReachesAppWithoutCopy)
+{
+    create_queue();
+    constexpr size_t payload_size = 1003;
+    const size_t size = LCHeader::k_len + payload_size;
+    auto* storage = new std::byte[size];
+    auto* wire = reinterpret_cast<uint8_t*>(storage);
+    LCHeader::write(wire, 7, 1, false);
+    for (size_t i = 0; i < payload_size; ++i)
+    {
+        wire[LCHeader::k_len + i] = uint8_t(i);
+    }
+    std::atomic<unsigned> released{0};
+    up->rx_queue()->push(Packet::adopt(storage, size, size,
+                                       [&](std::byte* p)
+                                       {
+                                           ++released;
+                                           delete[] p;
+                                       }));
+    pump_cv();
+    auto transport =
+        std::static_pointer_cast<QueueUpstream>(up)->app_transport();
+    auto received = transport->receive();
+    ASSERT_TRUE(received);
+    ASSERT_EQ(received->size(), payload_size);
+    EXPECT_EQ(received->u8(), wire + LCHeader::k_len);  // same radio buffer
+    EXPECT_EQ(up->rx_counters().accepted_packets, 1u);
+    EXPECT_EQ(up->rx_counters().accepted_bytes, payload_size);
+    EXPECT_EQ(up->app_rx_packets(), 1u);
+    EXPECT_EQ(transport->rx_packets, 1u);
+    up->teardown();
+    up.reset();
+    EXPECT_EQ(released, 0u);  // the app still holds the payload
+    for (size_t i = 0; i < payload_size; ++i)
+    {
+        ASSERT_EQ(received->u8()[i], uint8_t(i));
+    }
+    received.reset();
+    EXPECT_EQ(released, 1u);
+}
+TEST_F(UpstreamTest, AppTransportSendsUntilTeardown)
+{
+    create_queue();
+    auto transport =
+        std::static_pointer_cast<QueueUpstream>(up)->app_transport();
+    const uint8_t data[] = {4, 5};
+    EXPECT_TRUE(transport->connected());
+    EXPECT_FALSE(transport->try_send(data, 0));
+    std::vector<uint8_t> oversize(k_stream_payload_max + 1);
+    EXPECT_FALSE(transport->try_send(oversize.data(), oversize.size()));
+    EXPECT_TRUE(transport->try_send(data, sizeof(data)));
+    pump_cv();
+    auto sent = tx->pop();
+    ASSERT_TRUE(sent);
+    EXPECT_EQ(bytes(*sent), bytes(lc_packet(packet({4, 5}), false, 0)));
+    up->teardown();
+    EXPECT_FALSE(transport->connected());
+    EXPECT_FALSE(transport->try_send(data, sizeof(data)));
+    up.reset();
+    EXPECT_FALSE(transport->try_send(data, sizeof(data)));  // handle outlives
+}
 TEST_F(UpstreamTest, AppInputImmediatelyPushesSuppliedTxQueue)
 {
     create_queue();

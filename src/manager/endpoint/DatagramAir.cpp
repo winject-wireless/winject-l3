@@ -16,7 +16,8 @@ bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
                         DeliverApp deliver_app,
                         std::shared_ptr<Reactor> reactor,
                         const UpstreamConfig& cfg, uint8_t route_bus,
-                        UpstreamStats* tx_stats, std::mutex* tx_stats_mu)
+                        UpstreamStats* tx_stats, std::mutex* tx_stats_mu,
+                        DeliverOwnedApp deliver_owned_app)
 {
     std::lock_guard<std::mutex> lock(mu);
     stop_locked();
@@ -47,6 +48,7 @@ bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
     this->tx_stats = tx_stats;
     this->tx_stats_mu = tx_stats_mu;
     this->deliver_app = std::move(deliver_app);
+    this->deliver_owned_app = std::move(deliver_owned_app);
     return true;
 }
 
@@ -65,6 +67,7 @@ void DatagramAir::stop_locked()
     tx_stats = nullptr;
     tx_stats_mu = nullptr;
     deliver_app = nullptr;
+    deliver_owned_app = nullptr;
 }
 
 void DatagramAir::push_tx(const uint8_t* data, size_t len, bool is_fec)
@@ -145,7 +148,19 @@ void DatagramAir::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
     }
     if (!is_fec)
     {
-        deliver(pkt.u8(), pkt.size());
+        if (!deliver_owned_app)
+        {
+            deliver(pkt.u8(), pkt.size());
+            return;
+        }
+        // Hand the radio buffer on without a copy.
+        if (pkt.size() == 0)
+        {
+            return;
+        }
+        app_rx_bytes_acc.fetch_add(pkt.size(), std::memory_order_relaxed);
+        app_rx_packets_acc.fetch_add(1, std::memory_order_relaxed);
+        deliver_owned_app(std::move(pkt));
         return;
     }
     fec_air_rx_bytes_acc.fetch_add(pkt.size(), std::memory_order_relaxed);

@@ -33,7 +33,11 @@ Upstream::Upstream(std::shared_ptr<Reactor> reactor,
                 deliver_datagram(p, n);
             },
             this->reactor, upstream_config, upstream_config.bus_tx,
-            &upstream_stats, &stats_mu))
+            &upstream_stats, &stats_mu,
+            [this](bfc::shared_sized_buffer packet)
+            {
+                deliver_owned_datagram(std::move(packet));
+            }))
     {
         throw std::invalid_argument("invalid upstream FEC configuration");
     }

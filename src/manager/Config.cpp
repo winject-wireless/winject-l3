@@ -622,13 +622,16 @@ bool Config::validate(std::string* error) const
         }
         if (u.mode == UpstreamMode::queue)
         {
-            if (u.endpoint.rx.empty() || u.endpoint.tx.empty() ||
-                u.reactor.empty())
+            const bool owned_queue = on_upstream_queue &&
+                                     u.endpoint.rx.empty() &&
+                                     u.endpoint.tx.empty() && u.reactor.empty();
+            if (!owned_queue && (u.endpoint.rx.empty() ||
+                                 u.endpoint.tx.empty() || u.reactor.empty()))
             {
                 return fail("upstream-" + std::to_string(i) +
                             " needs rx, tx, and reactor");
             }
-            if (u.endpoint.rx == u.endpoint.tx)
+            if (!owned_queue && u.endpoint.rx == u.endpoint.tx)
             {
                 return fail("upstream-" + std::to_string(i) +
                             " rx and tx must differ");
@@ -727,6 +730,12 @@ bool Config::validate_upstreams(const std::vector<UpstreamConfig>& upstreams,
     for (const auto& u : upstreams)
     {
         if (u.mode != UpstreamMode::queue)
+        {
+            continue;
+        }
+        // Owned queues have no registry names. Config::validate requires the
+        // on_upstream_queue callback before this shared bus/queue validation.
+        if (u.endpoint.rx.empty() && u.endpoint.tx.empty() && u.reactor.empty())
         {
             continue;
         }
