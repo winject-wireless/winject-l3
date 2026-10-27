@@ -94,9 +94,12 @@ void TxMux::set_phy_mode(const PhyMode& mode)
 // missed intervals are lost, so TX runs below the paced rate.
 void TxMux::update_pacing_credit_locked()
 {
+    // start() may run before set_phy_mode(); an unset PhyMode has no rate.
+    const uint64_t frames_us =
+        phy.rate_kbps != 0 ? frame_interval_us(k_pacing_full_psdu_bytes) * 2ULL
+                           : 0;
     pacing_credit_us = static_cast<uint32_t>(
-        std::max<uint64_t>(frame_interval_us(k_pacing_full_psdu_bytes) * 2ULL,
-                           reactor_step_us * 3));
+        std::max<uint64_t>(frames_us, reactor_step_us * 3));
 }
 
 uint32_t TxMux::frame_interval_us(size_t psdu_bytes) const

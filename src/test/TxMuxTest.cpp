@@ -462,8 +462,11 @@ TEST(TxMuxTest, CoarseTimerUsesReportedStepAndKeepsPacedThroughput)
     // About 90 full SDUs fit in 60 ms; one per millisecond would deliver ~60.
     // Allow scheduling noise, while catching that throughput regression.
     const size_t expected = std::min<size_t>(100, elapsed / 669 + 1);
+    // The schedule starts at set_phy_mode(), before start(): the first wakeup
+    // may make up that lag up to the 3 ms credit (3 coarse steps).
+    const size_t credit_frames = 3000 / 669 + 1;
     EXPECT_GE(h.received_count() * 4, expected * 3);
-    EXPECT_LE(h.received_count(), expected + 2);
+    EXPECT_LE(h.received_count(), expected + credit_frames + 2);
     EXPECT_GT(coarse.timer.positive_arms, 0u);
     EXPECT_EQ(coarse.timer.sub_step_arms, 0u);
 }
