@@ -782,12 +782,12 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             char fec_buf[32];
             console_format_fec_display(s.fec, s.fec_k, s.fec_n, fec_buf,
                                        sizeof(fec_buf));
-            char line[320];
+            char line[512];
             snprintf(line, sizeof(line),
                      "upstream_rx_stat id=%u rxbyt=%llu rxpkt=%llu "
                      "rx_oversize=%llu rxgap=%llu "
                      "fec=%s fec_rec=%llu fec_lost=%llu fec_rxbyt=%llu "
-                     "fec_rxpkt=%llu fec_rxgap=%llu",
+                     "fec_rxpkt=%llu fec_rxgap=%llu rx_push_drop=%llu",
                      static_cast<unsigned>(s.id),
                      static_cast<unsigned long long>(s.rxbyt),
                      static_cast<unsigned long long>(s.rxpkt),
@@ -797,7 +797,8 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
                      static_cast<unsigned long long>(s.fec_lost),
                      static_cast<unsigned long long>(s.fec_rxbyt),
                      static_cast<unsigned long long>(s.fec_rxpkt),
-                     static_cast<unsigned long long>(s.fec_rxgap));
+                     static_cast<unsigned long long>(s.fec_rxgap),
+                     static_cast<unsigned long long>(s.rx_push_drop));
             body += '\n';
             body += line;
         }
@@ -831,7 +832,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             char fec_buf[32];
             console_format_fec_display(s.fec, s.fec_k, s.fec_n, fec_buf,
                                        sizeof(fec_buf));
-            char line[320];
+            char line[512];
             snprintf(line, sizeof(line),
                      "upstream_tx_stat id=%u txbyt=%llu txpkt=%llu fec=%s "
                      "fec_txbyt=%llu fec_txpkt=%llu tx_pending_byt=%llu "

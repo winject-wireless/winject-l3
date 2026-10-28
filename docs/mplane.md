@@ -91,7 +91,7 @@ Procedure for a new connection:
 
 | Request | Description | Response |
 |---|---|---|
-| `list_upstream_rx_stat\|lur [ids=<u8>,...]` | RX counters per upstream | `N=<count> T=<epoch µs>`, then per upstream: `upstream_rx_stat id=<u8> rxbyt=<u64> rxpkt=<u64> rx_oversize=<u64> rxgap=<u64> fec=... fec_rec=<u64> fec_lost=<u64> fec_rxbyt=<u64> fec_rxpkt=<u64> fec_rxgap=<u64>` |
+| `list_upstream_rx_stat\|lur [ids=<u8>,...]` | RX counters per upstream | `N=<count> T=<epoch µs>`, then per upstream: `upstream_rx_stat id=<u8> rxbyt=<u64> rxpkt=<u64> rx_oversize=<u64> rxgap=<u64> fec=... fec_rec=<u64> fec_lost=<u64> fec_rxbyt=<u64> fec_rxpkt=<u64> fec_rxgap=<u64> rx_push_drop=<u64>` (queue mode: deliveries that evicted the oldest datagram from the app RX queue; 0 otherwise) |
 | `list_upstream_tx_stat\|lut [ids=<u8>,...]` | TX counters per upstream, including what is still queued | `N=<count> T=<epoch µs>`, then per upstream: `upstream_tx_stat id=<u8> txbyt=<u64> txpkt=<u64> fec=... fec_txbyt=<u64> fec_txpkt=<u64> tx_pending_byt=<u64> tx_pending_pkt=<u64>` |
 | `get_metrics\|gm [keys=<key>,...]` | Snapshot of manager and d-plane counters (§ `get_metrics` keys), optionally filtered by a comma-separated key list | `N=<count> T=<epoch µs>`, then one `key=value` line per metric |
 
@@ -237,7 +237,7 @@ TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airt
 | `upstream-N.fec.k`, `upstream-N.fec.n` | Data and total shards per block (`1 ≤ k < n ≤ 31`; 5-bit fields in the shard header) |
 | `upstream-N.fec.timeout_ms` | Close a partial block after this long (default 20; zero disables automatic closing) |
 
-Server mode has `rx` only, client mode `tx` only, static mode both. `QUEUE_FORWARDING` has `rx`, `tx`, and `reactor`: `rx` and `tx` are queue names. The host registers both queues (nonzero capacity, distinct objects) on `bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>` and the reactor on `bfc::cv_reactor_registry` before the manager opens the upstream. The manager does not create or stop them. Each queue has one consumer. `add_upstream` remains a UDP upstream. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).
+Server mode has `rx` only, client mode `tx` only, static mode both. `QUEUE_FORWARDING` has `rx`, `tx`, and `reactor`: `rx` and `tx` are queue names. The host registers both queues (nonzero capacity, distinct objects) on `bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>` and the reactor on `bfc::cv_reactor_registry` before the manager opens the upstream. The manager does not create or stop them. Each queue has one consumer. With none of `rx`, `tx`, and `reactor`, the queues are L3-owned: the manager creates them (`rx_queue_capacity` each) and hands the host an `UpstreamQueue` through `Config::on_upstream_queue`, which the host sets before `Config::load` (validation fails without it). In-process apps such as `app_bwtest` (`idf/app_bwtest`) use this. `add_upstream` remains a UDP upstream. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).
 
 ### Legacy and removed keys
 

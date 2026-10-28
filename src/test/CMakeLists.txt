@@ -52,6 +52,8 @@ add_executable(winject-tests
     MetricsRegistryTest.cpp
     TxMuxTest.cpp
     OneShotTimerTest.cpp
+    BwtestTest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/bwtest/Bwtest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/App.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioManager.cpp

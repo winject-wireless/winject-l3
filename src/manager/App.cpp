@@ -636,6 +636,7 @@ bool App::console_list_upstream_rx_stat(
             row.fec_lost = endpoint->fec_decode_fail();
             row.fec_rxbyt = endpoint->fec_air_rx_bytes();
             row.fec_rxpkt = endpoint->fec_air_rx_packets();
+            row.rx_push_drop = endpoint->rx_counters().queue_evictions;
         }
         uint64_t gap = 0;
         if (radio_upstream_table.peek_seq_lost(index, &gap))

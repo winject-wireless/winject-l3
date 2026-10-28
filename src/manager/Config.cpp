@@ -306,7 +306,8 @@ bool Config::load(const std::string& path, std::string* error)
             radio_device.reactor.empty())
         {
             *error =
-                "radio.dplane_tx, radio.dplane_rx and radio.reactor go together";
+                "radio.dplane_tx, radio.dplane_rx and radio.reactor go "
+                "together";
             return false;
         }
         if (parser.arg("radio.dplane"))
@@ -484,13 +485,17 @@ bool Config::load(const std::string& path, std::string* error)
             parser.arg(key_of(i, "reactor")).value_or("");
         if (mode == UpstreamMode::queue)
         {
-            if (rx.empty() || tx.empty() || queue_reactor.empty())
+            // None of the three: an L3-owned queue, which validate() accepts
+            // only with on_upstream_queue set.
+            const bool owned =
+                rx.empty() && tx.empty() && queue_reactor.empty();
+            if (!owned && (rx.empty() || tx.empty() || queue_reactor.empty()))
             {
                 *error = "upstream-" + std::to_string(i) +
-                         " needs rx, tx, and reactor";
+                         " needs rx, tx, and reactor, or none (L3-owned)";
                 return false;
             }
-            if (rx == tx)
+            if (!owned && rx == tx)
             {
                 *error =
                     "upstream-" + std::to_string(i) + " rx and tx must differ";
