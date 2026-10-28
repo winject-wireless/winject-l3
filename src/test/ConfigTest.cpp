@@ -814,6 +814,54 @@ upstream-0.fec.n            = 12
     std::remove(path.c_str());
 }
 
+TEST(ConfigTest, LoadsOwnedQueueWithCallback)
+{
+    const std::string path = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = QUEUE_FORWARDING
+upstream-0.tx_bus           = f6
+upstream-0.rx_bus           = e5
+upstream-0.scheduler_budget = 100
+)");
+    std::string err;
+    Config without;
+    EXPECT_FALSE(without.load(path, &err));  // nobody to own the queue
+    Config cfg;
+    cfg.on_upstream_queue = [](size_t, std::shared_ptr<UpstreamQueue>) {};
+    ASSERT_TRUE(cfg.load(path, &err)) << err;
+    ASSERT_EQ(cfg.upstreams.size(), 1u);
+    EXPECT_EQ(cfg.upstreams[0].mode, UpstreamMode::queue);
+    EXPECT_TRUE(cfg.upstreams[0].endpoint.rx.empty());
+    EXPECT_TRUE(cfg.upstreams[0].endpoint.tx.empty());
+    EXPECT_TRUE(cfg.upstreams[0].reactor.empty());
+    std::remove(path.c_str());
+
+    const std::string partial = write_conf(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = QUEUE_FORWARDING
+upstream-0.tx_bus           = f6
+upstream-0.rx_bus           = e5
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = only-rx
+)");
+    Config named;
+    named.on_upstream_queue = cfg.on_upstream_queue;
+    EXPECT_FALSE(named.load(partial, &err));  // partly named is not owned
+    std::remove(partial.c_str());
+}
+
 TEST(ConfigTest, RejectsQueueInKey)
 {
     const std::string path = write_conf(R"(
