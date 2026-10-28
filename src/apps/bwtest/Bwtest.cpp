@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <arpa/inet.h>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <netinet/in.h>
@@ -25,6 +26,11 @@ std::atomic<bool> g_stop{false};
 // clock, so a longer tick (ESP-IDF rounds up to FreeRTOS ticks) only makes
 // the bursts bigger, not the rate lower.
 constexpr auto k_tick = std::chrono::milliseconds(1);
+// Receive poll interval while the queue is empty. Counting is all the
+// receiver does, so a longer wait only batches the drain; the upstream queue
+// holds far more than 10 ms of test traffic. An idle tester (the usual state)
+// then costs a wakeup per 10 ms instead of per tick.
+constexpr auto k_rx_idle = std::chrono::milliseconds(10);
 
 }  // namespace
 
@@ -271,7 +277,7 @@ int main(const Config& config)
             {
                 if (bwtest.poll_receive() == 0)
                 {
-                    std::this_thread::sleep_for(k_tick);
+                    std::this_thread::sleep_for(k_rx_idle);
                 }
             }
         });
@@ -287,6 +293,12 @@ int main(const Config& config)
                      reinterpret_cast<sockaddr*>(&from), &from_len);
         if (n <= 0)
         {
+            // A timeout wakes the loop to check stop(); any other error
+            // would repeat at once, so back off instead of spinning.
+            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
             continue;
         }
         buf[n] = '\0';
