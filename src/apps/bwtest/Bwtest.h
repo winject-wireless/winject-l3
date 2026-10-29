@@ -29,12 +29,16 @@ struct Config
     std::shared_ptr<winject::UpstreamQueue> upstream;
     // UDP console, one command per datagram, reply to the sender.
     std::string console = "0.0.0.0:5100";
-    // Datagram size; at most winject::k_stream_payload_max.
+    // Datagram size including timestamp header; 16..k_stream_payload_max.
     size_t payload_bytes = 1400;
     // Extra console commands from the host app (e.g. video_start). Names of
     // the tester's own commands are ignored.
     std::map<std::string, Command> commands;
 };
+
+// Timestamped packets need a 16-byte header. Clocks must share Unix time.
+constexpr size_t k_timestamp_header_bytes = 16;
+using NowUs = std::function<int64_t()>;
 
 struct Stats
 {
@@ -46,19 +50,25 @@ struct Stats
     uint64_t snd_drop = 0;
     uint64_t rcv_pkt = 0;
     uint64_t rcv_byt = 0;
+    uint64_t lat_samples = 0;
+    uint64_t lat_invalid = 0; // legacy/short packets or future/zero timestamps
+    uint64_t lat_last_us = 0;
+    uint64_t lat_min_us = 0;
+    uint64_t lat_avg_us = 0;
+    uint64_t lat_max_us = 0;
 };
 
 class Bwtest
 {
 public:
     Bwtest(std::shared_ptr<winject::UpstreamQueue> upstream,
-           size_t payload_bytes);
+           size_t payload_bytes, NowUs now_us = {});
     ~Bwtest();
     Bwtest(const Bwtest&) = delete;
     Bwtest& operator=(const Bwtest&) = delete;
 
     // Starts a send of offer_kbps for duration_ms on its own thread. False
-    // when a send is running or an argument is 0.
+    // when a send is running, an argument is 0, or payload size is invalid.
     bool start_send(uint32_t offer_kbps, uint32_t duration_ms);
     bool sending() const;
     // Drains the upstream's receive queue once; returns datagrams taken.
@@ -88,6 +98,10 @@ private:
     std::atomic<uint64_t> rcv_pkt_{0};
     std::atomic<uint64_t> rcv_byt_{0};
     uint32_t send_seq_ = 0;
+    NowUs now_us_;
+    mutable std::mutex latency_mu_;
+    Stats latency_;
+    uint64_t latency_sum_us_ = 0;
     std::map<std::string, Command> commands_;
 };
 
