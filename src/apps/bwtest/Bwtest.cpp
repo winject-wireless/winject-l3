@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <netinet/in.h>
 #include <sstream>
 #include <sys/socket.h>
@@ -26,18 +27,25 @@ std::atomic<bool> g_stop{false};
 // clock, so a longer tick (ESP-IDF rounds up to FreeRTOS ticks) only makes
 // the bursts bigger, not the rate lower.
 constexpr auto k_tick = std::chrono::milliseconds(1);
-// Receive poll interval while the queue is empty. Counting is all the
-// receiver does, so a longer wait only batches the drain; the upstream queue
-// holds far more than 10 ms of test traffic. An idle tester (the usual state)
-// then costs a wakeup per 10 ms instead of per tick.
+// Receive poll interval while the queue is empty. An idle tester costs one
+// wakeup per 10 ms instead of per tick. Latency is measured at queue drain,
+// so it includes this polling delay as well as receiver scheduling.
 constexpr auto k_rx_idle = std::chrono::milliseconds(10);
 
 }  // namespace
 
 Bwtest::Bwtest(std::shared_ptr<winject::UpstreamQueue> upstream,
-               size_t payload_bytes)
-    : upstream_(std::move(upstream)), payload_bytes_(payload_bytes)
+               size_t payload_bytes, NowUs now_us)
+    : upstream_(std::move(upstream)), payload_bytes_(payload_bytes),
+      now_us_(std::move(now_us))
 {
+    if (!now_us_)
+    {
+        now_us_ = [] {
+            return std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+        };
+    }
     clear();
 }
 
@@ -53,7 +61,9 @@ Bwtest::~Bwtest()
 
 bool Bwtest::start_send(uint32_t offer_kbps, uint32_t duration_ms)
 {
-    if (offer_kbps == 0 || duration_ms == 0)
+    if (offer_kbps == 0 || duration_ms == 0 ||
+        payload_bytes_ < k_timestamp_header_bytes ||
+        payload_bytes_ > winject::k_stream_payload_max)
     {
         return false;
     }
@@ -85,6 +95,8 @@ void Bwtest::run_send(uint32_t offer_kbps, uint32_t duration_ms)
 {
     using clock = std::chrono::steady_clock;
     std::vector<uint8_t> payload(payload_bytes_, 0);
+    // Versioned wire header: BWT1, sequence LE32, Unix timestamp LE64.
+    std::memcpy(payload.data(), "BWT1", 4);
     const auto start = clock::now();
     const auto end = start + std::chrono::milliseconds(duration_ms);
     // Bits per µs = kbps / 1000, so due datagrams after t µs are
@@ -103,7 +115,12 @@ void Bwtest::run_send(uint32_t offer_kbps, uint32_t duration_ms)
             const uint32_t seq = send_seq_++;
             for (size_t i = 0; i < 4 && i < payload.size(); ++i)
             {
-                payload[i] = static_cast<uint8_t>(seq >> (8 * i));
+                payload[4 + i] = static_cast<uint8_t>(seq >> (8 * i));
+            }
+            const uint64_t timestamp = static_cast<uint64_t>(now_us_());
+            for (size_t i = 0; i < 8; ++i)
+            {
+                payload[8 + i] = static_cast<uint8_t>(timestamp >> (8 * i));
             }
             if (!upstream_->try_send(payload.data(), payload.size()))
             {
@@ -125,6 +142,34 @@ size_t Bwtest::poll_receive()
     size_t count = 0;
     while (auto packet = upstream_->receive())
     {
+        const int64_t now = now_us_();
+        uint64_t timestamp = 0;
+        const auto* bytes = reinterpret_cast<const uint8_t*>(packet->data());
+        const bool header = packet->size() >= k_timestamp_header_bytes &&
+                            std::memcmp(bytes, "BWT1", 4) == 0;
+        if (header)
+        {
+            for (size_t i = 0; i < 8; ++i)
+                timestamp |= uint64_t(bytes[8 + i]) << (8 * i);
+        }
+        {
+            std::lock_guard<std::mutex> lock(latency_mu_);
+            if (!header || !timestamp || now <= 0 || timestamp > uint64_t(now))
+            {
+                ++latency_.lat_invalid;
+            }
+            else
+            {
+                const uint64_t us = uint64_t(now) - timestamp;
+                if (!latency_.lat_samples || us < latency_.lat_min_us)
+                    latency_.lat_min_us = us;
+                latency_.lat_last_us = us;
+                latency_.lat_max_us = std::max(latency_.lat_max_us, us);
+                ++latency_.lat_samples;
+                latency_sum_us_ += us;
+                latency_.lat_avg_us = latency_sum_us_ / latency_.lat_samples;
+            }
+        }
         rcv_pkt_.fetch_add(1);
         rcv_byt_.fetch_add(packet->size());
         ++count;
@@ -139,7 +184,8 @@ uint64_t Bwtest::evictions() const
 
 Stats Bwtest::stats() const
 {
-    Stats s;
+    std::lock_guard<std::mutex> lock(latency_mu_);
+    Stats s = latency_;
     s.snd_pkt = snd_pkt_.load();
     s.snd_byt = snd_byt_.load();
     s.snd_drop = snd_reject_.load() + (evictions() - eviction_base_.load());
@@ -156,6 +202,9 @@ void Bwtest::clear()
     eviction_base_.store(evictions());
     rcv_pkt_.store(0);
     rcv_byt_.store(0);
+    std::lock_guard<std::mutex> lock(latency_mu_);
+    latency_ = {};
+    latency_sum_us_ = 0;
 }
 
 bool Bwtest::add_command(const std::string& name, Command command)
@@ -192,15 +241,22 @@ std::string Bwtest::handle_command(const std::string& line)
     if (cmd == "stats")
     {
         const Stats s = stats();
-        char out[192];
+        char out[512];
         snprintf(out, sizeof(out),
                  "snd_pkt %llu\nsnd_byt %llu\nsnd_drop %llu\nrcv_pkt %llu\n"
-                 "rcv_byt %llu\n",
+                 "rcv_byt %llu\nlat_samples %llu\nlat_invalid %llu\n"
+                 "lat_last_us %llu\nlat_min_us %llu\nlat_avg_us %llu\nlat_max_us %llu\n",
                  static_cast<unsigned long long>(s.snd_pkt),
                  static_cast<unsigned long long>(s.snd_byt),
                  static_cast<unsigned long long>(s.snd_drop),
                  static_cast<unsigned long long>(s.rcv_pkt),
-                 static_cast<unsigned long long>(s.rcv_byt));
+                 static_cast<unsigned long long>(s.rcv_byt),
+                 static_cast<unsigned long long>(s.lat_samples),
+                 static_cast<unsigned long long>(s.lat_invalid),
+                 static_cast<unsigned long long>(s.lat_last_us),
+                 static_cast<unsigned long long>(s.lat_min_us),
+                 static_cast<unsigned long long>(s.lat_avg_us),
+                 static_cast<unsigned long long>(s.lat_max_us));
         return out;
     }
     if (cmd == "clr")
@@ -230,10 +286,10 @@ std::string Bwtest::handle_command(const std::string& line)
 
 int main(const Config& config)
 {
-    if (!config.upstream || config.payload_bytes == 0 ||
+    if (!config.upstream || config.payload_bytes < k_timestamp_header_bytes ||
         config.payload_bytes > winject::k_stream_payload_max)
     {
-        fprintf(stderr, "bwtest: needs an upstream and 1..%zu payload bytes\n",
+        fprintf(stderr, "bwtest: needs an upstream and 16..%zu payload bytes\n",
                 winject::k_stream_payload_max);
         return 1;
     }
