@@ -1,8 +1,8 @@
 #ifndef WINJECT_TEST_CONSOLE_TEST_HELPERS_H_
 #define WINJECT_TEST_CONSOLE_TEST_HELPERS_H_
 
+#include "ControlTypes.h"
 #include "console/ConsoleService.h"
-#include "console/ManagerConsoleTypes.h"
 #include "utils/IOReactor.h"
 
 #include <arpa/inet.h>
@@ -66,10 +66,10 @@ inline bool run_reactor_with_watchdog(IOReactor& reactor,
     return ok;
 }
 
-inline ManagerConsoleHandlers stub_console_handlers()
+inline ControlOps stub_console_handlers()
 {
-    ManagerConsoleHandlers h;
-    h.add_upstream = [](const ManagerUpstreamView&, std::string*) -> bool
+    ControlOps h;
+    h.add_upstream = [](const UpstreamView&, std::string*) -> bool
     {
         return false;
     };
@@ -78,41 +78,40 @@ inline ManagerConsoleHandlers stub_console_handlers()
         return false;
     };
     h.list_upstream = [](const std::vector<uint8_t>&,
-                         std::vector<ManagerUpstreamView>*,
-                         std::string*) -> bool
+                         std::vector<UpstreamView>*, std::string*) -> bool
     {
         return false;
     };
-    h.update_upstream = [](const ManagerUpstreamUpdate&, ManagerUpstreamView*,
+    h.update_upstream = [](const UpstreamUpdate&, UpstreamView*,
                            std::string*) -> bool
     {
         return false;
     };
     h.list_upstream_rx_stat = [](const std::vector<uint8_t>&,
-                                 std::vector<ManagerUpstreamRxStatView>*,
+                                 std::vector<UpstreamRxStatView>*,
                                  std::string*) -> bool
     {
         return false;
     };
     h.list_upstream_tx_stat = [](const std::vector<uint8_t>&,
-                                 std::vector<ManagerUpstreamTxStatView>*,
+                                 std::vector<UpstreamTxStatView>*,
                                  std::string*) -> bool
     {
         return false;
     };
     h.get_metrics = [](const std::vector<std::string>&,
-                       std::vector<ManagerMetricView>*, std::string*) -> bool
+                       std::vector<MetricView>*, std::string*) -> bool
     {
         return false;
     };
-    h.radio_info = [](ManagerConsoleReply) {};
-    h.radio_caps_info = [](ManagerConsoleReply) {};
-    h.radio_stats = [](ManagerConsoleReply) {};
-    h.radio_tx = [](const ManagerRadioUpdate&, ManagerConsoleReply) {};
-    h.radio_reset = [](ManagerConsoleReply) {};
-    h.config_slot = [](uint8_t, ManagerConsoleReply) {};
-    h.radio_device = [](const ManagerRadioDeviceUpdate&,
-                        ManagerRadioDeviceView*, std::string*) -> bool
+    h.radio_info = [](ControlReply) {};
+    h.radio_caps_info = [](ControlReply) {};
+    h.radio_stats = [](ControlReply) {};
+    h.radio_tx = [](const RadioUpdate&, ControlReply) {};
+    h.radio_reset = [](ControlReply) {};
+    h.config_slot = [](uint8_t, ControlReply) {};
+    h.radio_device = [](const RadioDeviceUpdate&, RadioDeviceView*,
+                        std::string*) -> bool
     {
         return true;
     };
@@ -128,7 +127,7 @@ public:
         stop();
     }
 
-    bool start(ManagerConsoleHandlers handlers, std::string* error)
+    bool start(ControlOps handlers, std::string* error)
     {
         stop();
         const uint16_t port = reserve_free_udp_port();
@@ -281,7 +280,7 @@ private:
     std::unique_ptr<IOReactor> reactor;
     std::thread worker;
     sockaddr_in console_bind{};
-    ManagerConsoleHandlers handlers;
+    ControlOps handlers;
 };
 
 }  // namespace test

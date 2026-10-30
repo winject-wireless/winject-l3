@@ -1,6 +1,7 @@
 #include "App.h"
 
 #include "console/ConsoleParse.h"
+#include "ControlNode.h"
 #include "frames/Mpdu.h"
 #include "mplane/MplaneCorrelation.h"
 #include "mplane/MplaneErrno.h"
@@ -318,7 +319,7 @@ bool App::set_upstream_scheduler_budget(size_t index, size_t budget,
     return true;
 }
 
-bool App::fill_upstream_view(size_t index, ManagerUpstreamView* out) const
+bool App::fill_upstream_view(size_t index, UpstreamView* out) const
 {
     if (out == nullptr || index >= upstreams.size() ||
         index >= cfg.upstreams.size())
@@ -378,8 +379,7 @@ size_t find_upstream_vec_index(const Config& cfg, uint8_t id)
 
 }  // namespace
 
-bool App::console_add_upstream(const ManagerUpstreamView& spec,
-                               std::string* error)
+bool App::console_add_upstream(const UpstreamView& spec, std::string* error)
 {
     auto fail = [&](const char* msg) -> bool
     {
@@ -459,7 +459,7 @@ bool App::console_remove_upstream(uint8_t id, std::string* error)
 }
 
 bool App::console_list_upstream(const std::vector<uint8_t>& ids,
-                                std::vector<ManagerUpstreamView>* out,
+                                std::vector<UpstreamView>* out,
                                 std::string* error) const
 {
     if (out == nullptr)
@@ -475,7 +475,7 @@ bool App::console_list_upstream(const std::vector<uint8_t>& ids,
     {
         for (size_t i = 0; i < upstreams.size(); i++)
         {
-            ManagerUpstreamView row;
+            UpstreamView row;
             if (!fill_upstream_view(i, &row))
             {
                 continue;
@@ -495,7 +495,7 @@ bool App::console_list_upstream(const std::vector<uint8_t>& ids,
             }
             return false;
         }
-        ManagerUpstreamView row;
+        UpstreamView row;
         if (!fill_upstream_view(index, &row))
         {
             if (error != nullptr)
@@ -509,8 +509,8 @@ bool App::console_list_upstream(const std::vector<uint8_t>& ids,
     return true;
 }
 
-bool App::console_update_upstream(const ManagerUpstreamUpdate& patch,
-                                  ManagerUpstreamView* out, std::string* error)
+bool App::console_update_upstream(const UpstreamUpdate& patch,
+                                  UpstreamView* out, std::string* error)
 {
     auto fail = [&](const char* msg) -> bool
     {
@@ -598,9 +598,9 @@ void fill_upstream_fec_fields(const Upstream* endpoint, FecType* fec, int* k,
 
 }  // namespace
 
-bool App::console_list_upstream_rx_stat(
-    const std::vector<uint8_t>& ids,
-    std::vector<ManagerUpstreamRxStatView>* out, std::string* error) const
+bool App::console_list_upstream_rx_stat(const std::vector<uint8_t>& ids,
+                                        std::vector<UpstreamRxStatView>* out,
+                                        std::string* error) const
 {
     if (out == nullptr)
     {
@@ -624,7 +624,7 @@ bool App::console_list_upstream_rx_stat(
             return false;
         }
         const auto* endpoint = upstreams[index].get();
-        ManagerUpstreamRxStatView row;
+        UpstreamRxStatView row;
         row.id = id;
         fill_upstream_fec_fields(endpoint, &row.fec, &row.fec_k, &row.fec_n);
         if (endpoint != nullptr)
@@ -648,9 +648,9 @@ bool App::console_list_upstream_rx_stat(
     return true;
 }
 
-bool App::console_list_upstream_tx_stat(
-    const std::vector<uint8_t>& ids,
-    std::vector<ManagerUpstreamTxStatView>* out, std::string* error) const
+bool App::console_list_upstream_tx_stat(const std::vector<uint8_t>& ids,
+                                        std::vector<UpstreamTxStatView>* out,
+                                        std::string* error) const
 {
     if (out == nullptr)
     {
@@ -674,7 +674,7 @@ bool App::console_list_upstream_tx_stat(
             return false;
         }
         const auto* endpoint = upstreams[index].get();
-        ManagerUpstreamTxStatView row;
+        UpstreamTxStatView row;
         row.id = id;
         fill_upstream_fec_fields(endpoint, &row.fec, &row.fec_k, &row.fec_n);
         if (endpoint != nullptr)
@@ -737,7 +737,7 @@ void App::refresh_host_metrics()
         {
             continue;
         }
-        ManagerUpstreamView view;
+        UpstreamView view;
         if (!fill_upstream_view(i, &view))
         {
             continue;
@@ -796,8 +796,7 @@ void App::refresh_host_metrics()
 }
 
 bool App::console_get_metrics(const std::vector<std::string>& keys,
-                              std::vector<ManagerMetricView>* out,
-                              std::string* error)
+                              std::vector<MetricView>* out, std::string* error)
 {
     if (out == nullptr)
     {
@@ -818,7 +817,7 @@ bool App::console_get_metrics(const std::vector<std::string>& keys,
     };
     if (want_key("radio_version"))
     {
-        ManagerMetricView row;
+        MetricView row;
         row.key = "radio_version";
         if (radio_version_known)
         {
@@ -834,7 +833,7 @@ bool App::console_get_metrics(const std::vector<std::string>& keys,
     }
     for (const auto& entry : snapshot)
     {
-        ManagerMetricView row;
+        MetricView row;
         row.key = entry.first;
         row.value = metric_value_to_string(entry.second);
         out->push_back(std::move(row));
@@ -904,7 +903,7 @@ void App::apply_radio_caps_mplane(const MplaneResult& r)
     radio->set_fcs_mode(mode);
 }
 
-void App::send_radio_unavailable_nok(ManagerConsoleReply reply) const
+void App::send_radio_unavailable_nok(ControlReply reply) const
 {
     if (radio_version_known && !radio_proto_ok)
     {
@@ -947,8 +946,8 @@ void App::log_proto_mismatch_once(const WinjectVersion& radio_ver)
         static_cast<unsigned>(mgr.x), static_cast<unsigned>(mgr.y));
 }
 
-bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
-                               ManagerRadioDeviceView* out, std::string* error)
+bool App::console_radio_device(const RadioDeviceUpdate& patch,
+                               RadioDeviceView* out, std::string* error)
 {
     if (patch.id != 0)
     {
@@ -1028,7 +1027,7 @@ bool App::console_radio_device(const ManagerRadioDeviceUpdate& patch,
     return true;
 }
 
-void App::console_radio_info(ManagerConsoleReply reply)
+void App::console_radio_info(ControlReply reply)
 {
     if (!console_ok)
     {
@@ -1053,7 +1052,7 @@ void App::console_radio_info(ManagerConsoleReply reply)
         });
 }
 
-void App::console_radio_caps_info(ManagerConsoleReply reply)
+void App::console_radio_caps_info(ControlReply reply)
 {
     if (console_ok)
     {
@@ -1093,7 +1092,7 @@ void App::console_radio_caps_info(ManagerConsoleReply reply)
     reply.send_text(format_radio_caps_ok_line(radio->fcs_mode()));
 }
 
-void App::console_radio_stats(ManagerConsoleReply reply)
+void App::console_radio_stats(ControlReply reply)
 {
     if (!console_ok)
     {
@@ -1112,8 +1111,7 @@ void App::console_radio_stats(ManagerConsoleReply reply)
         });
 }
 
-void App::console_radio_tx(const ManagerRadioUpdate& patch,
-                           ManagerConsoleReply reply)
+void App::console_radio_tx(const RadioUpdate& patch, ControlReply reply)
 {
     if (!console_ok)
     {
@@ -1206,7 +1204,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
 
 // Transparent radio m-plane: a radio-specific command line, forwarded
 // unchanged. The manager does not track what it changes.
-void App::console_radio_mplane(const std::string& line, ManagerConsoleReply reply)
+void App::console_radio_mplane(const std::string& line, ControlReply reply)
 {
     if (!console_ok)
     {
@@ -1225,7 +1223,7 @@ void App::console_radio_mplane(const std::string& line, ManagerConsoleReply repl
                     });
 }
 
-void App::console_radio_reset(ManagerConsoleReply reply)
+void App::console_radio_reset(ControlReply reply)
 {
     if (!console_ok)
     {
@@ -1244,7 +1242,7 @@ void App::console_radio_reset(ManagerConsoleReply reply)
         });
 }
 
-void App::console_config_slot(uint8_t slot, ManagerConsoleReply reply)
+void App::console_config_slot(uint8_t slot, ControlReply reply)
 {
     if (!console_ok)
     {
@@ -1275,6 +1273,81 @@ void App::console_config_slot(uint8_t slot, ManagerConsoleReply reply)
         });
 }
 
+ControlOps App::make_control_ops()
+{
+    ControlOps ops;
+    ops.add_upstream = [this](const UpstreamView& spec, std::string* error)
+    {
+        return console_add_upstream(spec, error);
+    };
+    ops.remove_upstream = [this](uint8_t id, std::string* error)
+    {
+        return console_remove_upstream(id, error);
+    };
+    ops.list_upstream = [this](const std::vector<uint8_t>& ids,
+                               std::vector<UpstreamView>* out,
+                               std::string* error)
+    {
+        return console_list_upstream(ids, out, error);
+    };
+    ops.update_upstream = [this](const UpstreamUpdate& patch, UpstreamView* out,
+                                 std::string* error)
+    {
+        return console_update_upstream(patch, out, error);
+    };
+    ops.list_upstream_rx_stat = [this](const std::vector<uint8_t>& ids,
+                                       std::vector<UpstreamRxStatView>* out,
+                                       std::string* error)
+    {
+        return console_list_upstream_rx_stat(ids, out, error);
+    };
+    ops.list_upstream_tx_stat = [this](const std::vector<uint8_t>& ids,
+                                       std::vector<UpstreamTxStatView>* out,
+                                       std::string* error)
+    {
+        return console_list_upstream_tx_stat(ids, out, error);
+    };
+    ops.get_metrics = [this](const std::vector<std::string>& keys,
+                             std::vector<MetricView>* out, std::string* error)
+    {
+        return console_get_metrics(keys, out, error);
+    };
+    ops.radio_info = [this](ControlReply reply)
+    {
+        console_radio_info(reply);
+    };
+    ops.radio_caps_info = [this](ControlReply reply)
+    {
+        console_radio_caps_info(reply);
+    };
+    ops.radio_stats = [this](ControlReply reply)
+    {
+        console_radio_stats(reply);
+    };
+    ops.radio_reset = [this](ControlReply reply)
+    {
+        console_radio_reset(reply);
+    };
+    ops.radio_tx = [this](const RadioUpdate& patch, ControlReply reply)
+    {
+        console_radio_tx(patch, reply);
+    };
+    ops.radio_mplane = [this](const std::string& line, ControlReply reply)
+    {
+        console_radio_mplane(line, reply);
+    };
+    ops.config_slot = [this](uint8_t slot, ControlReply reply)
+    {
+        console_config_slot(slot, reply);
+    };
+    ops.radio_device = [this](const RadioDeviceUpdate& patch,
+                              RadioDeviceView* out, std::string* error)
+    {
+        return console_radio_device(patch, out, error);
+    };
+    return ops;
+}
+
 bool App::start_manager_console()
 {
     if (cfg.console_in.empty())
@@ -1287,83 +1360,8 @@ bool App::start_manager_console()
         LOG_ERR("manager console: invalid winject.console_in");
         return false;
     }
-    ManagerConsoleHandlers handlers;
-    handlers.add_upstream =
-        [this](const ManagerUpstreamView& spec, std::string* error)
-    {
-        return console_add_upstream(spec, error);
-    };
-    handlers.remove_upstream = [this](uint8_t id, std::string* error)
-    {
-        return console_remove_upstream(id, error);
-    };
-    handlers.list_upstream = [this](const std::vector<uint8_t>& ids,
-                                    std::vector<ManagerUpstreamView>* out,
-                                    std::string* error)
-    {
-        return console_list_upstream(ids, out, error);
-    };
-    handlers.update_upstream = [this](const ManagerUpstreamUpdate& patch,
-                                      ManagerUpstreamView* out,
-                                      std::string* error)
-    {
-        return console_update_upstream(patch, out, error);
-    };
-    handlers.list_upstream_rx_stat =
-        [this](const std::vector<uint8_t>& ids,
-               std::vector<ManagerUpstreamRxStatView>* out, std::string* error)
-    {
-        return console_list_upstream_rx_stat(ids, out, error);
-    };
-    handlers.list_upstream_tx_stat =
-        [this](const std::vector<uint8_t>& ids,
-               std::vector<ManagerUpstreamTxStatView>* out, std::string* error)
-    {
-        return console_list_upstream_tx_stat(ids, out, error);
-    };
-    handlers.get_metrics = [this](const std::vector<std::string>& keys,
-                                  std::vector<ManagerMetricView>* out,
-                                  std::string* error)
-    {
-        return console_get_metrics(keys, out, error);
-    };
-    handlers.radio_info = [this](ManagerConsoleReply reply)
-    {
-        console_radio_info(reply);
-    };
-    handlers.radio_caps_info = [this](ManagerConsoleReply reply)
-    {
-        console_radio_caps_info(reply);
-    };
-    handlers.radio_stats = [this](ManagerConsoleReply reply)
-    {
-        console_radio_stats(reply);
-    };
-    handlers.radio_reset = [this](ManagerConsoleReply reply)
-    {
-        console_radio_reset(reply);
-    };
-    handlers.radio_tx =
-        [this](const ManagerRadioUpdate& patch, ManagerConsoleReply reply)
-    {
-        console_radio_tx(patch, reply);
-    };
-    handlers.radio_mplane = [this](const std::string& line, ManagerConsoleReply reply)
-    {
-        console_radio_mplane(line, reply);
-    };
-    handlers.config_slot = [this](uint8_t slot, ManagerConsoleReply reply)
-    {
-        console_config_slot(slot, reply);
-    };
-    handlers.radio_device = [this](const ManagerRadioDeviceUpdate& patch,
-                                   ManagerRadioDeviceView* out,
-                                   std::string* error)
-    {
-        return console_radio_device(patch, out, error);
-    };
     std::string err;
-    if (!mgr_console.start(*reactor, in_addr, std::move(handlers), &err))
+    if (!mgr_console.start(*reactor, in_addr, make_control_ops(), &err))
     {
         LOG_ERR("manager console: %s", err.c_str());
         return false;
@@ -1600,6 +1598,7 @@ void App::stop()
 
 void App::begin_shutdown()
 {
+    control_handle.impl()->detach();
     mgr_console.stop();
     tx_mux.stop();
     radio_upstream_table.clear();
@@ -1716,12 +1715,13 @@ int App::run()
         LOG_WRN("waiting for radio m-plane %s",
                 mplane_format_ipv4_port(cfg.radio_device.mplane).c_str());
     }
-    ManagerRadioDeviceView rd_view;
+    RadioDeviceView rd_view;
     rd_view.id = 0;
     rd_view.device = cfg.radio_device;
     LOG_INF("manager running %s (%s)",
             console_format_radio_device(rd_view).c_str(),
             cfg.modulation.c_str());
+    control_handle.impl()->attach(reactor.get(), make_control_ops());
     last_stats = std::chrono::steady_clock::now();
     if (cfg.stats_sec > 0)
     {

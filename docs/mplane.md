@@ -1,6 +1,6 @@
 # Manager m-plane and configuration
 
-winject-manager is controlled two ways: a **configuration file** read at startup, and the **manager m-plane**, a text console over UDP for changing upstreams and reading stats at runtime. How the manager, radios and air framing fit together is in [winject.md](winject.md).
+winject-manager is controlled two ways: a **configuration file** read at startup, and the **manager m-plane**, a text console over UDP for changing upstreams and reading stats at runtime. A host that links the library reaches the same m-plane through function calls ([Function-call API](#function-call-api)). How the manager, radios and air framing fit together is in [winject.md](winject.md).
 
 ## Message exchange
 
@@ -158,6 +158,30 @@ Example (replies arrive on the same UDP socket you send from):
 ```text
 get_metrics keys=radio_tx_pkt,radio_rx_pkt,radio_proto_ok,radio_version
 ```
+
+## Function-call API
+
+[`src/l3/Control.h`](../src/l3/Control.h) is the m-plane as C++ calls, for a host that runs the node in-process (`winject_l3::main`) and serves its own console, such as the rover and ground ESP32-P4 apps. `winject_l3::control()` returns a handle to the node `main()` runs; it can be taken before `main()` starts.
+
+| Command | Call | Result |
+|---|---|---|
+| `add_upstream` | `add_upstream(UpstreamView)` | `Status` |
+| `remove_upstream` | `remove_upstream(id)` | `Status` |
+| `list_upstream` | `list_upstreams(ids)` | `Result<vector<UpstreamView>>` |
+| `update_upstream` | `update_upstream(UpstreamUpdate)` | `Result<UpstreamView>` |
+| `list_upstream_rx_stat` / `_tx_stat` | `upstream_rx_stats(ids)` / `upstream_tx_stats(ids)` | `Result<vector<Upstream{Rx,Tx}StatView>>` |
+| `get_metrics` | `metrics(keys)` | `Result<vector<MetricView>>` |
+| `radio_device` | `radio_device(RadioDeviceUpdate)` (empty update reads) | `Result<RadioDeviceView>` |
+| `radio_info`, `radio_caps_info`, `radio_stats`, `radio_tx`, `reset`, `config` | same names (`radio_reset`, `config_slot`) | `RadioReply` (radio's reply body) |
+| any line | `command(line)` | the console's reply text |
+
+- An empty id or key list means all, as on the console.
+- `Status::error` is empty on success, else the console's `NOK` code (`EINVAL`, `ENOENT`, `ENODEV`, ... or a radio code). Control adds `ESRCH` (no node running), `EDEADLK` (a blocking call made on the node's own thread) and `ETIMEDOUT` (no answer within the call's timeout, default 5 s).
+- Calls are safe from any thread. They run on the node's reactor thread and the caller blocks until the result. Synchronous calls made on the reactor thread run inline.
+- Radio forwards also take a callback (`radio_info(RadioDone)`), called exactly once: with the radio's reply, or `ECANCELED` if the node stops first.
+- `command(line)` takes one line without the `cmd:<u8>` tag and replies as the UDP console would. A blank or `#` line gets an empty reply.
+
+The UDP console ([`ConsoleService`](../src/l3/console/ConsoleService.h)) and `command()` share the parser ([`ConsoleCommands`](../src/l3/console/ConsoleCommands.h)); both call the node through the same ops as the typed calls.
 
 ## Configuration file
 

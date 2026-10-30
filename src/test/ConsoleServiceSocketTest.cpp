@@ -13,12 +13,11 @@ using namespace winject::test;
 namespace
 {
 
-ManagerConsoleHandlers handlers_with_list_upstream()
+ControlOps handlers_with_list_upstream()
 {
-    ManagerConsoleHandlers h = stub_console_handlers();
+    ControlOps h = stub_console_handlers();
     h.list_upstream = [](const std::vector<uint8_t>&,
-                         std::vector<ManagerUpstreamView>* rows,
-                         std::string*) -> bool
+                         std::vector<UpstreamView>* rows, std::string*) -> bool
     {
         rows->clear();
         return true;
@@ -60,10 +59,10 @@ TEST(ConsoleServiceSocketTest, TaggedPingLuAndBogus)
 
 TEST(ConsoleServiceSocketTest, SameClientIdDifferentSenders)
 {
-    std::vector<ManagerConsoleReply> pending_a;
-    std::vector<ManagerConsoleReply> pending_b;
-    ManagerConsoleHandlers h = stub_console_handlers();
-    h.radio_info = [&](ManagerConsoleReply cr)
+    std::vector<ControlReply> pending_a;
+    std::vector<ControlReply> pending_b;
+    ControlOps h = stub_console_handlers();
+    h.radio_info = [&](ControlReply cr)
     {
         if (pending_a.empty())
         {
@@ -99,9 +98,9 @@ TEST(ConsoleServiceSocketTest, SameClientIdDifferentSenders)
 
 TEST(ConsoleServiceSocketTest, OutOfOrderCompletionSameSender)
 {
-    std::vector<ManagerConsoleReply> pending;
-    ManagerConsoleHandlers h = stub_console_handlers();
-    h.radio_stats = [&](ManagerConsoleReply cr)
+    std::vector<ControlReply> pending;
+    ControlOps h = stub_console_handlers();
+    h.radio_stats = [&](ControlReply cr)
     {
         pending.push_back(cr);
     };
@@ -132,9 +131,9 @@ TEST(ConsoleServiceSocketTest, OutOfOrderCompletionSameSender)
 TEST(ConsoleServiceSocketTest, RetransmitWhileInFlight)
 {
     int radio_info_calls = 0;
-    ManagerConsoleReply pending;
-    ManagerConsoleHandlers h = stub_console_handlers();
-    h.radio_info = [&](ManagerConsoleReply cr)
+    ControlReply pending;
+    ControlOps h = stub_console_handlers();
+    h.radio_info = [&](ControlReply cr)
     {
         ++radio_info_calls;
         pending = cr;
@@ -165,9 +164,9 @@ TEST(ConsoleServiceSocketTest, RetransmitWhileInFlight)
 
 TEST(ConsoleServiceSocketTest, TableFullReturnsBusy)
 {
-    std::vector<ManagerConsoleReply> pending;
-    ManagerConsoleHandlers h = stub_console_handlers();
-    h.radio_info = [&](ManagerConsoleReply cr)
+    std::vector<ControlReply> pending;
+    ControlOps h = stub_console_handlers();
+    h.radio_info = [&](ControlReply cr)
     {
         pending.push_back(cr);
     };
@@ -191,9 +190,9 @@ TEST(ConsoleServiceSocketTest, TableFullReturnsBusy)
 
 TEST(ConsoleServiceSocketTest, StopDropsLateReply)
 {
-    ManagerConsoleReply pending;
-    ManagerConsoleHandlers h = stub_console_handlers();
-    h.radio_info = [&](ManagerConsoleReply cr)
+    ControlReply pending;
+    ControlOps h = stub_console_handlers();
+    h.radio_info = [&](ControlReply cr)
     {
         pending = cr;
     };
@@ -214,9 +213,9 @@ TEST(ConsoleServiceSocketTest, StopDropsLateReply)
 TEST(ConsoleServiceSocketTest, ResetAndInvalidArgs)
 {
     int reset_calls = 0;
-    ManagerConsoleReply pending;
-    ManagerConsoleHandlers h = stub_console_handlers();
-    h.radio_reset = [&](ManagerConsoleReply cr)
+    ControlReply pending;
+    ControlOps h = stub_console_handlers();
+    h.radio_reset = [&](ControlReply cr)
     {
         ++reset_calls;
         pending = cr;
@@ -307,9 +306,9 @@ TEST(ConsoleServiceSocketTest, RadioMplaneForwardsLine)
 {
     ConsoleServiceHarness harness;
     std::string err;
-    ManagerConsoleHandlers h = stub_console_handlers();
+    ControlOps h = stub_console_handlers();
     std::string seen;
-    h.radio_mplane = [&seen](const std::string& line, ManagerConsoleReply reply)
+    h.radio_mplane = [&seen](const std::string& line, ControlReply reply)
     {
         seen = line;
         reply.send_text("radio_tx_cal group=dsss default=false points=8:-28.00,84:15.60");
@@ -348,9 +347,9 @@ TEST(ConsoleServiceSocketTest, RadioTxNegativePower)
 {
     ConsoleServiceHarness harness;
     std::string err;
-    ManagerConsoleHandlers h = stub_console_handlers();
+    ControlOps h = stub_console_handlers();
     int power = 0;
-    h.radio_tx = [&power](const ManagerRadioUpdate& patch, ManagerConsoleReply reply)
+    h.radio_tx = [&power](const RadioUpdate& patch, ControlReply reply)
     {
         power = patch.tx_power;
         reply.send_text("radio_tx channel=1 tx_power=-10");

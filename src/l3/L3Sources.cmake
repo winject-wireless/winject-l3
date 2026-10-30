@@ -4,7 +4,9 @@
 set(WINJECT_L3_SOURCES
     WinjectL3.cpp
     App.cpp
+    Control.cpp
     Config.cpp
+    console/ConsoleCommands.cpp
     console/ConsoleService.cpp
     console/ConsoleParse.cpp
 )

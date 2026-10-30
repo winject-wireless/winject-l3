@@ -2,7 +2,7 @@
 #define WINJECT_MANAGER_CONSOLE_PARSE_H_
 
 #include "Config.h"
-#include "console/ManagerConsoleTypes.h"
+#include "ControlTypes.h"
 #include "mplane/MplaneText.h"
 
 #include <netinet/in.h>
@@ -27,9 +27,9 @@ bool console_cmd_is(const char* cmd, const char* full, const char* abbrev,
 
 bool console_parse_radio_fcs(const char* text, RadioFcsConfig* out);
 const char* console_format_radio_fcs(RadioFcsConfig fcs);
-bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
+bool console_parse_radio_device_args(char* save, RadioDeviceUpdate* out,
                                      std::string* err);
-std::string console_format_radio_device(const ManagerRadioDeviceView& view);
+std::string console_format_radio_device(const RadioDeviceView& view);
 
 }  // namespace winject
 

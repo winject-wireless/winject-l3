@@ -238,7 +238,7 @@ const char* console_format_radio_fcs(RadioFcsConfig fcs)
     }
 }
 
-bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
+bool console_parse_radio_device_args(char* save, RadioDeviceUpdate* out,
                                      std::string* err)
 {
     if (out == nullptr)
@@ -367,7 +367,7 @@ bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
     return true;
 }
 
-std::string console_format_radio_device(const ManagerRadioDeviceView& view)
+std::string console_format_radio_device(const RadioDeviceView& view)
 {
     std::string s = "radio_device id=" + std::to_string(view.id);
     s += " mplane=";

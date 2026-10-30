@@ -14,7 +14,9 @@ Both speak the same radio protocol; the manager uses the same config schema for 
 ## Layout
 
 ```
-src/manager/            winject-manager binary (802.11 MPDU in frames/Mpdu.*, IEEE layout in frames/Frame.*)
+src/core/               lib winject-l3-core: data path and radio m-plane client (frames/, fec/, radio/, endpoint/, mplane/, utils/)
+src/l3/                 lib winject-l3: Config, the node (App), Control.h function-call m-plane, console/ (text + UDP)
+src/manager/            winject-manager binary and the CMake entry point
 src/test/               Host unit tests (GoogleTest)
 configuration/          Manager configs: host_x86/, host_arm/ (video demo), winject-tests/<scenario>/ (bench); scenario.md
 scripts/                Bench scripts (bw/lat tests, ensure_manager.sh, check_guidelines.sh)
@@ -50,22 +52,38 @@ cmake --build build_manager_host -j"$(nproc)"
 ./build_manager_host/winject-manager configuration/host_x86/config.cfg
 ```
 
-The manager is built as a static library, `winject-l3`, with one entry point, plus a thin `winject-manager` binary that calls it ([`Main.cpp`](src/manager/Main.cpp)):
+The manager is built as two static libraries plus a thin `winject-manager` binary ([`Main.cpp`](src/manager/Main.cpp)):
+
+- `winject-l3-core` ([`src/core`](src/core)): the data path — frames, FEC, radio TX mux / RX demux, upstreams — and the radio m-plane client. It does not read config files or serve a console.
+- `winject-l3` ([`src/l3`](src/l3)): the node on top of the core — `Config`, `App`, the function-call m-plane ([`Control.h`](src/l3/Control.h)) and the text console ([`console/`](src/l3/console)) that serves it over UDP.
 
 ```cpp
 #include "WinjectL3.h"
 
 int winject_l3::main(const winject::Config& config);  // blocks until stop()
 void winject_l3::stop();                              // any thread; main() then returns
+winject_l3::Control winject_l3::control();            // the running node's m-plane
 ```
 
 `winject-manager`'s `main` reads `argv[1]` (default `winject.conf`), parses it into a `winject::Config`, and calls `winject_l3::main`. A host that already has the settings — the ESP32-P4 example — fills the struct and does not pass argv.
+
+`winject_l3::Control` has one call per m-plane command (`list_upstreams`, `update_upstream`, `upstream_rx_stats`, `radio_tx`, ...), returning typed results and the same errno names as the console. Calls are safe from any thread; they run on the node's reactor. `Control::command(line)` answers one text command exactly as the UDP console would, so a host console that also serves vstreamer, bwtest or krono can pass l3 lines through. See [docs/mplane.md](docs/mplane.md#function-call-api).
+
+```cpp
+winject_l3::Control l3 = winject_l3::control();
+auto stats = l3.upstream_rx_stats({1});           // Result<std::vector<UpstreamRxStatView>>
+winject_l3::RadioUpdate phy;
+phy.have_channel = true;
+phy.channel = 6;
+winject_l3::RadioReply r = l3.radio_tx(phy);      // blocks for the radio's reply
+std::string text = l3.command("lur ids=1");       // same text as the UDP console
+```
 
 The library builds without RTTI (`-fno-rtti`), as it does on ESP-IDF.
 
 ### ESP-IDF (ESP32-P4)
 
-[`idf/winject_l3`](idf/winject_l3) is an ESP-IDF component with the same sources (listed once in [`WinjectL3Sources.cmake`](src/manager/WinjectL3Sources.cmake)). Add it to a project's `EXTRA_COMPONENT_DIRS`, `#include "WinjectL3.h"` and run `winject_l3::main` on a pthread (it blocks in its reactor). [`idf/example`](idf/example) does exactly that:
+[`idf/winject_l3`](idf/winject_l3) is an ESP-IDF component with the same sources (listed once in [`CoreSources.cmake`](src/core/CoreSources.cmake) and [`L3Sources.cmake`](src/l3/L3Sources.cmake)). Add it to a project's `EXTRA_COMPONENT_DIRS`, `#include "WinjectL3.h"` and run `winject_l3::main` on a pthread (it blocks in its reactor). [`idf/example`](idf/example) does exactly that:
 
 ```bash
 cd idf/example && idf.py set-target esp32p4 build

@@ -91,6 +91,7 @@ int main(const winject::Config& config)
 #endif
     // On the heap: App is ~13 KB, too big for an ESP-IDF task stack.
     auto instance = std::make_unique<winject::App>();
+    instance->set_control(control());
     set_app(instance.get());
     if (g_stop_requested.load())
     {

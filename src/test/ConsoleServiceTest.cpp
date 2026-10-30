@@ -1,5 +1,5 @@
 #include "console/ConsoleParse.h"
-#include "console/ManagerConsoleTypes.h"
+#include "ControlTypes.h"
 #include "mplane/MplaneErrno.h"
 
 #include <arpa/inet.h>
@@ -131,7 +131,7 @@ TEST(ConsoleParseTest, ParseRadioDeviceArgs)
     strncpy(buf, "radio_device id=0", sizeof(buf));
     char* save = nullptr;
     strtok_r(buf, " \t", &save);
-    ManagerRadioDeviceUpdate patch;
+    RadioDeviceUpdate patch;
     std::string err;
     EXPECT_TRUE(console_parse_radio_device_args(save, &patch, &err));
     EXPECT_FALSE(patch.have_mplane);
@@ -139,7 +139,7 @@ TEST(ConsoleParseTest, ParseRadioDeviceArgs)
 
 TEST(ConsoleParseTest, FormatRadioDevice)
 {
-    ManagerRadioDeviceView view;
+    RadioDeviceView view;
     view.id = 0;
     view.device.mplane.sin_family = AF_INET;
     ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &view.device.mplane.sin_addr),

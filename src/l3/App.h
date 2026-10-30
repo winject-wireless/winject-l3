@@ -2,8 +2,9 @@
 #define WINJECT_MANAGER_APP_H_
 
 #include "Config.h"
+#include "Control.h"
+#include "ControlTypes.h"
 #include "console/ConsoleService.h"
-#include "console/ManagerConsoleTypes.h"
 #include "endpoint/QueueUpstream.h"
 #include "endpoint/UDPUpstream.h"
 #include "mplane/ConsoleClient.h"
@@ -40,10 +41,22 @@ public:
     int run();
     void stop();
 
+    // Function-call m-plane for this node; attached while run() serves.
+    // Set before run() to share a handle (winject_l3::control()).
+    void set_control(winject_l3::Control c)
+    {
+        control_handle = std::move(c);
+    }
+    const winject_l3::Control& control() const
+    {
+        return control_handle;
+    }
+
 private:
     bool add_upstream(const UpstreamConfig& uc);
     bool setup_radio();
     bool setup_upstreams();
+    ControlOps make_control_ops();
     bool start_manager_console();
     bool apply_console();
     void reapply_radio_console(std::function<void(bool ok)> done);
@@ -68,39 +81,36 @@ private:
                           std::string* error);
     bool set_upstream_scheduler_budget(size_t index, size_t budget,
                                        std::string* error);
-    bool fill_upstream_view(size_t index, ManagerUpstreamView* out) const;
-    bool console_add_upstream(const ManagerUpstreamView& spec,
-                              std::string* error);
+    bool fill_upstream_view(size_t index, UpstreamView* out) const;
+    bool console_add_upstream(const UpstreamView& spec, std::string* error);
     bool console_remove_upstream(uint8_t id, std::string* error);
     bool console_list_upstream(const std::vector<uint8_t>& ids,
-                               std::vector<ManagerUpstreamView>* out,
+                               std::vector<UpstreamView>* out,
                                std::string* error) const;
-    bool console_update_upstream(const ManagerUpstreamUpdate& patch,
-                                 ManagerUpstreamView* out, std::string* error);
-    bool console_list_upstream_rx_stat(
-        const std::vector<uint8_t>& ids,
-        std::vector<ManagerUpstreamRxStatView>* out, std::string* error) const;
-    bool console_list_upstream_tx_stat(
-        const std::vector<uint8_t>& ids,
-        std::vector<ManagerUpstreamTxStatView>* out, std::string* error) const;
+    bool console_update_upstream(const UpstreamUpdate& patch, UpstreamView* out,
+                                 std::string* error);
+    bool console_list_upstream_rx_stat(const std::vector<uint8_t>& ids,
+                                       std::vector<UpstreamRxStatView>* out,
+                                       std::string* error) const;
+    bool console_list_upstream_tx_stat(const std::vector<uint8_t>& ids,
+                                       std::vector<UpstreamTxStatView>* out,
+                                       std::string* error) const;
     bool console_get_metrics(const std::vector<std::string>& keys,
-                             std::vector<ManagerMetricView>* out,
-                             std::string* error);
+                             std::vector<MetricView>* out, std::string* error);
     void apply_radio_caps_mplane(const MplaneResult& r);
-    void console_radio_info(ManagerConsoleReply reply);
-    void console_radio_caps_info(ManagerConsoleReply reply);
-    void console_radio_mplane(const std::string& line, ManagerConsoleReply reply);
-    void console_radio_stats(ManagerConsoleReply reply);
-    void console_radio_tx(const ManagerRadioUpdate& patch,
-                          ManagerConsoleReply reply);
-    void console_radio_reset(ManagerConsoleReply reply);
-    void console_config_slot(uint8_t slot, ManagerConsoleReply reply);
-    bool console_radio_device(const ManagerRadioDeviceUpdate& patch,
-                              ManagerRadioDeviceView* out, std::string* error);
+    void console_radio_info(ControlReply reply);
+    void console_radio_caps_info(ControlReply reply);
+    void console_radio_stats(ControlReply reply);
+    void console_radio_mplane(const std::string& line, ControlReply reply);
+    void console_radio_tx(const RadioUpdate& patch, ControlReply reply);
+    void console_radio_reset(ControlReply reply);
+    void console_config_slot(uint8_t slot, ControlReply reply);
+    bool console_radio_device(const RadioDeviceUpdate& patch,
+                              RadioDeviceView* out, std::string* error);
     void apply_radio_dplane();
     void close_radio();
     void apply_configured_fcs();
-    void send_radio_unavailable_nok(ManagerConsoleReply reply) const;
+    void send_radio_unavailable_nok(ControlReply reply) const;
     void on_radio_version(bool known, const WinjectVersion& v);
     void log_proto_mismatch_once(const WinjectVersion& radio_ver);
 
@@ -137,6 +147,7 @@ private:
     bool proto_mismatch_logged = false;
     std::chrono::steady_clock::time_point last_stats{};
     MetricsRegistry metrics_registry;
+    winject_l3::Control control_handle;
 };
 
 }  // namespace winject

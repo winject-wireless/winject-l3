@@ -2,6 +2,7 @@
 #define WINJECT_MANAGER_WINJECT_L3_H_
 
 #include "Config.h"
+#include "Control.h"
 
 namespace winject_l3
 {
@@ -14,6 +15,9 @@ int main(const winject::Config& config);
 
 // Asks a running main() to return. Safe from any thread.
 void stop();
+
+// control() (Control.h) reaches the node main() runs: the m-plane as
+// function calls, from any thread.
 
 }  // namespace winject_l3
 

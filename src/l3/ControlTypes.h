@@ -1,5 +1,5 @@
-#ifndef WINJECT_MANAGER_CONSOLE_MANAGER_CONSOLE_TYPES_H_
-#define WINJECT_MANAGER_CONSOLE_MANAGER_CONSOLE_TYPES_H_
+#ifndef WINJECT_L3_CONTROL_TYPES_H_
+#define WINJECT_L3_CONTROL_TYPES_H_
 
 #include "Config.h"
 #include "radio/RadioPhyView.h"
@@ -15,8 +15,9 @@
 namespace winject
 {
 
-// Snapshot of one upstream for list / OK responses (mplane.md).
-struct ManagerUpstreamUpdate
+// Fields to change on one upstream (update_upstream); have_* marks the
+// fields present.
+struct UpstreamUpdate
 {
     uint8_t id = 0;
     bool have_fec = false;
@@ -31,7 +32,9 @@ struct ManagerUpstreamUpdate
     size_t quanta = 0;
 };
 
-struct ManagerUpstreamView
+// One upstream: the add_upstream spec, and the list / OK snapshot
+// (docs/mplane.md).
+struct UpstreamView
 {
     uint8_t id = 0;
     uint8_t bus_tx = 0;
@@ -46,7 +49,7 @@ struct ManagerUpstreamView
     size_t quanta = 0;
 };
 
-struct ManagerUpstreamRxStatView
+struct UpstreamRxStatView
 {
     uint8_t id = 0;
     FecType fec = FecType::none;
@@ -66,7 +69,7 @@ struct ManagerUpstreamRxStatView
     uint64_t rx_push_drop = 0;
 };
 
-struct ManagerUpstreamTxStatView
+struct UpstreamTxStatView
 {
     uint8_t id = 0;
     FecType fec = FecType::none;
@@ -80,7 +83,7 @@ struct ManagerUpstreamTxStatView
     uint64_t tx_pending_pkt = 0;
 };
 
-struct ManagerRadioDeviceUpdate
+struct RadioDeviceUpdate
 {
     uint8_t id = 0;
     bool have_mplane = false;
@@ -91,13 +94,13 @@ struct ManagerRadioDeviceUpdate
     RadioFcsConfig fcs = RadioFcsConfig::auto_detect;
 };
 
-struct ManagerRadioDeviceView
+struct RadioDeviceView
 {
     uint8_t id = 0;
     RadioDeviceConfig device;
 };
 
-struct ManagerRadioUpdate
+struct RadioUpdate
 {
     bool have_channel = false;
     uint16_t channel = 0;
@@ -109,59 +112,61 @@ struct ManagerRadioUpdate
     bool cca = false;
 };
 
-struct ManagerMetricView
+struct MetricView
 {
     std::string key;
     std::string value;
 };
 
-// Deferred reply for async radio forwards (manager console ri/rt/r).
-struct ManagerConsoleReply
+// Deferred reply for radio forwards (radio_info, radio_tx, ...). Exactly one
+// of the two is called: send_text with the radio's reply body, or send_nok
+// with an errno name.
+struct ControlReply
 {
     std::function<void(const std::string& text)> send_text;
     std::function<void(const char* nok)> send_nok;
 };
 
-struct ManagerConsoleHandlers
+// The node's operations behind every m-plane command. App binds them; they
+// run on the node's reactor thread only. ConsoleCommands (text) and
+// winject_l3::Control (any thread) both call through here.
+struct ControlOps
 {
-    std::function<bool(const ManagerUpstreamView& spec, std::string* error)>
+    std::function<bool(const UpstreamView& spec, std::string* error)>
         add_upstream;
     std::function<bool(uint8_t id, std::string* error)> remove_upstream;
     std::function<bool(const std::vector<uint8_t>& ids,
-                       std::vector<ManagerUpstreamView>* out,
-                       std::string* error)>
+                       std::vector<UpstreamView>* out, std::string* error)>
         list_upstream;
-    std::function<bool(const ManagerUpstreamUpdate& patch,
-                       ManagerUpstreamView* out, std::string* error)>
+    std::function<bool(const UpstreamUpdate& patch, UpstreamView* out,
+                       std::string* error)>
         update_upstream;
     std::function<bool(const std::vector<uint8_t>& ids,
-                       std::vector<ManagerUpstreamRxStatView>* out,
+                       std::vector<UpstreamRxStatView>* out,
                        std::string* error)>
         list_upstream_rx_stat;
     std::function<bool(const std::vector<uint8_t>& ids,
-                       std::vector<ManagerUpstreamTxStatView>* out,
+                       std::vector<UpstreamTxStatView>* out,
                        std::string* error)>
         list_upstream_tx_stat;
     std::function<bool(const std::vector<std::string>& keys,
-                       std::vector<ManagerMetricView>* out, std::string* error)>
+                       std::vector<MetricView>* out, std::string* error)>
         get_metrics;
-    std::function<bool(const ManagerRadioDeviceUpdate& patch,
-                       ManagerRadioDeviceView* out, std::string* error)>
+    std::function<bool(const RadioDeviceUpdate& patch, RadioDeviceView* out,
+                       std::string* error)>
         radio_device;
-    std::function<void(ManagerConsoleReply reply)> radio_info;
-    std::function<void(ManagerConsoleReply reply)> radio_caps_info;
-    std::function<void(ManagerConsoleReply reply)> radio_stats;
+    std::function<void(ControlReply reply)> radio_info;
+    std::function<void(ControlReply reply)> radio_caps_info;
+    std::function<void(ControlReply reply)> radio_stats;
+    std::function<void(const RadioUpdate& patch, ControlReply reply)> radio_tx;
     // Optional (ENOSYS when unset): a radio m-plane command line, forwarded
     // unchanged (radio_mplane).
-    std::function<void(const std::string& line, ManagerConsoleReply reply)>
+    std::function<void(const std::string& line, ControlReply reply)>
         radio_mplane;
-    std::function<void(const ManagerRadioUpdate& patch,
-                       ManagerConsoleReply reply)>
-        radio_tx;
-    std::function<void(ManagerConsoleReply reply)> radio_reset;
-    std::function<void(uint8_t slot, ManagerConsoleReply reply)> config_slot;
+    std::function<void(ControlReply reply)> radio_reset;
+    std::function<void(uint8_t slot, ControlReply reply)> config_slot;
 };
 
 }  // namespace winject
 
-#endif  // WINJECT_MANAGER_CONSOLE_MANAGER_CONSOLE_TYPES_H_
+#endif  // WINJECT_L3_CONTROL_TYPES_H_
