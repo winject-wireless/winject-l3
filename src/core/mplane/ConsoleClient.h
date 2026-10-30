@@ -1,7 +1,7 @@
 #ifndef WINJECT_MANAGER_CONSOLE_CLIENT_H_
 #define WINJECT_MANAGER_CONSOLE_CLIENT_H_
 
-#include "Config.h"
+#include "radio/RadioConfig.h"
 #include "utils/Version.h"
 
 #include <bfc/socket.hpp>
@@ -70,11 +70,11 @@ public:
     }
     void cancel_pending();
 
-    void program(const Config& cfg, DoneFn done);
+    void program(const RadioConfig& cfg, DoneFn done);
     using RadioCapsFn = std::function<void(const MplaneResult&)>;
     using RadioVersionFn =
         std::function<void(bool known, const WinjectVersion& v)>;
-    void apply_radio(const Config& cfg, uint8_t save_slot, DoneFn done,
+    void apply_radio(const RadioConfig& cfg, uint8_t save_slot, DoneFn done,
                      RadioCapsFn on_caps = {}, RadioVersionFn on_version = {});
     void query_radio_caps(DoneFn done);
     void query_radio_info(DoneFn done);

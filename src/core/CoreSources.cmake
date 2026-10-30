@@ -1,16 +1,14 @@
-# winject-l3 library sources (everything but Main.cpp), relative to this
-# directory. Shared by CMakeLists.txt (Linux) and the ESP-IDF component.
-set(WINJECT_L3_SOURCES
-    WinjectL3.cpp
-    App.cpp
-    Config.cpp
+# winject-l3 core sources: the data path (frames, FEC, radio mux/demux,
+# upstreams) and the radio m-plane client. Relative to this directory; shared
+# by src/manager/CMakeLists.txt (Linux), src/test and the ESP-IDF component.
+set(WINJECT_CORE_SOURCES
     utils/Log.cpp
     utils/MetricsRegistry.cpp
+    utils/NetUtil.cpp
     utils/Version.cpp
-    console/ConsoleClient.cpp
-    console/MplaneCorrelation.cpp
-    console/ConsoleService.cpp
-    console/ConsoleParse.cpp
+    mplane/ConsoleClient.cpp
+    mplane/MplaneCorrelation.cpp
+    mplane/MplaneText.cpp
     frames/Frame.cpp
     frames/Mpdu.cpp
     fec/vendor/rs_block_erasure.cpp
@@ -18,7 +16,6 @@ set(WINJECT_L3_SOURCES
     fec/vendor/rs_encode_scalar.cpp
     fec/FecTx.cpp
     fec/FecRx.cpp
-    utils/NetUtil.cpp
     radio/WifiUdp.cpp
     radio/WifiQueue.cpp
     radio/WifiFcs.cpp

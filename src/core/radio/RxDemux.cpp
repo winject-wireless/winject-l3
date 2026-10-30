@@ -3,9 +3,9 @@
 #include "endpoint/Upstream.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
-#include "utils/NetUtil.h"
 #include "radio/RadioDefs.h"
 #include "radio/RadioUpstreamEntry.h"
+#include "utils/NetUtil.h"
 
 #include <array>
 

@@ -1,7 +1,7 @@
-#include "console/ConsoleClient.h"
+#include "mplane/ConsoleClient.h"
 
-#include "console/ConsoleParse.h"
-#include "console/MplaneCorrelation.h"
+#include "mplane/MplaneCorrelation.h"
+#include "mplane/MplaneText.h"
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
 #include "utils/Version.h"
@@ -17,7 +17,7 @@ namespace winject
 namespace
 {
 
-std::string format_radio_tx_cmd(const Config& cfg)
+std::string format_radio_tx_cmd(const RadioConfig& cfg)
 {
     std::string cmd = "radio_tx channel=" + std::to_string(cfg.channel) +
                       " tx_power=" + std::to_string(cfg.power_dbm) +
@@ -56,7 +56,7 @@ bool ConsoleClient::start_connect(const sockaddr_in& radio_mplane,
     const int cr = sock.connect(radio_mplane);
     if (cr < 0 && errno != EINPROGRESS)
     {
-        *error = "console " + console_format_ipv4_port(radio_mplane) + ": " +
+        *error = "console " + mplane_format_ipv4_port(radio_mplane) + ": " +
                  strerror(errno);
         close();
         return false;
@@ -471,7 +471,7 @@ void ConsoleClient::send_radio_reset(DoneFn done)
     request("reset", std::move(done));
 }
 
-void ConsoleClient::apply_radio(const Config& cfg, uint8_t save_slot,
+void ConsoleClient::apply_radio(const RadioConfig& cfg, uint8_t save_slot,
                                 DoneFn done, RadioCapsFn on_caps,
                                 RadioVersionFn on_version)
 {
@@ -583,7 +583,7 @@ void ConsoleClient::apply_radio(const Config& cfg, uint8_t save_slot,
         });
 }
 
-void ConsoleClient::program(const Config& cfg, DoneFn done)
+void ConsoleClient::program(const RadioConfig& cfg, DoneFn done)
 {
     std::string err;
     if (!start_connect(cfg.radio_device.mplane, &err) || !finish_connect(&err))

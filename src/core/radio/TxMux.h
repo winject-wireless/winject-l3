@@ -1,7 +1,7 @@
 #ifndef WINJECT_MANAGER_RADIO_TX_MUX_H_
 #define WINJECT_MANAGER_RADIO_TX_MUX_H_
 
-#include "Config.h"
+#include "endpoint/UpstreamConfig.h"
 #include "radio/PhyAirtime.h"
 #include "radio/RadioDefs.h"
 #include "radio/RadioUpstreamTable.h"

@@ -1,7 +1,7 @@
 #ifndef WINJECT_MANAGER_DATAGRAM_AIR_H_
 #define WINJECT_MANAGER_DATAGRAM_AIR_H_
 
-#include "Config.h"
+#include "endpoint/UpstreamConfig.h"
 #include "endpoint/UpstreamQueues.h"
 #include "endpoint/UpstreamStats.h"
 #include "fec/FecRx.h"

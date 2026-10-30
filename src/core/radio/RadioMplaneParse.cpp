@@ -1,7 +1,7 @@
 #include "radio/RadioMplaneParse.h"
 
-#include "Config.h"
-#include "console/ConsoleParse.h"
+#include "mplane/MplaneText.h"
+#include "radio/PhyAirtime.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +11,7 @@
 namespace winject
 {
 
-bool parse_radio_tx_line(const std::string& line, ManagerRadioView* out)
+bool parse_radio_tx_line(const std::string& line, RadioPhyView* out)
 {
     static const char k_prefix[] = "radio_tx ";
     if (line.rfind(k_prefix, 0) != 0 || out == nullptr)
@@ -27,25 +27,25 @@ bool parse_radio_tx_line(const std::string& line, ManagerRadioView* out)
     {
         const char* value = nullptr;
         unsigned long v = 0;
-        if (console_parse_kv(tok, "channel=", &value) &&
-            console_parse_u(value, &v))
+        if (mplane_parse_kv(tok, "channel=", &value) &&
+            mplane_parse_u(value, &v))
         {
             out->channel = static_cast<uint16_t>(v);
             continue;
         }
         long sv = 0;
-        if (console_parse_kv(tok, "tx_power=", &value) &&
-            console_parse_i(value, &sv))
+        if (mplane_parse_kv(tok, "tx_power=", &value) &&
+            mplane_parse_i(value, &sv))
         {
             out->tx_power = static_cast<int>(sv);
             continue;
         }
-        if (console_parse_kv(tok, "modulation=", &value))
+        if (mplane_parse_kv(tok, "modulation=", &value))
         {
             out->modulation = value;
             continue;
         }
-        if (console_parse_kv(tok, "cca=", &value))
+        if (mplane_parse_kv(tok, "cca=", &value))
         {
             out->cca =
                 (strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0);
@@ -55,7 +55,7 @@ bool parse_radio_tx_line(const std::string& line, ManagerRadioView* out)
     return true;
 }
 
-bool parse_radio_info_body(const std::string& body, ManagerRadioView* out)
+bool parse_radio_info_body(const std::string& body, RadioPhyView* out)
 {
     if (out == nullptr)
     {
@@ -116,7 +116,7 @@ std::string trim_copy(const std::string& s)
 bool parse_fcs_token(const char* tok, RadioFcsMode* out_mode)
 {
     const char* value = nullptr;
-    if (!console_parse_kv(tok, "fcs=", &value) || value == nullptr)
+    if (!mplane_parse_kv(tok, "fcs=", &value) || value == nullptr)
     {
         return false;
     }
@@ -236,11 +236,11 @@ std::string format_radio_caps_ok_line(RadioFcsMode mode)
     return std::string("radio_caps_info fcs=") + radio_fcs_mode_name(mode);
 }
 
-bool radio_phy_matches_desired(const ManagerRadioView& actual, uint8_t channel,
+bool radio_phy_matches_desired(const RadioPhyView& actual, uint8_t channel,
                                int8_t power_dbm, const std::string& modulation)
 {
-    const std::string want = Config::canonical_modulation(modulation);
-    const std::string have = Config::canonical_modulation(actual.modulation);
+    const std::string want = phy_canonical_name(modulation);
+    const std::string have = phy_canonical_name(actual.modulation);
     if (want.empty() || have.empty())
     {
         return false;

@@ -1,9 +1,9 @@
 #include "radio/TxMux.h"
 
-#include "console/ConsoleParse.h"
 #include "endpoint/Upstream.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
+#include "mplane/MplaneText.h"
 #include "radio/RadioDplane.h"
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
@@ -450,7 +450,7 @@ void TxMux::handle_event(TxEvent& ev)
             std::lock_guard<std::mutex> lock(table.mutex());
             ctrl->radio->set_tx_dplane(ctrl->dplane);
             LOG_INF("tx dplane -> %s",
-                    console_format_ipv4_port(ctrl->dplane).c_str());
+                    mplane_format_ipv4_port(ctrl->dplane).c_str());
         }
     }
 }

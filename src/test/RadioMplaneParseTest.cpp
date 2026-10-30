@@ -1,4 +1,4 @@
-#include "console/ConsoleClient.h"
+#include "mplane/ConsoleClient.h"
 #include "radio/RadioMplaneParse.h"
 
 #include <gtest/gtest.h>
@@ -10,7 +10,7 @@ TEST(RadioMplaneParseTest, ParseInfoBody)
     const std::string body =
         "radio_tx channel=6 tx_power=18 modulation=OFDM_24M\n"
         "radio_rx rssi=-42\n";
-    ManagerRadioView view;
+    RadioPhyView view;
     EXPECT_TRUE(parse_radio_info_body(body, &view));
     EXPECT_EQ(view.channel, 6u);
     EXPECT_EQ(view.tx_power, 18);
@@ -21,7 +21,7 @@ TEST(RadioMplaneParseTest, ParseInfoBody)
 
 TEST(RadioMplaneParseTest, ParseCca)
 {
-    ManagerRadioView view;
+    RadioPhyView view;
     EXPECT_TRUE(parse_radio_tx_line(
         "radio_tx channel=1 cca=false modulation=DSS_1M_L", &view));
     EXPECT_TRUE(view.cca_valid);
@@ -65,7 +65,7 @@ TEST(RadioMplaneParseTest, ResolveEnosysAssumesActual)
 
 TEST(RadioMplaneParseTest, PhyMatchesDesired)
 {
-    ManagerRadioView view;
+    RadioPhyView view;
     view.channel = 6;
     view.tx_power = 18;
     view.modulation = "OFDM_24M";
@@ -75,7 +75,7 @@ TEST(RadioMplaneParseTest, PhyMatchesDesired)
 
 TEST(RadioMplaneParseTest, ParseNegativePowerAndAppliedKey)
 {
-    ManagerRadioView view;
+    RadioPhyView view;
     EXPECT_TRUE(parse_radio_tx_line(
         "radio_tx channel=1 tx_power=-10 modulation=OFDM_24M cca=true tx_power_applied=-9",
         &view));

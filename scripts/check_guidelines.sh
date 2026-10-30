@@ -12,10 +12,10 @@ fi
 
 collect_sources() {
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git ls-files 'src/manager/*.[ch]' 'src/manager/**/*.[ch]' \
+        git ls-files 'src/manager/*.[ch]' 'src/core/**/*.[ch]' 'src/l3/*.[ch]' 'src/l3/**/*.[ch]' \
             'src/test/*.[ch]' 'src/test/**/*.[ch]' 2>/dev/null || true
     else
-        find src/manager src/test \
+        find src/manager src/core src/l3 src/test \
             \( -name '*.cpp' -o -name '*.c' -o -name '*.h' -o -name '*.hpp' \) \
             2>/dev/null | sort
     fi
@@ -24,7 +24,7 @@ collect_sources() {
 should_skip() {
     local f="$1"
     case "$f" in
-        src/manager/fec/IsalEcNeon.c) return 0 ;;
+        src/core/fec/IsalEcNeon.c) return 0 ;;
     esac
     return 1
 }

@@ -1,16 +1,16 @@
 #include "radio/RadioManager.h"
 
-#include "Config.h"
 #include "radio/PhyAirtime.h"
+#include "radio/RadioConfig.h"
+#include "radio/RadioDplane.h"
 #include "radio/RadioMplaneParse.h"
 #include "radio/TxMux.h"
-#include "radio/RadioDplane.h"
 #include "utils/Log.h"
 
 namespace winject
 {
 
-void RadioManager::bind(Config* cfg, TxMux* tx_mux, RadioDplane* wifi,
+void RadioManager::bind(RadioConfig* cfg, TxMux* tx_mux, RadioDplane* wifi,
                         IOReactor* reactor)
 {
     this->cfg = cfg;
@@ -52,7 +52,7 @@ void RadioManager::sync_pacing_for_modulation(const std::string& modulation)
     {
         return;
     }
-    const std::string canonical = Config::canonical_modulation(modulation);
+    const std::string canonical = phy_canonical_name(modulation);
     if (canonical.empty())
     {
         return;
@@ -188,7 +188,7 @@ void RadioManager::on_info_due()
 
     const uint32_t info_gen = this->gen;
     query_info(
-        [this, info_gen](bool ok, const ManagerRadioView& actual)
+        [this, info_gen](bool ok, const RadioPhyView& actual)
         {
             if (info_gen != this->gen)
             {

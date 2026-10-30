@@ -1,6 +1,6 @@
 #include "radio/WifiUdp.h"
 
-#include "console/ConsoleParse.h"
+#include "mplane/MplaneText.h"
 #include "radio/WifiFcs.h"
 #include "utils/Log.h"
 
@@ -73,7 +73,7 @@ void WifiUdp::handle_rx_event(const RxEvent& ev)
             {
                 set_rx_dplane(e.dplane);
                 LOG_INF("rx dplane -> %s",
-                        console_format_ipv4_port(e.dplane).c_str());
+                        mplane_format_ipv4_port(e.dplane).c_str());
             }
         },
         ev);

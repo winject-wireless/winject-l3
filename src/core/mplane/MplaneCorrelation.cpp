@@ -1,6 +1,6 @@
-#include "console/MplaneCorrelation.h"
+#include "mplane/MplaneCorrelation.h"
 
-#include "console/MplaneErrno.h"
+#include "mplane/MplaneErrno.h"
 
 #include <cctype>
 #include <cstdio>

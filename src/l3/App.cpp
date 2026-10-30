@@ -1,10 +1,9 @@
 #include "App.h"
 
-#include "WinjectBuildVersion.h"
 #include "console/ConsoleParse.h"
-#include "console/MplaneCorrelation.h"
-#include "console/MplaneErrno.h"
 #include "frames/Mpdu.h"
+#include "mplane/MplaneCorrelation.h"
+#include "mplane/MplaneErrno.h"
 #include "radio/RadioDefs.h"
 #include "radio/RadioMplaneParse.h"
 #include "radio/RxEvent.h"
@@ -13,6 +12,7 @@
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
 #include "utils/Version.h"
+#include "WinjectBuildVersion.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -126,7 +126,7 @@ bool App::setup_radio()
         {
             return false;
         }
-        dplane = console_format_ipv4_port(d.dplane);
+        dplane = mplane_format_ipv4_port(d.dplane);
     }
     apply_radio_dplane();
     apply_configured_fcs();
@@ -1044,7 +1044,7 @@ void App::console_radio_info(ManagerConsoleReply reply)
                 return;
             }
             const std::string body = mplane_join_body(r);
-            ManagerRadioView view;
+            RadioPhyView view;
             if (parse_radio_info_body(body, &view))
             {
                 radio_manager.set_actual_phy(view);
@@ -1185,7 +1185,7 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
                 cfg.cca = patch.cca;
                 cfg.cca_explicit = true;
             }
-            ManagerRadioView view;
+            RadioPhyView view;
             if (parse_radio_info_body(mplane_join_body(r1), &view))
             {
                 radio_manager.set_actual_phy(view);
@@ -1529,7 +1529,7 @@ void App::begin_console()
         return;
     }
     LOG_INF("console ready %s",
-            console_format_ipv4_port(cfg.radio_device.mplane).c_str());
+            mplane_format_ipv4_port(cfg.radio_device.mplane).c_str());
     if (!apply_console())
     {
         drop_console();
@@ -1636,17 +1636,17 @@ int App::run()
             on_console_request_deadline(deadline);
         });
     radio_manager.set_console_ops(
-        [this](std::function<void(bool, const ManagerRadioView&)> done)
+        [this](std::function<void(bool, const RadioPhyView&)> done)
         {
             if (!console_ok)
             {
-                done(false, ManagerRadioView{});
+                done(false, RadioPhyView{});
                 return;
             }
             console.query_radio_info(
                 [this, done](MplaneResult r)
                 {
-                    ManagerRadioView view;
+                    RadioPhyView view;
                     if (!r.ok)
                     {
                         done(false, view);
@@ -1714,7 +1714,7 @@ int App::run()
     if (!console_ok)
     {
         LOG_WRN("waiting for radio m-plane %s",
-                console_format_ipv4_port(cfg.radio_device.mplane).c_str());
+                mplane_format_ipv4_port(cfg.radio_device.mplane).c_str());
     }
     ManagerRadioDeviceView rd_view;
     rd_view.id = 0;

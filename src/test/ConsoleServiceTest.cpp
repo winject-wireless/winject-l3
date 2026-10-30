@@ -1,6 +1,6 @@
 #include "console/ConsoleParse.h"
 #include "console/ManagerConsoleTypes.h"
-#include "console/MplaneErrno.h"
+#include "mplane/MplaneErrno.h"
 
 #include <arpa/inet.h>
 #include <gtest/gtest.h>
@@ -14,19 +14,19 @@ TEST(ConsoleParseTest, ParseKv)
 {
     const char* value = nullptr;
     EXPECT_TRUE(
-        console_parse_kv("max_rate_kbps=1000", "max_rate_kbps=", &value));
+        mplane_parse_kv("max_rate_kbps=1000", "max_rate_kbps=", &value));
     ASSERT_NE(value, nullptr);
     EXPECT_STREQ(value, "1000");
-    EXPECT_FALSE(console_parse_kv("other=1", "max_rate_kbps=", &value));
+    EXPECT_FALSE(mplane_parse_kv("other=1", "max_rate_kbps=", &value));
 }
 
 TEST(ConsoleParseTest, ParseU)
 {
     unsigned long v = 0;
-    EXPECT_TRUE(console_parse_u("42", &v));
+    EXPECT_TRUE(mplane_parse_u("42", &v));
     EXPECT_EQ(v, 42u);
-    EXPECT_FALSE(console_parse_u("", &v));
-    EXPECT_FALSE(console_parse_u("12abc", &v));
+    EXPECT_FALSE(mplane_parse_u("", &v));
+    EXPECT_FALSE(mplane_parse_u("12abc", &v));
 }
 
 TEST(ConsoleParseTest, ParseFecType)
@@ -46,9 +46,9 @@ TEST(ConsoleParseTest, ParseFecType)
 TEST(ConsoleParseTest, ParseU8)
 {
     uint8_t b = 0;
-    EXPECT_TRUE(console_parse_u8("255", &b));
+    EXPECT_TRUE(mplane_parse_u8("255", &b));
     EXPECT_EQ(b, 255);
-    EXPECT_FALSE(console_parse_u8("256", &b));
+    EXPECT_FALSE(mplane_parse_u8("256", &b));
 }
 
 TEST(ConsoleParseTest, ParseDurationMs)
@@ -115,14 +115,14 @@ TEST(ConsoleParseTest, FecDisplay)
 TEST(ConsoleParseTest, ParseIpv4Port)
 {
     sockaddr_in addr = {};
-    EXPECT_TRUE(console_parse_ipv4_port("127.0.0.1:22", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port(":22", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:0", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:65536", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:22x", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("localhost:22", &addr));
+    EXPECT_TRUE(mplane_parse_ipv4_port("127.0.0.1:22", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port(":22", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1:", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1:0", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1:65536", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1:22x", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("localhost:22", &addr));
 }
 
 TEST(ConsoleParseTest, ParseRadioDeviceArgs)

@@ -1,7 +1,7 @@
 #ifndef WINJECT_MANAGER_RADIO_RADIO_MANAGER_H_
 #define WINJECT_MANAGER_RADIO_RADIO_MANAGER_H_
 
-#include "console/ManagerConsoleTypes.h"
+#include "radio/RadioPhyView.h"
 #include "utils/IOReactor.h"
 #include "utils/OneShotTimer.h"
 
@@ -13,7 +13,7 @@
 namespace winject
 {
 
-class Config;
+struct RadioConfig;
 class TxMux;
 class RadioDplane;
 
@@ -23,13 +23,13 @@ class RadioManager
 {
 public:
     using QueryRadioInfoFn = std::function<void(
-        std::function<void(bool ok, const ManagerRadioView& actual)>)>;
+        std::function<void(bool ok, const RadioPhyView& actual)>)>;
     using ReapplyRadioFn = std::function<void(std::function<void(bool ok)>)>;
     using PingFn = std::function<void(std::function<void(bool ok)>)>;
     using DropConsoleFn = std::function<void()>;
     using ReconcileFilterFn = std::function<void(std::function<void(bool ok)>)>;
 
-    void bind(Config* cfg, TxMux* tx_mux, RadioDplane* wifi,
+    void bind(RadioConfig* cfg, TxMux* tx_mux, RadioDplane* wifi,
               IOReactor* reactor);
     void set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reapply,
                          PingFn ping, DropConsoleFn drop_console);
@@ -44,11 +44,11 @@ public:
     void on_console_up();
     void on_console_down();
 
-    const ManagerRadioView& actual_phy() const
+    const RadioPhyView& actual_phy() const
     {
         return actual;
     }
-    void set_actual_phy(const ManagerRadioView& view)
+    void set_actual_phy(const RadioPhyView& view)
     {
         actual = view;
     }
@@ -59,7 +59,7 @@ private:
     void on_register_due();
     void on_info_due();
 
-    Config* cfg = nullptr;
+    RadioConfig* cfg = nullptr;
     TxMux* tx_mux = nullptr;
     RadioDplane* wifi = nullptr;
     QueryRadioInfoFn query_info;
@@ -67,7 +67,7 @@ private:
     PingFn ping;
     DropConsoleFn drop_console;
     ReconcileFilterFn reconcile_filter;
-    ManagerRadioView actual{};
+    RadioPhyView actual{};
     // Bumped on console up and down; a reply from an older console session
     // does nothing.
     uint32_t gen = 0;

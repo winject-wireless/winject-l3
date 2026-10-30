@@ -1,12 +1,12 @@
 #include "console/ConsoleService.h"
 
-#include "WinjectBuildVersion.h"
 #include "console/ConsoleParse.h"
-#include "console/MplaneCorrelation.h"
-#include "console/MplaneErrno.h"
 #include "fec/RsBlockErasure.h"
+#include "mplane/MplaneCorrelation.h"
+#include "mplane/MplaneErrno.h"
 #include "utils/Log.h"
 #include "utils/Version.h"
+#include "WinjectBuildVersion.h"
 
 #include <chrono>
 #include <cinttypes>
@@ -53,7 +53,7 @@ bool parse_optional_ids(char* save, std::vector<uint8_t>* ids, std::string* err)
          a = strtok_r(nullptr, " \t", &save))
     {
         const char* value = nullptr;
-        if (!console_parse_kv(a, "ids=", &value))
+        if (!mplane_parse_kv(a, "ids=", &value))
         {
             if (err != nullptr)
             {
@@ -81,7 +81,7 @@ bool parse_optional_keys(char* save, std::vector<std::string>* keys,
          a = strtok_r(nullptr, " \t", &save))
     {
         const char* value = nullptr;
-        if (!console_parse_kv(a, "keys=", &value))
+        if (!mplane_parse_kv(a, "keys=", &value))
         {
             if (err != nullptr)
             {
@@ -121,25 +121,25 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
     {
         const char* value = nullptr;
         unsigned long v = 0;
-        if (console_parse_kv(a, "id=", &value) &&
-            console_parse_u8(value, &spec->id))
+        if (mplane_parse_kv(a, "id=", &value) &&
+            mplane_parse_u8(value, &spec->id))
         {
             have_id = true;
             continue;
         }
-        if (console_parse_kv(a, "txbus=", &value) &&
-            console_parse_u8(value, &spec->bus_tx))
+        if (mplane_parse_kv(a, "txbus=", &value) &&
+            mplane_parse_u8(value, &spec->bus_tx))
         {
             have_txbus = true;
             continue;
         }
-        if (console_parse_kv(a, "rxbus=", &value) &&
-            console_parse_u8(value, &spec->bus_rx))
+        if (mplane_parse_kv(a, "rxbus=", &value) &&
+            mplane_parse_u8(value, &spec->bus_rx))
         {
             have_rxbus = true;
             continue;
         }
-        if (console_parse_kv(a, "type=", &value))
+        if (mplane_parse_kv(a, "type=", &value))
         {
             if (strcmp(value, "UDP") != 0)
             {
@@ -153,19 +153,19 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
             have_type = true;
             continue;
         }
-        if (console_parse_kv(a, "rx=", &value))
+        if (mplane_parse_kv(a, "rx=", &value))
         {
             spec->rx = value;
             have_rx = true;
             continue;
         }
-        if (console_parse_kv(a, "tx=", &value))
+        if (mplane_parse_kv(a, "tx=", &value))
         {
             spec->tx = value;
             have_tx = true;
             continue;
         }
-        if (console_parse_kv(a, "fec=", &value))
+        if (mplane_parse_kv(a, "fec=", &value))
         {
             if (!console_parse_fec_type(value, &spec->fec))
             {
@@ -178,19 +178,19 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
             have_fec = true;
             continue;
         }
-        if (console_parse_kv(a, "k=", &value) && console_parse_u(value, &v))
+        if (mplane_parse_kv(a, "k=", &value) && mplane_parse_u(value, &v))
         {
             spec->fec_k = static_cast<int>(v);
             have_k = true;
             continue;
         }
-        if (console_parse_kv(a, "n=", &value) && console_parse_u(value, &v))
+        if (mplane_parse_kv(a, "n=", &value) && mplane_parse_u(value, &v))
         {
             spec->fec_n = static_cast<int>(v);
             have_n = true;
             continue;
         }
-        if (console_parse_kv(a, "fec_timeout=", &value))
+        if (mplane_parse_kv(a, "fec_timeout=", &value))
         {
             int ms = 0;
             if (!console_parse_duration_ms(value, &ms))
@@ -205,8 +205,8 @@ bool parse_upstream_spec(char* save, ManagerUpstreamView* spec,
             have_timeout = true;
             continue;
         }
-        if (console_parse_kv(a, "quanta=", &value) &&
-            console_parse_u(value, &v))
+        if (mplane_parse_kv(a, "quanta=", &value) &&
+            mplane_parse_u(value, &v))
         {
             if (v == 0)
             {
@@ -664,13 +664,13 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         {
             const char* value = nullptr;
             unsigned long v = 0;
-            if (console_parse_kv(a, "id=", &value) &&
-                console_parse_u8(value, &patch.id))
+            if (mplane_parse_kv(a, "id=", &value) &&
+                mplane_parse_u8(value, &patch.id))
             {
                 got_id = true;
                 continue;
             }
-            if (console_parse_kv(a, "fec=", &value))
+            if (mplane_parse_kv(a, "fec=", &value))
             {
                 if (!console_parse_fec_type(value, &patch.fec))
                 {
@@ -680,19 +680,19 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
                 patch.have_fec = true;
                 continue;
             }
-            if (console_parse_kv(a, "k=", &value) && console_parse_u(value, &v))
+            if (mplane_parse_kv(a, "k=", &value) && mplane_parse_u(value, &v))
             {
                 patch.fec_k = static_cast<int>(v);
                 patch.have_k = true;
                 continue;
             }
-            if (console_parse_kv(a, "n=", &value) && console_parse_u(value, &v))
+            if (mplane_parse_kv(a, "n=", &value) && mplane_parse_u(value, &v))
             {
                 patch.fec_n = static_cast<int>(v);
                 patch.have_n = true;
                 continue;
             }
-            if (console_parse_kv(a, "fec_timeout=", &value))
+            if (mplane_parse_kv(a, "fec_timeout=", &value))
             {
                 int ms = 0;
                 if (!console_parse_duration_ms(value, &ms))
@@ -704,8 +704,8 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
                 patch.have_fec_timeout = true;
                 continue;
             }
-            if (console_parse_kv(a, "quanta=", &value) &&
-                console_parse_u(value, &v))
+            if (mplane_parse_kv(a, "quanta=", &value) &&
+                mplane_parse_u(value, &v))
             {
                 if (v == 0)
                 {
@@ -742,8 +742,8 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         const char* value = nullptr;
         char* arg = strtok_r(nullptr, " \t", &save);
         uint8_t id = 0;
-        if (arg == nullptr || !console_parse_kv(arg, "id=", &value) ||
-            !console_parse_u8(value, &id) ||
+        if (arg == nullptr || !mplane_parse_kv(arg, "id=", &value) ||
+            !mplane_parse_u8(value, &id) ||
             strtok_r(nullptr, " \t", &save) != nullptr)
         {
             respond_nok(l3_id, k_einval);
@@ -963,8 +963,8 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         {
             const char* value = nullptr;
             unsigned long v = 0;
-            if (console_parse_kv(a, "channel=", &value) &&
-                console_parse_u(value, &v))
+            if (mplane_parse_kv(a, "channel=", &value) &&
+                mplane_parse_u(value, &v))
             {
                 patch.channel = static_cast<uint16_t>(v);
                 patch.have_channel = true;
@@ -972,23 +972,23 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
                 continue;
             }
             long sv = 0;
-            if (console_parse_kv(a, "tx_power=", &value) &&
-                console_parse_i(value, &sv) && sv >= -128 && sv <= 127)
+            if (mplane_parse_kv(a, "tx_power=", &value) &&
+                mplane_parse_i(value, &sv) && sv >= -128 && sv <= 127)
             {
                 patch.tx_power = static_cast<int>(sv);
                 patch.have_tx_power = true;
                 any = true;
                 continue;
             }
-            if (console_parse_kv(a, "modulation=", &value))
+            if (mplane_parse_kv(a, "modulation=", &value))
             {
                 patch.modulation = value;
                 patch.have_modulation = true;
                 any = true;
                 continue;
             }
-            if (console_parse_kv(a, "cca=", &value) &&
-                console_parse_u(value, &v) && v <= 1)
+            if (mplane_parse_kv(a, "cca=", &value) &&
+                mplane_parse_u(value, &v) && v <= 1)
             {
                 patch.cca = v == 1;
                 patch.have_cca = true;
@@ -1078,8 +1078,8 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         for (char* a = strtok_r(nullptr, " \t", &save); a != nullptr;
              a = strtok_r(nullptr, " \t", &save))
         {
-            if (console_parse_kv(a, "slot=", &value) &&
-                console_parse_u(value, &slot))
+            if (mplane_parse_kv(a, "slot=", &value) &&
+                mplane_parse_u(value, &slot))
             {
                 have_slot = true;
                 continue;

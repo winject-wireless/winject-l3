@@ -2,11 +2,11 @@
 #define WINJECT_MANAGER_APP_H_
 
 #include "Config.h"
-#include "console/ConsoleClient.h"
 #include "console/ConsoleService.h"
 #include "console/ManagerConsoleTypes.h"
 #include "endpoint/QueueUpstream.h"
 #include "endpoint/UDPUpstream.h"
+#include "mplane/ConsoleClient.h"
 #include "radio/RadioDplane.h"
 #include "radio/RadioManager.h"
 #include "radio/RadioUpstreamTable.h"

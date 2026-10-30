@@ -1,7 +1,7 @@
 #include "Config.h"
 #include "WinjectBuildVersion.h"
-#include "console/ConsoleClient.h"
-#include "console/MplaneCorrelation.h"
+#include "mplane/ConsoleClient.h"
+#include "mplane/MplaneCorrelation.h"
 
 #include <arpa/inet.h>
 #include <atomic>

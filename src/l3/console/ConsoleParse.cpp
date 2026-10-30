@@ -1,6 +1,6 @@
 #include "console/ConsoleParse.h"
 
-#include "console/MplaneErrno.h"
+#include "mplane/MplaneErrno.h"
 
 #include <arpa/inet.h>
 #include <climits>
@@ -14,66 +14,6 @@
 
 namespace winject
 {
-
-bool console_parse_kv(const char* text, const char* key, const char** value)
-{
-    if (text == nullptr || key == nullptr || value == nullptr)
-    {
-        return false;
-    }
-    const size_t n = strlen(key);
-    if (strncasecmp(text, key, n) != 0)
-    {
-        return false;
-    }
-    *value = text + n;
-    return true;
-}
-
-bool console_parse_u(const char* text, unsigned long* out)
-{
-    if (text == nullptr || out == nullptr || *text == '\0')
-    {
-        return false;
-    }
-    char* end = nullptr;
-    errno = 0;
-    const unsigned long v = strtoul(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0')
-    {
-        return false;
-    }
-    *out = v;
-    return true;
-}
-
-bool console_parse_i(const char* text, long* out)
-{
-    if (text == nullptr || out == nullptr || *text == '\0')
-    {
-        return false;
-    }
-    char* end = nullptr;
-    errno = 0;
-    const long v = strtol(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0')
-    {
-        return false;
-    }
-    *out = v;
-    return true;
-}
-
-bool console_parse_u8(const char* text, uint8_t* out)
-{
-    unsigned long v = 0;
-    if (!console_parse_u(text, &v) || v > 255u)
-    {
-        return false;
-    }
-    *out = static_cast<uint8_t>(v);
-    return true;
-}
 
 bool console_parse_fec_type(const char* text, FecType* out)
 {
@@ -128,7 +68,7 @@ bool console_parse_duration_ms(const char* text, int* out_ms)
         }
         memcpy(num, text, n - 2);
         num[n - 2] = '\0';
-        if (!console_parse_u(num, &v) ||
+        if (!mplane_parse_u(num, &v) ||
             v > static_cast<unsigned long>(INT_MAX))
         {
             return false;
@@ -136,7 +76,7 @@ bool console_parse_duration_ms(const char* text, int* out_ms)
         *out_ms = static_cast<int>(v);
         return true;
     }
-    if (!console_parse_u(text, &v) || v > static_cast<unsigned long>(INT_MAX))
+    if (!mplane_parse_u(text, &v) || v > static_cast<unsigned long>(INT_MAX))
     {
         return false;
     }
@@ -254,45 +194,6 @@ bool console_cmd_is(const char* cmd, const char* full, const char* abbrev,
     return abbrev2 != nullptr && strcmp(cmd, abbrev2) == 0;
 }
 
-bool console_parse_ipv4_port(const char* text, sockaddr_in* out)
-{
-    if (text == nullptr || out == nullptr || *text == '\0')
-    {
-        return false;
-    }
-    const char* colon = strchr(text, ':');
-    if (colon == nullptr || colon == text || colon[1] == '\0')
-    {
-        return false;
-    }
-    std::string host(text, colon - text);
-    const char* port_s = colon + 1;
-    char* end = nullptr;
-    errno = 0;
-    const unsigned long port = strtoul(port_s, &end, 10);
-    if (errno != 0 || end == port_s || *end != '\0' || port == 0 ||
-        port > 65535)
-    {
-        return false;
-    }
-    sockaddr_in addr = {};
-    addr.sin_family = AF_INET;
-    if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1)
-    {
-        return false;
-    }
-    addr.sin_port = htons(static_cast<uint16_t>(port));
-    *out = addr;
-    return true;
-}
-
-std::string console_format_ipv4_port(const sockaddr_in& addr)
-{
-    char ip[INET_ADDRSTRLEN] = {};
-    inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
-    return std::string(ip) + ':' + std::to_string(ntohs(addr.sin_port));
-}
-
 bool console_parse_radio_fcs(const char* text, RadioFcsConfig* out)
 {
     if (text == nullptr || out == nullptr)
@@ -352,7 +253,7 @@ bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
          a = strtok_r(nullptr, " \t", &save))
     {
         const char* value = nullptr;
-        if (console_parse_kv(a, "id=", &value))
+        if (mplane_parse_kv(a, "id=", &value))
         {
             if (have_id)
             {
@@ -363,7 +264,7 @@ bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
                 return false;
             }
             uint8_t id = 0;
-            if (!console_parse_u8(value, &id))
+            if (!mplane_parse_u8(value, &id))
             {
                 if (err != nullptr)
                 {
@@ -375,7 +276,7 @@ bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
             have_id = true;
             continue;
         }
-        if (console_parse_kv(a, "mplane=", &value))
+        if (mplane_parse_kv(a, "mplane=", &value))
         {
             if (seen_mplane || value == nullptr || *value == '\0' ||
                 strcmp(value, "-") == 0)
@@ -387,7 +288,7 @@ bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
                 return false;
             }
             sockaddr_in addr = {};
-            if (!console_parse_ipv4_port(value, &addr))
+            if (!mplane_parse_ipv4_port(value, &addr))
             {
                 if (err != nullptr)
                 {
@@ -400,7 +301,7 @@ bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
             seen_mplane = true;
             continue;
         }
-        if (console_parse_kv(a, "dplane=", &value))
+        if (mplane_parse_kv(a, "dplane=", &value))
         {
             if (seen_dplane || value == nullptr || *value == '\0' ||
                 strcmp(value, "-") == 0)
@@ -412,7 +313,7 @@ bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
                 return false;
             }
             sockaddr_in addr = {};
-            if (!console_parse_ipv4_port(value, &addr))
+            if (!mplane_parse_ipv4_port(value, &addr))
             {
                 if (err != nullptr)
                 {
@@ -425,7 +326,7 @@ bool console_parse_radio_device_args(char* save, ManagerRadioDeviceUpdate* out,
             seen_dplane = true;
             continue;
         }
-        if (console_parse_kv(a, "fcs=", &value))
+        if (mplane_parse_kv(a, "fcs=", &value))
         {
             if (seen_fcs || value == nullptr || *value == '\0')
             {
@@ -470,9 +371,9 @@ std::string console_format_radio_device(const ManagerRadioDeviceView& view)
 {
     std::string s = "radio_device id=" + std::to_string(view.id);
     s += " mplane=";
-    s += console_format_ipv4_port(view.device.mplane);
+    s += mplane_format_ipv4_port(view.device.mplane);
     s += " dplane=";
-    s += console_format_ipv4_port(view.device.dplane);
+    s += mplane_format_ipv4_port(view.device.dplane);
     s += " fcs=";
     s += console_format_radio_fcs(view.device.fcs);
     return s;

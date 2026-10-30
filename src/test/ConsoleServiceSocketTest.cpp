@@ -1,5 +1,5 @@
 #include "ConsoleTestHelpers.h"
-#include "console/MplaneErrno.h"
+#include "mplane/MplaneErrno.h"
 #include "utils/Version.h"
 
 #include "WinjectBuildVersion.h"

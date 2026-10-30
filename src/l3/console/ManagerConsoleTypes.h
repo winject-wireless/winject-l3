@@ -2,6 +2,7 @@
 #define WINJECT_MANAGER_CONSOLE_MANAGER_CONSOLE_TYPES_H_
 
 #include "Config.h"
+#include "radio/RadioPhyView.h"
 
 #include <functional>
 #include <netinet/in.h>
@@ -77,17 +78,6 @@ struct ManagerUpstreamTxStatView
     uint64_t fec_txpkt = 0;
     uint64_t tx_pending_byt = 0;
     uint64_t tx_pending_pkt = 0;
-};
-
-struct ManagerRadioView
-{
-    uint16_t channel = 0;
-    int tx_power = 0;
-    std::string modulation;
-    int8_t rssi = 0;
-    bool rssi_valid = false;
-    bool cca = false;
-    bool cca_valid = false;
 };
 
 struct ManagerRadioDeviceUpdate

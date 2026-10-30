@@ -1,8 +1,8 @@
 #ifndef WINJECT_MANAGER_UPSTREAM_H_
 #define WINJECT_MANAGER_UPSTREAM_H_
 
-#include "Config.h"
 #include "endpoint/DatagramAir.h"
+#include "endpoint/UpstreamConfig.h"
 #include "endpoint/UpstreamQueues.h"
 #include "endpoint/UpstreamStats.h"
 
