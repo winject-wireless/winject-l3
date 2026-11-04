@@ -15,6 +15,10 @@
 namespace winject
 {
 
+using winject_l3::FecType;
+using winject_l3::RadioDevice;
+using winject_l3::RadioFcs;
+
 bool console_parse_fec_type(const char* text, FecType* out)
 {
     if (text == nullptr || out == nullptr)
@@ -28,7 +32,7 @@ bool console_parse_fec_type(const char* text, FecType* out)
     }
     if (strcmp(text, "RS_BLOCK_ERASURE") == 0 || strcmp(text, "BLOCK") == 0)
     {
-        *out = FecType::RsBlockErasure;
+        *out = FecType::rs_block;
         return true;
     }
     return false;
@@ -68,8 +72,7 @@ bool console_parse_duration_ms(const char* text, int* out_ms)
         }
         memcpy(num, text, n - 2);
         num[n - 2] = '\0';
-        if (!mplane_parse_u(num, &v) ||
-            v > static_cast<unsigned long>(INT_MAX))
+        if (!mplane_parse_u(num, &v) || v > static_cast<unsigned long>(INT_MAX))
         {
             return false;
         }
@@ -194,7 +197,7 @@ bool console_cmd_is(const char* cmd, const char* full, const char* abbrev,
     return abbrev2 != nullptr && strcmp(cmd, abbrev2) == 0;
 }
 
-bool console_parse_radio_fcs(const char* text, RadioFcsConfig* out)
+bool console_parse_radio_fcs(const char* text, RadioFcs* out)
 {
     if (text == nullptr || out == nullptr)
     {
@@ -208,31 +211,31 @@ bool console_parse_radio_fcs(const char* text, RadioFcsConfig* out)
     }
     if (v == "auto")
     {
-        *out = RadioFcsConfig::auto_detect;
+        *out = RadioFcs::auto_detect;
         return true;
     }
     if (v == "signal")
     {
-        *out = RadioFcsConfig::signal;
+        *out = RadioFcs::signal;
         return true;
     }
     if (v == "actual")
     {
-        *out = RadioFcsConfig::actual;
+        *out = RadioFcs::actual;
         return true;
     }
     return false;
 }
 
-const char* console_format_radio_fcs(RadioFcsConfig fcs)
+const char* console_format_radio_fcs(RadioFcs fcs)
 {
     switch (fcs)
     {
-        case RadioFcsConfig::signal:
+        case RadioFcs::signal:
             return "SIGNAL";
-        case RadioFcsConfig::actual:
+        case RadioFcs::actual:
             return "ACTUAL";
-        case RadioFcsConfig::auto_detect:
+        case RadioFcs::auto_detect:
         default:
             return "AUTO";
     }
@@ -336,7 +339,7 @@ bool console_parse_radio_device_args(char* save, RadioDeviceUpdate* out,
                 }
                 return false;
             }
-            RadioFcsConfig fcs = RadioFcsConfig::auto_detect;
+            RadioFcs fcs = RadioFcs::auto_detect;
             if (!console_parse_radio_fcs(value, &fcs))
             {
                 if (err != nullptr)
@@ -367,15 +370,15 @@ bool console_parse_radio_device_args(char* save, RadioDeviceUpdate* out,
     return true;
 }
 
-std::string console_format_radio_device(const RadioDeviceView& view)
+std::string console_format_radio_device(uint8_t id, const RadioDevice& device)
 {
-    std::string s = "radio_device id=" + std::to_string(view.id);
+    std::string s = "radio_device id=" + std::to_string(id);
     s += " mplane=";
-    s += mplane_format_ipv4_port(view.device.mplane);
+    s += mplane_format_ipv4_port(device.mplane);
     s += " dplane=";
-    s += mplane_format_ipv4_port(view.device.dplane);
+    s += mplane_format_ipv4_port(device.dplane);
     s += " fcs=";
-    s += console_format_radio_fcs(view.device.fcs);
+    s += console_format_radio_fcs(device.fcs);
     return s;
 }
 

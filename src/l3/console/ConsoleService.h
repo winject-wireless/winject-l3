@@ -1,13 +1,14 @@
 #ifndef WINJECT_MANAGER_CONSOLE_SERVICE_H_
 #define WINJECT_MANAGER_CONSOLE_SERVICE_H_
 
-#include "ControlTypes.h"
 #include "console/ConsoleCommands.h"
 #include "utils/IOReactor.h"
 #include "utils/NetUtil.h"
+#include "winject_l3/Node.h"
 
 #include <bfc/sized_buffer.hpp>
 #include <map>
+#include <memory>
 #include <stddef.h>
 #include <string>
 #include <unordered_map>
@@ -19,16 +20,19 @@ namespace winject
 
 // Local UDP console for runtime manager controls (not the radio console).
 // Binds console_in for commands; replies to the sender of each request,
-// tagged with the sender's id when the request had one. The commands
-// themselves are ConsoleCommands.
+// tagged with the sender's id when the request had one. Each line goes to
+// winject_l3::console::execute; replies come back on l3's callback thread and
+// are posted to this reactor, so the socket stays on one thread. Runs on, and
+// must be started and stopped on, its reactor's thread.
 // Protocol: docs/mplane.md
 class ConsoleService
 {
 public:
     ~ConsoleService();
 
-    bool start(IOReactor& reactor, const sockaddr_in& console_in,
-               ControlOps bound_ops, std::string* error);
+    bool start(const std::shared_ptr<IOReactor>& reactor,
+               const sockaddr_in& console_in, winject_l3::Node node,
+               std::string* error);
     void stop();
 
 private:
@@ -52,9 +56,11 @@ private:
     void respond(uint32_t l3_id, const std::string& text);
     void handle_line(uint32_t l3_id, const char* line);
 
-    IOReactor* reactor = nullptr;
+    std::shared_ptr<IOReactor> reactor;
     bfc::socket sock;
-    ConsoleCommands commands;
+    winject_l3::Node node;
+    // Replies hold a weak copy: one that lands after stop() is dropped.
+    std::shared_ptr<ConsoleService*> alive;
     bfc::sized_buffer rx_buf;
     uint32_t next_l3_id = 1;
     std::unordered_map<uint32_t, Route> routes;

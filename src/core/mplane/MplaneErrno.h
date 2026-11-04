@@ -17,6 +17,7 @@ constexpr const char k_ecanceled[] = "ECANCELED";
 constexpr const char k_etimedout[] = "ETIMEDOUT";
 constexpr const char k_ebusy[] = "EBUSY";
 constexpr const char k_eproto[] = "EPROTO";
+constexpr const char k_ealready[] = "EALREADY";
 
 }  // namespace winject
 

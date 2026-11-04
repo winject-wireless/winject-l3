@@ -1,5 +1,6 @@
-#include "App.h"
 #include "ConsoleTestHelpers.h"
+#include "NodeCore.h"
+#include "NodeImpl.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
 
@@ -14,6 +15,47 @@
 using namespace winject;
 namespace
 {
+// These data-path tests predate the public API: App runs one node through
+// run() on its own core, with the UDP console when console_in is set.
+class App
+{
+public:
+    bool load(Config config)
+    {
+        std::string err;
+        if (!config.validate(&err))
+        {
+            return false;
+        }
+        cfg = std::move(config);
+        return true;
+    }
+    int run()
+    {
+        return winject_l3::detail::run_node(
+            core, cfg,
+            [this](const winject_l3::Node& node)
+            {
+                if (!cfg.console_in.empty())
+                {
+                    service.start(node, cfg.console_in, reactor.name);
+                }
+            },
+            {});
+    }
+    void stop()
+    {
+        core->request_stop();
+    }
+
+private:
+    Config cfg;
+    std::shared_ptr<winject_l3::detail::NodeCore> core =
+        winject_l3::detail::NodeCore::create();
+    test::ConsoleReactor reactor;
+    winject_l3::console::Service service;
+};
+
 Config config_for(const sockaddr_in& radio)
 {
     Config cfg;
@@ -452,17 +494,19 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
             cv->stop();
             thread.join();
             cv->remove_read_rdy(*inject);
-            for (const char* name : {"qd-in", "qd-out", "qd-inject", "qd-forward"})
+            for (const char* name :
+                 {"qd-in", "qd-out", "qd-inject", "qd-forward"})
             {
                 Registry::get_instance().rem(name);
             }
             bfc::cv_reactor_registry::get_instance().rem("qd-cv");
         }
-    } cleanup{cv, inject, std::thread(
-                              [cv]
-                              {
-                                  cv->run();
-                              })};
+    } cleanup{cv, inject,
+              std::thread(
+                  [cv]
+                  {
+                      cv->run();
+                  })};
 
     // The m-plane stays UDP; nothing answers it here.
     bfc::socket mplane(bfc::create_udp4());
@@ -512,11 +556,19 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
         }
         return pred();
     };
-    ASSERT_TRUE(wait_for([&] { return registrations.load() > 0; }));
+    ASSERT_TRUE(wait_for(
+        [&]
+        {
+            return registrations.load() > 0;
+        }));
 
     const uint8_t payload[] = {7, 8, 9};
     app_in->push(bfc::shared_sized_buffer::copy_from(payload, sizeof(payload)));
-    ASSERT_TRUE(wait_for([&] { return app_out->has_data(); }));
+    ASSERT_TRUE(wait_for(
+        [&]
+        {
+            return app_out->has_data();
+        }));
     auto delivered = app_out->pop();
     ASSERT_TRUE(delivered);
     EXPECT_EQ(std::vector<uint8_t>(delivered->u8(),
@@ -530,17 +582,21 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
     for (int i = 0; i < 20; ++i)
     {
         app_in->push(bfc::shared_sized_buffer::copy_from(full_sdu.data(),
-                                                       full_sdu.size()));
+                                                         full_sdu.size()));
     }
-    ASSERT_TRUE(wait_for([&] { return injected.load() >= 21; }));
+    ASSERT_TRUE(wait_for(
+        [&]
+        {
+            return injected.load() >= 21;
+        }));
     EXPECT_TRUE(peer.saw_tx_deadline.load());
 
     // Stop with another paced batch outstanding. The host owns this
-    // reactor, so App teardown must cancel its TX work without stopping it.
+    // reactor, so node teardown must cancel its TX work without stopping it.
     for (int i = 0; i < 20; ++i)
     {
         app_in->push(bfc::shared_sized_buffer::copy_from(full_sdu.data(),
-                                                       full_sdu.size()));
+                                                         full_sdu.size()));
     }
     app.stop();
     ASSERT_EQ(running.wait_for(std::chrono::seconds(2)),
@@ -548,7 +604,11 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
     EXPECT_EQ(running.get(), 0);
     auto alive = std::make_shared<std::promise<void>>();
     auto alive_future = alive->get_future();
-    cv->wake_up([alive] { alive->set_value(); });
+    cv->wake_up(
+        [alive]
+        {
+            alive->set_value();
+        });
     EXPECT_EQ(alive_future.wait_for(std::chrono::seconds(2)),
               std::future_status::ready);
 }

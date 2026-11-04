@@ -48,6 +48,10 @@ struct Config : RadioConfig
         std::string* error);
     // Canonical firmware name (e.g. OFDM_24M), or empty if unknown.
     static std::string canonical_modulation(const std::string& modulation);
+    // radio.power: normalized dBm at the antenna connector. The radio applies
+    // the nearest level it can and reports it (radio_tx ... tx_power_applied=).
+    static constexpr int k_power_min_dbm = -30;
+    static constexpr int k_power_max_dbm = 30;
     // Channel 14 is DSSS/CCK only. Unknown names are not ok.
     static bool modulation_ok_for_channel(const std::string& modulation,
                                           uint8_t channel);

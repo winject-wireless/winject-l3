@@ -208,7 +208,7 @@ bool Config::load(const std::string& path, std::string* error)
         return false;
     }
     auto pwr = parser.as<int>("radio.power");
-    if (!pwr || *pwr < -30 || *pwr > 30)
+    if (!pwr || *pwr < k_power_min_dbm || *pwr > k_power_max_dbm)
     {
         *error = "invalid radio.power";
         return false;
@@ -561,9 +561,7 @@ bool Config::validate(std::string* error) const
     {
         return fail("radio.modulation not valid for radio.channel");
     }
-    // Normalized dBm at the antenna connector; the radio applies the nearest
-    // level it can and reports it (radio_tx ... tx_power_applied=).
-    if (power_dbm < -30 || power_dbm > 30)
+    if (power_dbm < k_power_min_dbm || power_dbm > k_power_max_dbm)
     {
         return fail("invalid radio.power");
     }

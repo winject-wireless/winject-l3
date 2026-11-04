@@ -43,17 +43,18 @@ target_include_directories(winject-l3-core PUBLIC
 target_compile_options(winject-l3-core PRIVATE ${WINJECT_WARNINGS})
 target_link_libraries(winject-l3-core PUBLIC pthread isal_ec)
 
-# L3: the node on top of the core; entry points winject_l3::main (WinjectL3.h)
-# and winject_l3::Control (Control.h).
+# L3: the node on top of the core, its public API (include/winject_l3/*.h:
+# Node, managers, handles, run / stop) and the text console.
 add_library(winject-l3 STATIC ${WINJECT_L3_SOURCES})
 target_include_directories(winject-l3 PUBLIC
+    ${WINJECT_SRC}/../include
     ${WINJECT_SRC}/l3
     ${WINJECT_SRC}
 )
 target_compile_options(winject-l3 PRIVATE ${WINJECT_WARNINGS})
 target_link_libraries(winject-l3 PUBLIC winject-l3-core)
 
-# Binary: a thin main() that calls winject_l3::main.
+# Binary: main() reads the config file, runs the node and its UDP console.
 add_executable(winject-manager Main.cpp)
 target_compile_options(winject-manager PRIVATE -Wall -Wextra -fno-rtti)
 target_link_libraries(winject-manager PRIVATE winject-l3)

@@ -4,6 +4,7 @@
 #include "mplane/MplaneCorrelation.h"
 #include "mplane/MplaneErrno.h"
 #include "utils/Log.h"
+#include "winject_l3/Console.h"
 
 #include <chrono>
 #include <cinttypes>
@@ -22,8 +23,9 @@ ConsoleService::~ConsoleService()
     stop();
 }
 
-bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
-                           ControlOps bound_ops, std::string* error)
+bool ConsoleService::start(const std::shared_ptr<IOReactor>& on_reactor,
+                           const sockaddr_in& console_in,
+                           winject_l3::Node bound_node, std::string* error)
 {
     auto fail = [&](const char* msg) -> bool
     {
@@ -33,14 +35,14 @@ bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
         }
         return false;
     };
-    ConsoleCommands bound(std::move(bound_ops));
-    if (!bound.valid())
+    if (!on_reactor)
     {
-        return fail("invalid manager console args");
+        return fail("no reactor");
     }
     stop();
-    this->reactor = &reactor;
-    this->commands = std::move(bound);
+    this->reactor = on_reactor;
+    this->node = std::move(bound_node);
+    this->alive = std::make_shared<ConsoleService*>(this);
     sock = bfc::socket(bfc::create_udp4());
     if (sock.fd() < 0)
     {
@@ -50,15 +52,17 @@ bool ConsoleService::start(IOReactor& reactor, const sockaddr_in& console_in,
     sock.set_sock_opt(SOL_SOCKET, SO_REUSEADDR, one);
     if (sock.bind(console_in) < 0)
     {
-        const char* why = strerror(errno);
+        const int saved = errno;
+        const char* why = strerror(saved);
         stop();
+        errno = saved;  // for the caller's error code
         return fail(why);
     }
-    if (!reactor.add_read_rdy(sock.fd(),
-                              [this]()
-                              {
-                                  on_datagram();
-                              }))
+    if (!reactor->add_read_rdy(sock.fd(),
+                               [this]()
+                               {
+                                   on_datagram();
+                               }))
     {
         stop();
         return fail("epoll add failed");
@@ -81,8 +85,9 @@ void ConsoleService::stop()
         }
         bfc::socket(std::move(sock));
     }
-    this->reactor = nullptr;
-    this->commands = {};
+    this->reactor.reset();
+    this->node = {};
+    this->alive.reset();
     routes.clear();
     in_flight.clear();
     next_l3_id = 1;
@@ -249,11 +254,26 @@ void ConsoleService::on_datagram()
 
 void ConsoleService::handle_line(uint32_t l3_id, const char* line)
 {
-    commands.handle(line,
-                    [this, l3_id](const std::string& text)
+    std::weak_ptr<ConsoleService*> weak = alive;
+    std::weak_ptr<IOReactor> weak_reactor = reactor;
+    winject_l3::console::execute(
+        node, line,
+        [weak, weak_reactor, l3_id](const std::string& text)
+        {
+            auto on = weak_reactor.lock();
+            if (!on)
+            {
+                return;
+            }
+            on->wake_up(
+                [weak, l3_id, text]()
+                {
+                    if (auto self = weak.lock())
                     {
-                        respond(l3_id, text);
-                    });
+                        (*self)->respond(l3_id, text);
+                    }
+                });
+        });
 }
 
 }  // namespace winject

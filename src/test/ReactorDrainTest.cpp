@@ -19,7 +19,6 @@ namespace winject
 {
 using test::reserve_free_udp_port;
 using test::run_reactor_with_watchdog;
-using test::stub_console_handlers;
 
 TEST(ReactorDrainTest, WifiUdpDrainDoesNotBlock)
 {

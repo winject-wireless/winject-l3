@@ -1,5 +1,4 @@
 #include "console/ConsoleParse.h"
-#include "ControlTypes.h"
 #include "mplane/MplaneErrno.h"
 
 #include <arpa/inet.h>
@@ -9,6 +8,7 @@
 #include <vector>
 
 using namespace winject;
+using winject_l3::FecType;
 
 TEST(ConsoleParseTest, ParseKv)
 {
@@ -31,15 +31,15 @@ TEST(ConsoleParseTest, ParseU)
 
 TEST(ConsoleParseTest, ParseFecType)
 {
-    FecType type = FecType::RsBlockErasure;
+    FecType type = FecType::rs_block;
     EXPECT_TRUE(console_parse_fec_type("NONE", &type));
     EXPECT_EQ(type, FecType::none);
     EXPECT_TRUE(console_parse_fec_type("none", &type));
     EXPECT_EQ(type, FecType::none);
     EXPECT_TRUE(console_parse_fec_type("RS_BLOCK_ERASURE", &type));
-    EXPECT_EQ(type, FecType::RsBlockErasure);
+    EXPECT_EQ(type, FecType::rs_block);
     EXPECT_TRUE(console_parse_fec_type("BLOCK", &type));
-    EXPECT_EQ(type, FecType::RsBlockErasure);
+    EXPECT_EQ(type, FecType::rs_block);
     EXPECT_FALSE(console_parse_fec_type("bogus", &type));
 }
 
@@ -107,7 +107,7 @@ TEST(ConsoleParseTest, FecDisplay)
     EXPECT_TRUE(
         console_format_fec_display(FecType::none, 0, 0, buf, sizeof(buf)));
     EXPECT_STREQ(buf, "none");
-    EXPECT_TRUE(console_format_fec_display(FecType::RsBlockErasure, 10, 16, buf,
+    EXPECT_TRUE(console_format_fec_display(FecType::rs_block, 10, 16, buf,
                                            sizeof(buf)));
     EXPECT_STREQ(buf, "block(10,16)");
 }
@@ -139,18 +139,15 @@ TEST(ConsoleParseTest, ParseRadioDeviceArgs)
 
 TEST(ConsoleParseTest, FormatRadioDevice)
 {
-    RadioDeviceView view;
-    view.id = 0;
-    view.device.mplane.sin_family = AF_INET;
-    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &view.device.mplane.sin_addr),
-              1);
-    view.device.mplane.sin_port = htons(22);
-    view.device.dplane.sin_family = AF_INET;
-    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &view.device.dplane.sin_addr),
-              1);
-    view.device.dplane.sin_port = htons(9000);
+    winject_l3::RadioDevice device;
+    device.mplane.sin_family = AF_INET;
+    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &device.mplane.sin_addr), 1);
+    device.mplane.sin_port = htons(22);
+    device.dplane.sin_family = AF_INET;
+    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &device.dplane.sin_addr), 1);
+    device.dplane.sin_port = htons(9000);
     EXPECT_EQ(
-        console_format_radio_device(view),
+        console_format_radio_device(0, device),
         "radio_device id=0 mplane=192.168.32.1:22 dplane=192.168.32.1:9000 "
         "fcs=AUTO");
 }
