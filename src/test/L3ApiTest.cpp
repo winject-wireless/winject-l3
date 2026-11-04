@@ -1,30 +1,30 @@
-// The public API (include/winject_l3) against a real node and a FakeRadio,
+// The public API (include/winject_l3) against a real l3 and a FakeRadio,
 // including the threading rules of aidocs/public-api.md: any thread may call
-// the node, user code never runs on the node's thread except on_queue, and
-// a node that stops cancels what is pending.
+// l3, user code never runs on l3's thread except on_queue, and
+// an l3 that stops cancels what is pending.
 
 #include "ConsoleTestHelpers.h"
-#include "NodeCore.h"
-#include "NodeImpl.h"
+#include "L3Core.h"
+#include "L3Impl.h"
 #include "radio/RadioMplaneParse.h"
 #include "winject_l3/Console.h"
-#include "winject_l3/Node.h"
+#include "winject_l3/L3.h"
 
 #include <chrono>
 #include <future>
 #include <gtest/gtest.h>
 #include <thread>
 
-using namespace winject;
-using namespace winject::test;
-namespace api = winject_l3;
+using namespace winject::core;
+using namespace winject::core::test;
+namespace api = winject;
 
 namespace
 {
 
-TEST(NodeApiTest, DetachedHandlesReturnEsrch)
+TEST(L3ApiTest, DetachedHandlesReturnEsrch)
 {
-    api::Node none;
+    api::L3 none;
     EXPECT_FALSE(none.running());
     EXPECT_EQ(none.upstreams().list().status.error, "ESRCH");
     EXPECT_EQ(none.radios().get().status.error, "ESRCH");
@@ -40,66 +40,67 @@ TEST(NodeApiTest, DetachedHandlesReturnEsrch)
             async_error = r.status.error;
         });
     EXPECT_EQ(async_error, "ESRCH");
-    EXPECT_EQ(none.post([](const api::Node&) {}).error, "ESRCH");
-    EXPECT_EQ(api::console::execute(none, "lu"), "NOK ESRCH");
-    // The process's node is not running in this test binary.
-    EXPECT_FALSE(api::node().running());
-    EXPECT_EQ(api::node().metrics().status.error, "ESRCH");
+    EXPECT_EQ(none.post([](const api::L3&) {}).error, "ESRCH");
+    EXPECT_EQ(api::l3::console::execute(none, "lu"), "NOK ESRCH");
+    // The process's l3 is not running in this test binary.
+    EXPECT_FALSE(api::L3::instance().running());
+    EXPECT_EQ(api::L3::instance().metrics().status.error, "ESRCH");
 }
 
-TEST(NodeApiTest, BlankAndOverlongLinesMatchTheUdpConsole)
+TEST(L3ApiTest, BlankAndOverlongLinesMatchTheUdpConsole)
 {
-    api::Node none;
-    EXPECT_EQ(api::console::execute(none, "   "), "");
-    EXPECT_EQ(api::console::execute(none, "# comment"), "");
-    EXPECT_EQ(api::console::execute(none, std::string(600, 'x')), "NOK EINVAL");
+    api::L3 none;
+    EXPECT_EQ(api::l3::console::execute(none, "   "), "");
+    EXPECT_EQ(api::l3::console::execute(none, "# comment"), "");
+    EXPECT_EQ(api::l3::console::execute(none, std::string(600, 'x')),
+              "NOK EINVAL");
     bool called = false;
-    api::console::execute(none, "  ",
-                          [&](const std::string&)
-                          {
-                              called = true;
-                          });
+    api::l3::console::execute(none, "  ",
+                              [&](const std::string&)
+                              {
+                                  called = true;
+                              });
     EXPECT_FALSE(called);
 }
 
-TEST(NodeApiTest, StopBeforeRunDoesNotLoseTheStopRequest)
+TEST(L3ApiTest, StopBeforeRunDoesNotLoseTheStopRequest)
 {
     FakeRadio radio;
-    auto core = api::detail::NodeCore::create();
+    auto core = api::l3::detail::L3Core::create();
     core->request_stop();
     const auto before = std::chrono::steady_clock::now();
-    EXPECT_EQ(api::detail::run_node(core, config_for(radio), {}, {}), 0);
+    EXPECT_EQ(api::l3::detail::run_l3(core, config_for(radio), {}, {}), 0);
     EXPECT_LT(std::chrono::steady_clock::now() - before,
               std::chrono::seconds(1));
     // The request is spent: the core can run again.
     EXPECT_FALSE(core->stop_requested.load());
 }
 
-TEST(NodeApiTest, InvalidConfigReturnsOne)
+TEST(L3ApiTest, InvalidConfigReturnsOne)
 {
     FakeRadio radio;
     Config cfg = config_for(radio);
     cfg.domain = 0;
-    auto core = api::detail::NodeCore::create();
-    EXPECT_EQ(api::detail::run_node(core, cfg, {}, {}), 1);
+    auto core = api::l3::detail::L3Core::create();
+    EXPECT_EQ(api::l3::detail::run_l3(core, cfg, {}, {}), 1);
 }
 
-TEST(NodeApiTest, ThreadSetupRunsBeforeEachThread)
+TEST(L3ApiTest, ThreadSetupRunsBeforeEachThread)
 {
     FakeRadio radio;
-    auto core = api::detail::NodeCore::create();
-    std::vector<api::Thread> seen;
+    auto core = api::l3::detail::L3Core::create();
+    std::vector<api::L3::Thread> seen;
     std::thread::id setup_thread;
     auto running = std::async(std::launch::async,
                               [&]()
                               {
-                                  return api::detail::run_node(
+                                  return api::l3::detail::run_l3(
                                       core, config_for(radio),
-                                      [&](const api::Node&)
+                                      [&](const api::L3&)
                                       {
                                           core->request_stop();
                                       },
-                                      [&](api::Thread t)
+                                      [&](api::L3::Thread t)
                                       {
                                           seen.push_back(t);
                                           setup_thread =
@@ -110,23 +111,23 @@ TEST(NodeApiTest, ThreadSetupRunsBeforeEachThread)
               std::future_status::ready);
     EXPECT_EQ(running.get(), 0);
     ASSERT_EQ(seen.size(), 2u);
-    EXPECT_EQ(seen[0], api::Thread::upstream);
-    EXPECT_EQ(seen[1], api::Thread::node);
+    EXPECT_EQ(seen[0], api::L3::Thread::upstream);
+    EXPECT_EQ(seen[1], api::L3::Thread::l3);
 }
 
-TEST(NodeApiTest, ApplyBuildsTheConfigAndHandlesWork)
+TEST(L3ApiTest, ApplyBuildsTheConfigAndHandlesWork)
 {
     FakeRadio radio;
-    TestNode t;
+    TestL3 t;
     std::thread::id started_thread;
     ASSERT_TRUE(t.start(config_for(radio),
-                        [&](const api::Node&)
+                        [&](const api::L3&)
                         {
                             started_thread = std::this_thread::get_id();
                         }));
     ASSERT_TRUE(t.radio_up());
 
-    auto list = t.node.upstreams().list();
+    auto list = t.l3.upstreams().list();
     ASSERT_TRUE(list.ok()) << list.status.error;
     ASSERT_EQ(list.value.size(), 1u);
     api::Upstream up = list.value[0];
@@ -151,10 +152,10 @@ TEST(NodeApiTest, ApplyBuildsTheConfigAndHandlesWork)
     fec.n = 99;
     EXPECT_EQ(up.set_fec(fec).error, "EINVAL");
 
-    EXPECT_EQ(t.node.upstreams().remove(9).error, "ENOENT");
-    EXPECT_EQ(t.node.upstreams().get(9).status.error, "ENOENT");
+    EXPECT_EQ(t.l3.upstreams().remove(9).error, "ENOENT");
+    EXPECT_EQ(t.l3.upstreams().get(9).status.error, "ENOENT");
 
-    auto r = t.node.radios().get();
+    auto r = t.l3.radios().get();
     ASSERT_TRUE(r.ok());
     api::Radio rad = r.value;
     EXPECT_EQ(rad.domain().value, 0x1234);
@@ -165,7 +166,7 @@ TEST(NodeApiTest, ApplyBuildsTheConfigAndHandlesWork)
     ASSERT_TRUE(info.value.rssi.has_value());
     EXPECT_EQ(*info.value.rssi, -40);
     ASSERT_TRUE(info.value.version.has_value());
-    EXPECT_EQ(info.value.version->x, api::version().x);
+    EXPECT_EQ(info.value.version->x, api::L3::version().x);
 
     auto caps = rad.caps();
     ASSERT_TRUE(caps.ok());
@@ -181,37 +182,37 @@ TEST(NodeApiTest, ApplyBuildsTheConfigAndHandlesWork)
     ASSERT_TRUE(stats.ok()) << stats.status.error;
     EXPECT_EQ(stats.value.tx.air_packets, 0u);
 
-    auto metrics = t.node.metrics({"radio_proto_ok"});
+    auto metrics = t.l3.metrics({"radio_proto_ok"});
     ASSERT_TRUE(metrics.ok());
     ASSERT_EQ(metrics.value.size(), 1u);
     EXPECT_EQ(metrics.value[0].value, "1");
 
-    EXPECT_EQ(t.node.radios().create(api::RadioSpec{}).status.error, "EEXIST");
-    EXPECT_EQ(t.node.radios().add(rad).error, "EALREADY");
-    EXPECT_EQ(t.node.radios().remove().error, "EBUSY");
+    EXPECT_EQ(t.l3.radios().create(api::RadioSpec{}).status.error, "EEXIST");
+    EXPECT_EQ(t.l3.radios().add(rad).error, "EALREADY");
+    EXPECT_EQ(t.l3.radios().remove().error, "EBUSY");
     EXPECT_EQ(t.stop(), 0);
-    EXPECT_FALSE(t.node.running());
+    EXPECT_FALSE(t.l3.running());
     EXPECT_EQ(up.spec().status.error, "ESRCH");
 }
 
-// Any thread may call the node: started, Done and post run on the callback
+// Any thread may call l3: started, Done and post run on the callback
 // thread, and blocking calls (radio ones too) work there.
-TEST(NodeApiTest, BlockingCallsWorkFromStartedDoneAndPost)
+TEST(L3ApiTest, BlockingCallsWorkFromStartedDoneAndPost)
 {
     FakeRadio radio;
-    TestNode t;
+    TestL3 t;
     std::string from_started;
     std::thread::id callback_thread;
     ASSERT_TRUE(t.start(config_for(radio),
-                        [&](const api::Node& node)
+                        [&](const api::L3& l3)
                         {
                             callback_thread = std::this_thread::get_id();
-                            auto list = node.upstreams().list();
+                            auto list = l3.upstreams().list();
                             from_started = list.ok() ? "ok" : list.status.error;
                         }));
     EXPECT_EQ(from_started, "ok");
     ASSERT_TRUE(t.radio_up());
-    api::Radio rad = t.node.radios().get().value;
+    api::Radio rad = t.l3.radios().get().value;
 
     std::promise<std::string> got;
     auto result = got.get_future();
@@ -223,7 +224,7 @@ TEST(NodeApiTest, BlockingCallsWorkFromStartedDoneAndPost)
             // A blocking radio call from inside a Done.
             auto inner = rad.info(std::chrono::milliseconds(2000));
             std::string text = inner.ok() ? "ok" : inner.status.error;
-            text += " " + api::console::execute(t.node, "ping");
+            text += " " + api::l3::console::execute(t.l3, "ping");
             got.set_value(text);
         });
     ASSERT_EQ(result.wait_for(std::chrono::seconds(3)),
@@ -233,12 +234,11 @@ TEST(NodeApiTest, BlockingCallsWorkFromStartedDoneAndPost)
     std::promise<std::string> posted;
     auto posted_result = posted.get_future();
     ASSERT_TRUE(
-        t.node
-            .post(
-                [&](const api::Node& node)
+        t.l3.post(
+                [&](const api::L3& l3)
                 {
                     EXPECT_EQ(std::this_thread::get_id(), callback_thread);
-                    auto stats = node.radios().get().value.stats();
+                    auto stats = l3.radios().get().value.stats();
                     posted.set_value(stats.ok() ? "ok" : stats.status.error);
                 })
             .ok());
@@ -247,11 +247,11 @@ TEST(NodeApiTest, BlockingCallsWorkFromStartedDoneAndPost)
     EXPECT_EQ(posted_result.get(), "ok");
 }
 
-// on_queue runs on the node's thread mid-add: an l3 call from it is EDEADLK.
-TEST(NodeApiTest, OnQueueRunsOnTheNodeThreadAndCallsAreEdeadlk)
+// on_queue runs on l3's thread mid-add: an l3 call from it is EDEADLK.
+TEST(L3ApiTest, OnQueueRunsOnTheL3ThreadAndCallsAreEdeadlk)
 {
     FakeRadio radio;
-    TestNode t;
+    TestL3 t;
     ASSERT_TRUE(t.start(config_for(radio)));
     std::string inner;
     std::shared_ptr<UpstreamQueue> queue;
@@ -260,13 +260,13 @@ TEST(NodeApiTest, OnQueueRunsOnTheNodeThreadAndCallsAreEdeadlk)
     spec.bus_tx = 5;
     spec.bus_rx = 5;
     spec.transport = api::Transport::queue;
-    const api::Node node = t.node;
+    const api::L3 l3 = t.l3;
     spec.on_queue = [&](std::shared_ptr<UpstreamQueue> q)
     {
         queue = std::move(q);
-        inner = node.upstreams().list().status.error;
+        inner = l3.upstreams().list().status.error;
     };
-    auto added = t.node.upstreams().add(spec);
+    auto added = t.l3.upstreams().add(spec);
     ASSERT_TRUE(added.ok()) << added.status.error;
     EXPECT_TRUE(queue != nullptr);
     EXPECT_EQ(inner, "EDEADLK");
@@ -276,15 +276,15 @@ TEST(NodeApiTest, OnQueueRunsOnTheNodeThreadAndCallsAreEdeadlk)
     spec.bus_tx = 6;
     spec.bus_rx = 6;
     spec.on_queue = nullptr;
-    EXPECT_EQ(t.node.upstreams().add(spec).status.error, "EINVAL");
+    EXPECT_EQ(t.l3.upstreams().add(spec).status.error, "EINVAL");
 }
 
-// ETIMEDOUT leaves the outcome unknown; a request the node had not started
+// ETIMEDOUT leaves the outcome unknown; a request l3 had not started
 // is skipped.
-TEST(NodeApiTest, TimedOutRequestThatHasNotStartedIsSkipped)
+TEST(L3ApiTest, TimedOutRequestThatHasNotStartedIsSkipped)
 {
     FakeRadio radio;
-    TestNode t;
+    TestL3 t;
     ASSERT_TRUE(t.start(config_for(radio)));
     std::promise<void> release;
     auto released = release.get_future().share();
@@ -296,14 +296,14 @@ TEST(NodeApiTest, TimedOutRequestThatHasNotStartedIsSkipped)
     spec.transport = api::Transport::queue;
     spec.on_queue = [&, released](std::shared_ptr<UpstreamQueue>)
     {
-        // Holds the node's thread.
+        // Holds l3's thread.
         holding = true;
         released.wait();
     };
     auto adding = std::async(std::launch::async,
                              [&]()
                              {
-                                 return t.node.upstreams().add(spec);
+                                 return t.l3.upstreams().add(spec);
                              });
     ASSERT_TRUE(wait_until(
         [&]()
@@ -311,9 +311,9 @@ TEST(NodeApiTest, TimedOutRequestThatHasNotStartedIsSkipped)
             return holding.load();
         }));
     std::atomic<bool> ran{false};
-    const api::Status timed_out = api::detail::call_status(
+    const api::Status timed_out = api::l3::detail::call_status(
         t.core,
-        [&](NodeImpl&)
+        [&](api::l3::detail::L3Impl&)
         {
             ran = true;
             return api::Status{};
@@ -323,20 +323,20 @@ TEST(NodeApiTest, TimedOutRequestThatHasNotStartedIsSkipped)
     release.set_value();
     ASSERT_TRUE(adding.get().ok());
     // A later call runs after the skipped one would have.
-    EXPECT_TRUE(t.node.upstreams().get(7).ok());
+    EXPECT_TRUE(t.l3.upstreams().get(7).ok());
     EXPECT_FALSE(ran.load());
 }
 
-// Requests pending when the node stops get ECANCELED at once, not after
+// Requests pending when l3 stops get ECANCELED at once, not after
 // their timeout.
-TEST(NodeApiTest, PendingRequestsAreCanceledWhenTheNodeStops)
+TEST(L3ApiTest, PendingRequestsAreCanceledWhenL3Stops)
 {
     FakeRadio radio;
-    TestNode t;
+    TestL3 t;
     ASSERT_TRUE(t.start(config_for(radio)));
     ASSERT_TRUE(t.radio_up());
     radio.hold("radio_tx_info");
-    api::Radio rad = t.node.radios().get().value;
+    api::Radio rad = t.l3.radios().get().value;
 
     std::promise<std::string> async_done;
     auto async_result = async_done.get_future();
@@ -364,19 +364,19 @@ TEST(NodeApiTest, PendingRequestsAreCanceledWhenTheNodeStops)
               std::chrono::seconds(2));
 }
 
-TEST(NodeApiTest, RadioLifecycle)
+TEST(L3ApiTest, RadioLifecycle)
 {
     FakeRadio radio;
-    TestNode t;
+    TestL3 t;
     ASSERT_TRUE(t.start(config_for(radio)));
     ASSERT_TRUE(t.radio_up());
-    api::RadioManager radios = t.node.radios();
+    api::RadioManager radios = t.l3.radios();
     api::Radio rad = radios.get().value;
     const api::RadioSpec spec = rad.spec().value;
     EXPECT_EQ(spec.domain, 0x1234);
     EXPECT_EQ(spec.phy.modulation, "OFDM_24M");
 
-    ASSERT_TRUE(t.node.upstreams().remove(4).ok());
+    ASSERT_TRUE(t.l3.upstreams().remove(4).ok());
     ASSERT_TRUE(radios.remove().ok());
     EXPECT_EQ(radios.get().status.error, "ENOENT");
     EXPECT_FALSE(rad.valid());
@@ -385,7 +385,7 @@ TEST(NodeApiTest, RadioLifecycle)
     up.id = 1;
     up.bus_tx = 1;
     up.tx = "127.0.0.1:9";
-    EXPECT_EQ(t.node.upstreams().add(up).status.error, "ENODEV");
+    EXPECT_EQ(t.l3.upstreams().add(up).status.error, "ENODEV");
 
     api::RadioSpec bad = spec;
     bad.domain = 0;
@@ -403,19 +403,19 @@ TEST(NodeApiTest, RadioLifecycle)
     EXPECT_TRUE(stored.value.text.empty());
     EXPECT_EQ(created.value.phy().value.power_dbm, 10);
     EXPECT_EQ(created.value.info().status.error, "ENODEV");
-    ASSERT_TRUE(t.node.upstreams().add(up).ok());
+    ASSERT_TRUE(t.l3.upstreams().add(up).ok());
     ASSERT_TRUE(radios.add(created.value).ok());
     ASSERT_TRUE(t.radio_up());
     EXPECT_GE(radio.seen("radio_tx channel=1 tx_power=10"), 1u);
 }
 
-TEST(NodeApiTest, SetDevice)
+TEST(L3ApiTest, SetDevice)
 {
     FakeRadio radio;
-    TestNode t;
+    TestL3 t;
     ASSERT_TRUE(t.start(config_for(radio)));
     ASSERT_TRUE(t.radio_up());
-    api::Radio rad = t.node.radios().get().value;
+    api::Radio rad = t.l3.radios().get().value;
     api::RadioDevice d = rad.device().value;
     EXPECT_EQ(d.fcs, api::RadioFcs::signal);
     api::RadioDevice cleared = d;
@@ -438,7 +438,7 @@ TEST(NodeApiTest, SetDevice)
     EXPECT_TRUE(t.radio_up(3000));
 }
 
-TEST(NodeApiTest, StatsFormatRoundTripsTheRadioLines)
+TEST(L3ApiTest, StatsFormatRoundTripsTheRadioLines)
 {
     const std::vector<std::string> lines = {
         "tx_info tx_queue_sz=3 in_flight=2 dropped_invalid_frame=4294967295 "
@@ -465,24 +465,24 @@ TEST(NodeApiTest, StatsFormatRoundTripsTheRadioLines)
     s.rx.ether_packets = c.rx.ether_packets;
     s.rx.air_packets = c.rx.air_packets;
     s.rx.timestamp_us = c.rx.timestamp_us;
-    EXPECT_EQ(api::console::format(s), lines[0] + "\n" + lines[1]);
+    EXPECT_EQ(api::l3::console::format(s), lines[0] + "\n" + lines[1]);
 }
 
-TEST(NodeApiTest, ServiceStartErrors)
+TEST(L3ApiTest, ServiceStartErrors)
 {
     FakeRadio radio;
-    TestNode t;
+    TestL3 t;
     ASSERT_TRUE(t.start(config_for(radio)));
-    api::console::Service service;
-    EXPECT_EQ(service.start(t.node, "127.0.0.1:1", "no-such-reactor").error,
+    api::l3::console::Service service;
+    EXPECT_EQ(service.start(t.l3, "127.0.0.1:1", "no-such-reactor").error,
               "ENOENT");
-    EXPECT_EQ(service.start(t.node, "nonsense", "no-such-reactor").error,
+    EXPECT_EQ(service.start(t.l3, "nonsense", "no-such-reactor").error,
               "EINVAL");
     ConsoleReactor reactor;
     const uint16_t port = reserve_free_udp_port();
     const std::string at = "127.0.0.1:" + std::to_string(port);
-    ASSERT_TRUE(service.start(t.node, at, reactor.name).ok());
-    EXPECT_EQ(service.start(t.node, at, reactor.name).error, "EALREADY");
+    ASSERT_TRUE(service.start(t.l3, at, reactor.name).ok());
+    EXPECT_EQ(service.start(t.l3, at, reactor.name).error, "EALREADY");
     std::string on_thread;
     ASSERT_TRUE(reactor.on_reactor(
         [&]()

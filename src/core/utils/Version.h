@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string>
 
-namespace winject
+namespace winject::core
 {
 
 struct WinjectVersion
@@ -21,6 +21,6 @@ bool parse_version_from_mplane(const MplaneResult& r, WinjectVersion* out);
 bool protocol_compatible(const WinjectVersion& a, const WinjectVersion& b);
 WinjectVersion own_version();
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_UTILS_VERSION_H_

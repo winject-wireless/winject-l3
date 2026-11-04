@@ -1,7 +1,7 @@
 #ifndef WINJECT_MANAGER_CONSOLE_MPLANE_ERRNO_H_
 #define WINJECT_MANAGER_CONSOLE_MPLANE_ERRNO_H_
 
-namespace winject
+namespace winject::core
 {
 
 // Manager m-plane NOK codes (Linux errno names, same as the radio m-plane).
@@ -19,6 +19,6 @@ constexpr const char k_ebusy[] = "EBUSY";
 constexpr const char k_eproto[] = "EPROTO";
 constexpr const char k_ealready[] = "EALREADY";
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_CONSOLE_MPLANE_ERRNO_H_

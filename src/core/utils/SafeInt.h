@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <endian.h>
 
-namespace winject
+namespace winject::core
 {
 
 inline uint16_t sf_htole16(uint16_t x)
@@ -218,6 +218,6 @@ using BEI16UA = SafeIntUnaligned<int16_t, &sf_htobe16i, &sf_be16tohi>;
 using BEI32UA = SafeIntUnaligned<int32_t, &sf_htobe32i, &sf_be32tohi>;
 using BEI64UA = SafeIntUnaligned<int64_t, &sf_htobe64i, &sf_be64tohi>;
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_UTILS_SAFE_INT_H_

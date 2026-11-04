@@ -1,4 +1,4 @@
-// The UDP console against a real node and a FakeRadio: the wire as a client
+// The UDP console against a real l3 and a FakeRadio: the wire as a client
 // sees it (docs/mplane.md).
 
 #include "ConsoleTestHelpers.h"
@@ -9,8 +9,8 @@
 #include <gtest/gtest.h>
 #include <vector>
 
-using namespace winject;
-using namespace winject::test;
+using namespace winject::core;
+using namespace winject::core::test;
 
 TEST(ConsoleServiceSocketTest, UntaggedPing)
 {
@@ -140,7 +140,7 @@ TEST(ConsoleServiceSocketTest, RetransmitWhileInFlight)
     EXPECT_STREQ(reply.c_str(), "OK:3 twice\n");
 }
 
-// The console's reactor never waits on the node: with l3's callback thread
+// The console's reactor never waits on l3: with l3's callback thread
 // held, lines pile up as open routes until the table is full, and the
 // console still answers.
 TEST(ConsoleServiceSocketTest, TableFullReturnsBusy)
@@ -152,9 +152,9 @@ TEST(ConsoleServiceSocketTest, TableFullReturnsBusy)
     std::promise<void> release;
     auto released = release.get_future().share();
     std::atomic<bool> holding{false};
-    ASSERT_TRUE(harness.node.node
+    ASSERT_TRUE(harness.l3.l3
                     .post(
-                        [released, &holding](const winject_l3::Node&)
+                        [released, &holding](const winject::L3&)
                         {
                             holding = true;
                             released.wait();

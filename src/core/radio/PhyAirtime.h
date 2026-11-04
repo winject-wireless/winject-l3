@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <string>
 
-namespace winject
+namespace winject::core
 {
 
 enum class PhyFamily : uint8_t
@@ -32,6 +32,6 @@ std::string phy_canonical_name(const std::string& modulation);
 uint32_t phy_txtime_us(const PhyMode& m, size_t psdu_bytes);
 uint32_t phy_default_gap_us(const PhyMode& m);
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_PHY_AIRTIME_H_

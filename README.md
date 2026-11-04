@@ -15,8 +15,8 @@ Both speak the same radio protocol; the manager uses the same config schema for 
 
 ```
 src/core/               lib winject-l3-core: data path and radio m-plane client (frames/, fec/, radio/, endpoint/, mplane/, utils/)
-include/winject_l3/     public API: Node, UpstreamManager / Upstream, RadioManager / Radio, run / stop, console
-src/l3/                 lib winject-l3: Config, the node (NodeImpl) behind the API, console/ (text + UDP)
+include/winject_l3/     public API (namespace winject): L3, UpstreamManager / Upstream, RadioManager / Radio, console
+src/l3/                 lib winject-l3: Config, the l3 applet (L3Impl) behind the API, console/ (text + UDP)
 src/manager/            winject-manager binary and the CMake entry point
 src/test/               Host unit tests (GoogleTest)
 configuration/          Manager configs: host_x86/, host_arm/ (video demo), winject-tests/<scenario>/ (bench); scenario.md
@@ -55,42 +55,42 @@ cmake --build build_manager_host -j"$(nproc)"
 
 The manager is built as two static libraries plus a thin `winject-manager` binary ([`Main.cpp`](src/manager/Main.cpp)):
 
-- `winject-l3-core` ([`src/core`](src/core)): the data path — frames, FEC, radio TX mux / RX demux, upstreams — and the radio m-plane client. It does not read config files or serve a console.
-- `winject-l3` ([`src/l3`](src/l3), API in [`include/winject_l3`](include/winject_l3)): the node on top of the core, `Config`, and the text console ([`console/`](src/l3/console)) that serves the API over UDP.
+- `winject-l3-core` ([`src/core`](src/core), namespace `winject::core`): the data path — frames, FEC, radio TX mux / RX demux, upstreams — and the radio m-plane client. It does not read config files or serve a console.
+- `winject-l3` ([`src/l3`](src/l3), API in [`include/winject_l3`](include/winject_l3), namespace `winject`): the l3 applet on top of the core, `Config`, and the text console ([`console/`](src/l3/console)) that serves the API over UDP.
 
 ```cpp
-#include "WinjectL3.h"           // run / stop, Node, managers, handles
+#include "WinjectL3.h"           // winject::L3, managers, handles
 #include "winject_l3/Console.h"  // console::execute / format / Service
 
 // Blocks until stop(). The calling thread becomes l3's callback thread: it
-// runs apply(cfg), then started, then every Done and Node::post.
-int winject_l3::run(const winject::Config& cfg,
-                    std::function<void(const winject_l3::Node&)> started = {},
-                    winject_l3::ThreadSetup thread_setup = {});
-void winject_l3::stop();              // any thread, also before run()
-void winject_l3::stop_from_signal();  // from a signal handler
-winject_l3::Node winject_l3::node();  // the running node; ESRCH before run()
+// runs apply(cfg), then started, then every Done and L3::post.
+int winject::L3::run(const winject::Config& cfg,
+                     std::function<void(const winject::L3&)> started = {},
+                     winject::L3::ThreadSetup thread_setup = {});
+void winject::L3::stop();              // any thread, also before run()
+void winject::L3::stop_from_signal();  // from a signal handler
+winject::L3 winject::L3::instance();   // the process's l3; ESRCH before run()
 ```
 
-`winject-manager`'s `main` reads `argv[1]` (default `winject.conf`), parses it into a `winject::Config`, handles SIGINT / SIGTERM, and calls `winject_l3::run`. It starts the UDP console (`winject.console_in`) from `started`, on a reactor and thread of its own. A host that already has the settings, such as the ESP32-P4 example, fills the struct and does not pass argv.
+`winject-manager`'s `main` reads `argv[1]` (default `winject.conf`), parses it into a `winject::Config`, handles SIGINT / SIGTERM, and calls `winject::L3::run`. It starts the UDP console (`winject.console_in`) from `started`, on a reactor and thread of its own. A host that already has the settings, such as the ESP32-P4 example, fills the struct and does not pass argv.
 
-Upstreams and the radio are objects with typed getters and setters, returning the same errno names as the console. Any thread may call them, including from inside a callback. `console::execute(node, line)` answers one text command exactly as the UDP console would, so a host console that also serves vstreamer, bwtest or krono can pass l3 lines through. See [docs/mplane.md](docs/mplane.md#function-call-api).
+Upstreams and the radio are objects with typed getters and setters, returning the same errno names as the console. Any thread may call them, including from inside a callback. `console::execute(l3, line)` answers one text command exactly as the UDP console would, so a host console that also serves vstreamer, bwtest or krono can pass l3 lines through. See [docs/mplane.md](docs/mplane.md#function-call-api).
 
 ```cpp
-winject_l3::Node node = winject_l3::node();
-auto up = node.upstreams().get(1);                // Result<Upstream>
+winject::L3 l3 = winject::L3::instance();
+auto up = l3.upstreams().get(1);                  // Result<Upstream>
 auto stats = up.value.rx_stats();                 // Result<UpstreamRxStats>
-auto radio = node.radios().get().value;
+auto radio = l3.radios().get().value;
 auto info = radio.set_channel(6);                 // blocks for the radio's reply
-radio.info([](winject_l3::Result<winject_l3::RadioInfo> r) { /* callback form */ });
-std::string text = winject_l3::console::execute(node, "lur ids=1");
+radio.info([](winject::Result<winject::RadioInfo> r) { /* callback form */ });
+std::string text = winject::l3::console::execute(l3, "lur ids=1");
 ```
 
 The library builds without RTTI (`-fno-rtti`), as it does on ESP-IDF.
 
 ### ESP-IDF (ESP32-P4)
 
-[`idf/winject_l3`](idf/winject_l3) is an ESP-IDF component with the same sources (listed once in [`CoreSources.cmake`](src/core/CoreSources.cmake) and [`L3Sources.cmake`](src/l3/L3Sources.cmake)). Add it to a project's `EXTRA_COMPONENT_DIRS`, `#include "WinjectL3.h"` and call `winject_l3::run` on a pthread (it blocks). `run` starts the node's reactor and the upstream reactor with `std::thread`; pass a `ThreadSetup` to set `esp_pthread_set_cfg` (stack, priority, name) for each. [`idf/example`](idf/example) does exactly that:
+[`idf/winject_l3`](idf/winject_l3) is an ESP-IDF component with the same sources (listed once in [`CoreSources.cmake`](src/core/CoreSources.cmake) and [`L3Sources.cmake`](src/l3/L3Sources.cmake)). Add it to a project's `EXTRA_COMPONENT_DIRS`, `#include "WinjectL3.h"` and call `winject::L3::run` on a pthread (it blocks). `run` starts l3's reactor and the upstream reactor with `std::thread`; pass a `ThreadSetup` to set `esp_pthread_set_cfg` (stack, priority, name) for each. [`idf/example`](idf/example) does exactly that:
 
 ```bash
 cd idf/example && idf.py set-target esp32p4 build
@@ -105,9 +105,9 @@ Differences from Linux:
 | Sockets | 3 + one per upstream + 2 for the wake pipe; raise `CONFIG_LWIP_MAX_SOCKETS` (the example sets 16) |
 | `pipe()` | Missing in ESP-IDF; [`port/pipe.c`](idf/winject_l3/port/pipe.c) provides it as two connected loopback UDP sockets (BFC's reactor wakes itself through a pipe) |
 | Exceptions | The component compiles with `-fexceptions` because BFC throws on fatal errors; with the project's C++ exceptions off, such a throw aborts |
-| Signals | None: stop the manager with `winject_l3::stop()` (any task, also before `run` has started its loop) |
-| Config | `app_main` fills a `winject::Config` and passes it to `winject_l3::run`. No config file and no argv |
-| Console | Optional: the host registers and runs a `winject_l3::console::Reactor` and starts `console::Service` from `run`'s `started` |
+| Signals | None: stop the manager with `winject::L3::stop()` (any task, also before `run` has started its loop) |
+| Config | `app_main` fills a `winject::Config` and passes it to `winject::L3::run`. No config file and no argv |
+| Console | Optional: the host registers and runs a `winject::l3::console::Reactor` and starts `console::Service` from `run`'s `started` |
 
 Configuration keys and the manager console are described in [docs/mplane.md](docs/mplane.md) (format overview, per-key tables, legacy keys). Example trees: `configuration/host_x86/`, `configuration/host_arm/`, `configuration/winject-tests/<scenario>/` — see [configuration/scenario.md](configuration/scenario.md).
 

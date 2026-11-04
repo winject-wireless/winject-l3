@@ -3,8 +3,8 @@
 #include <gtest/gtest.h>
 #include <vector>
 
-using winject::wifi_fcs_matches;
-using winject::wifi_fcs_store;
+using winject::core::wifi_fcs_matches;
+using winject::core::wifi_fcs_store;
 
 TEST(WifiFcsTest, MatchesStoredTrailer)
 {

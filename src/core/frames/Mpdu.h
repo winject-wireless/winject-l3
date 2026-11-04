@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-namespace winject
+namespace winject::core
 {
 
 class Mpdu
@@ -53,6 +53,6 @@ private:
 
 uint16_t next_tx_sequence();
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_FRAMES_MPDU_H_

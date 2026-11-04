@@ -1,6 +1,6 @@
-#include "NodeCore.h"
+#include "L3Core.h"
 
-#include "NodeImpl.h"
+#include "L3Impl.h"
 #include "utils/Log.h"
 
 #include <errno.h>
@@ -8,7 +8,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace winject_l3::detail
+namespace winject::l3::detail
 {
 
 namespace
@@ -72,7 +72,7 @@ bool CallbackQueue::on_callback_thread()
     return t_on_callback_thread;
 }
 
-NodeCore::NodeCore()
+L3Core::L3Core()
 {
 #if !defined(ESP_PLATFORM)
     if (pipe(stop_pipe) == 0)
@@ -90,7 +90,7 @@ NodeCore::NodeCore()
 #endif
 }
 
-NodeCore::~NodeCore()
+L3Core::~L3Core()
 {
     for (int fd : stop_pipe)
     {
@@ -101,14 +101,15 @@ NodeCore::~NodeCore()
     }
 }
 
-void NodeCore::attach(winject::IOReactor* node_reactor, winject::NodeImpl* node)
+void L3Core::attach(winject::core::IOReactor* l3_reactor,
+                    winject::l3::detail::L3Impl* l3)
 {
     std::lock_guard<std::mutex> lock(mu);
-    reactor = node_reactor;
-    impl = node;
+    reactor = l3_reactor;
+    impl = l3;
 }
 
-void NodeCore::detach_and_cancel()
+void L3Core::detach_and_cancel()
 {
     std::vector<std::shared_ptr<Request>> live;
     {
@@ -128,20 +129,20 @@ void NodeCore::detach_and_cancel()
     }
 }
 
-bool NodeCore::attached() const
+bool L3Core::attached() const
 {
     std::lock_guard<std::mutex> lock(mu);
     return reactor != nullptr;
 }
 
-bool NodeCore::on_node_thread() const
+bool L3Core::on_l3_thread() const
 {
     std::lock_guard<std::mutex> lock(mu);
     return reactor != nullptr && reactor->is_reactor_thread();
 }
 
-bool NodeCore::post_node(const std::shared_ptr<Request>& req,
-                         std::function<void(winject::NodeImpl&)> fn)
+bool L3Core::post_l3(const std::shared_ptr<Request>& req,
+                     std::function<void(winject::l3::detail::L3Impl&)> fn)
 {
     std::lock_guard<std::mutex> lock(mu);
     if (reactor == nullptr)
@@ -153,7 +154,7 @@ bool NodeCore::post_node(const std::shared_ptr<Request>& req,
     reactor->wake_up(
         [this, fn = std::move(fn)]()
         {
-            // The node detaches on this thread, after its loop: while a
+            // l3 detaches on this thread, after its loop: while a
             // wake-up runs, impl is set.
             if (impl != nullptr)
             {
@@ -163,13 +164,13 @@ bool NodeCore::post_node(const std::shared_ptr<Request>& req,
     return true;
 }
 
-void NodeCore::forget(uint64_t id)
+void L3Core::forget(uint64_t id)
 {
     std::lock_guard<std::mutex> lock(mu);
     pending.erase(id);
 }
 
-void NodeCore::request_stop()
+void L3Core::request_stop()
 {
     stop_requested = true;
     std::lock_guard<std::mutex> lock(mu);
@@ -179,7 +180,7 @@ void NodeCore::request_stop()
     }
 }
 
-void NodeCore::request_stop_from_signal()
+void L3Core::request_stop_from_signal()
 {
     stop_requested = true;
     if (stop_pipe[1] < 0)
@@ -193,4 +194,4 @@ void NodeCore::request_stop_from_signal()
     (void)n;
 }
 
-}  // namespace winject_l3::detail
+}  // namespace winject::l3::detail

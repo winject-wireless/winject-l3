@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace winject::fec_vendor
+namespace winject::core::fec_vendor
 {
 
 /*
@@ -36,6 +36,6 @@ const char *rs_encode_scalar_impl();
 int rs_encode_selftest(int k, int rows, int len, int iterations, int64_t (*now_us)(), int64_t *us_fast,
                        int64_t *us_table, uint8_t *arena = nullptr);
 
-}  // namespace winject::fec_vendor
+}  // namespace winject::core::fec_vendor
 
 #endif  // WINJECT_CORE_RS_ENCODE_SCALAR_HPP

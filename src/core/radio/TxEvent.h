@@ -7,7 +7,7 @@
 #include <sys/socket.h>
 #include <variant>
 
-namespace winject
+namespace winject::core
 {
 
 class RadioDplane;
@@ -73,6 +73,6 @@ private:
     std::deque<TxEvent> q;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_TX_EVENT_H_

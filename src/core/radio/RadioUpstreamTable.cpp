@@ -3,7 +3,7 @@
 #include "endpoint/UpstreamLink.h"
 #include "radio/RadioDplane.h"
 
-namespace winject
+namespace winject::core
 {
 
 bool RadioUpstreamTable::remove(size_t index)
@@ -104,4 +104,4 @@ uint64_t RadioUpstreamTable::collect_seq_loss_delta()
     return total_lost;
 }
 
-}  // namespace winject
+}  // namespace winject::core

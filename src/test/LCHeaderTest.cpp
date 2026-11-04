@@ -8,10 +8,10 @@
 
 namespace
 {
-using winject::accept_air_payload;
-using winject::LCHeader;
-using winject::stamp_slot_payload;
-using winject::UpstreamStats;
+using winject::core::accept_air_payload;
+using winject::core::LCHeader;
+using winject::core::stamp_slot_payload;
+using winject::core::UpstreamStats;
 
 std::vector<uint8_t> frame(UpstreamStats* tx, uint8_t bus, const uint8_t* data,
                            size_t len, bool is_fec = false)

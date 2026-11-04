@@ -4,7 +4,7 @@
 
 #include <utility>
 
-namespace winject
+namespace winject::core
 {
 
 DatagramAir::~DatagramAir()
@@ -172,4 +172,4 @@ void DatagramAir::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
     fec_rx.push(std::move(pkt));
 }
 
-}  // namespace winject
+}  // namespace winject::core

@@ -5,7 +5,7 @@
 #include <errno.h>
 #include <stdexcept>
 #include <sys/socket.h>
-namespace winject
+namespace winject::core
 {
 UDPUpstream::UDPUpstream(std::shared_ptr<Reactor> reactor,
                          std::shared_ptr<IOReactor> io,
@@ -166,4 +166,4 @@ void UDPUpstream::deliver_datagram(const uint8_t* data, size_t len)
     ++stored_rx_counters.accepted_packets;
     stored_rx_counters.accepted_bytes += len;
 }
-}  // namespace winject
+}  // namespace winject::core

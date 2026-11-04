@@ -16,7 +16,7 @@
 #include <poll.h>
 #include <thread>
 
-using namespace winject;
+using namespace winject::core;
 namespace
 {
 using Packet = bfc::shared_sized_buffer;

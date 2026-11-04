@@ -58,7 +58,7 @@ add_executable(winject-tests
     TxMuxTest.cpp
     OneShotTimerTest.cpp
     BwtestTest.cpp
-    NodeApiTest.cpp
+    L3ApiTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/bwtest/Bwtest.cpp
     ${WINJECT_CORE_SOURCES}
     ${WINJECT_L3_SOURCES}

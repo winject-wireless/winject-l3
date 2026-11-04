@@ -12,12 +12,12 @@
 #include <strings.h>
 #include <sys/socket.h>
 
-namespace winject
+namespace winject::core
 {
 
-using winject_l3::FecType;
-using winject_l3::RadioDevice;
-using winject_l3::RadioFcs;
+using winject::FecType;
+using winject::RadioDevice;
+using winject::RadioFcs;
 
 bool console_parse_fec_type(const char* text, FecType* out)
 {
@@ -382,4 +382,4 @@ std::string console_format_radio_device(uint8_t id, const RadioDevice& device)
     return s;
 }
 
-}  // namespace winject
+}  // namespace winject::core

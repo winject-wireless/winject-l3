@@ -20,7 +20,7 @@
 //   [0..1] sdu_base (u16 BE) — SDU seq of shard 0 in this block
 //   [2..3] fec_config (u16 BE): k(5) | n(5) | idx(5) | spare(1), MSB-first
 //   [4]    fec2: sdu_n(5) | spare(3), MSB-first; parity iff idx >= k
-namespace winject::fec_vendor
+namespace winject::core::fec_vendor
 {
 
 using fec_rx_payload_list = std::vector<bfc::shared_sized_buffer>;
@@ -332,6 +332,6 @@ private:
     size_t max_shard_bytes = 1470;
 };
 
-}  // namespace winject::fec_vendor
+}  // namespace winject::core::fec_vendor
 
 #endif  // WINJECT_CORE_RS_BLOCK_ERASURE_HPP

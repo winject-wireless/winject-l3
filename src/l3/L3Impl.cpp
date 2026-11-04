@@ -1,6 +1,7 @@
-#include "NodeImpl.h"
+#include "L3Impl.h"
 
-#include "NodeCore.h"
+#include "L3Core.h"
+#include "WinjectBuildVersion.h"
 #include "fec/RsBlockErasure.h"
 #include "frames/Mpdu.h"
 #include "mplane/MplaneCorrelation.h"
@@ -14,7 +15,6 @@
 #include "utils/Log.h"
 #include "utils/NetUtil.h"
 #include "utils/Version.h"
-#include "WinjectBuildVersion.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -27,30 +27,29 @@
 #include <time.h>
 #include <unistd.h>
 
-namespace winject
+namespace winject::l3::detail
 {
 
-namespace api = winject_l3;
-using winject_l3::detail::error_result;
-using winject_l3::detail::error_status;
-using winject_l3::detail::value_result;
+using namespace winject::core;
+
+namespace api = winject;
 
 namespace
 {
 
 constexpr size_t k_upstream_not_found = static_cast<size_t>(-1);
 
-FecType core_fec_type(api::FecType type)
+core::FecType core_fec_type(api::FecType type)
 {
-    return type == api::FecType::rs_block ? FecType::RsBlockErasure
-                                          : FecType::none;
+    return type == api::FecType::rs_block ? core::FecType::RsBlockErasure
+                                          : core::FecType::none;
 }
 
-api::Fec api_fec(FecType type, int k, int n, int timeout_ms)
+api::Fec api_fec(core::FecType type, int k, int n, int timeout_ms)
 {
     api::Fec fec;
-    fec.type = type == FecType::RsBlockErasure ? api::FecType::rs_block
-                                               : api::FecType::none;
+    fec.type = type == core::FecType::RsBlockErasure ? api::FecType::rs_block
+                                                     : api::FecType::none;
     fec.k = k;
     fec.n = n;
     fec.timeout = std::chrono::milliseconds(timeout_ms);
@@ -59,7 +58,7 @@ api::Fec api_fec(FecType type, int k, int n, int timeout_ms)
 
 api::Fec api_fec_of(const UpstreamLink* endpoint, int timeout_ms)
 {
-    FecType type = FecType::none;
+    core::FecType type = core::FecType::none;
     int k = 0;
     int n = 0;
     if (endpoint != nullptr)
@@ -136,7 +135,8 @@ bool same_addr(const sockaddr_in& a, const sockaddr_in& b)
 
 std::string device_text(const RadioDeviceConfig& d)
 {
-    std::string text = "mplane=" + mplane_format_ipv4_port(d.mplane) + " dplane=";
+    std::string text =
+        "mplane=" + mplane_format_ipv4_port(d.mplane) + " dplane=";
     if (d.dplane_is_queue())
     {
         text += "queue:" + d.dplane_tx + "," + d.dplane_rx + "@" + d.reactor;
@@ -152,12 +152,12 @@ std::string device_text(const RadioDeviceConfig& d)
 
 }  // namespace
 
-NodeImpl::NodeImpl(unsigned stats_sec)
+L3Impl::L3Impl(unsigned stats_sec)
 {
     cfg.stats_sec = stats_sec;
 }
 
-NodeImpl::~NodeImpl()
+L3Impl::~L3Impl()
 {
     tx_mux.stop();
     radio_upstream_table.clear();
@@ -167,15 +167,15 @@ NodeImpl::~NodeImpl()
     {
         upstream_reactor_thread.join();
     }
-    if (node_thread.joinable())
+    if (l3_thread.joinable())
     {
         reactor->stop();
-        node_thread.join();
+        l3_thread.join();
     }
     close_radio();
 }
 
-bool NodeImpl::add_upstream_config(const UpstreamConfig& uc)
+bool L3Impl::add_upstream_config(const UpstreamConfig& uc)
 {
     if (!radio)
     {
@@ -193,7 +193,7 @@ bool NodeImpl::add_upstream_config(const UpstreamConfig& uc)
         return false;
     }
     radio_upstream_table.add(up, tx_queue, radio, uc.bus_tx, uc.bus_rx,
-                              uc.scheduler_budget);
+                             uc.scheduler_budget);
     upstreams.push_back(up);
     tx_mux.request_tick();
     LOG_INF("upstream-%zu type=%s bus_tx=%s bus_rx=%s", uc.index,
@@ -202,7 +202,7 @@ bool NodeImpl::add_upstream_config(const UpstreamConfig& uc)
     return true;
 }
 
-const char* NodeImpl::setup_radio()
+const char* L3Impl::setup_radio()
 {
     const RadioDeviceConfig& d = cfg.radio_device;
     radio_queue_reactor.reset();
@@ -219,7 +219,8 @@ const char* NodeImpl::setup_radio()
             bfc::cv_reactor_registry::get_instance().get(d.reactor);
         if (!radio_queue_reactor)
         {
-            LOG_ERR("radio queue reactor %s: not registered", d.reactor.c_str());
+            LOG_ERR("radio queue reactor %s: not registered",
+                    d.reactor.c_str());
             return k_einval;
         }
         auto queue = std::make_shared<WifiQueue>();
@@ -249,10 +250,9 @@ const char* NodeImpl::setup_radio()
     return nullptr;
 }
 
-
-void NodeImpl::close_radio()
+void L3Impl::close_radio()
 {
-    // A queue d-plane's host reactor outlives the node and keeps delivering;
+    // A queue d-plane's host reactor outlives l3 and keeps delivering;
     // close before rx_demux goes, even if a pending TX event holds the radio.
     if (radio)
     {
@@ -260,8 +260,7 @@ void NodeImpl::close_radio()
     }
 }
 
-
-void NodeImpl::apply_radio_dplane()
+void L3Impl::apply_radio_dplane()
 {
     const RadioDeviceConfig& d = cfg.radio_device;
     if (radio == nullptr)
@@ -272,8 +271,7 @@ void NodeImpl::apply_radio_dplane()
     radio->post_rx_event(EventCtrlRecvSocketChange{d.dplane});
 }
 
-
-void NodeImpl::apply_configured_fcs()
+void L3Impl::apply_configured_fcs()
 {
     if (radio == nullptr)
     {
@@ -294,9 +292,9 @@ void NodeImpl::apply_configured_fcs()
     }
 }
 
-
-std::shared_ptr<UpstreamLink> NodeImpl::construct_upstream(
-    const UpstreamConfig& uc, const std::shared_ptr<BoundedLossyQueue>& tx_queue,
+std::shared_ptr<UpstreamLink> L3Impl::construct_upstream(
+    const UpstreamConfig& uc,
+    const std::shared_ptr<BoundedLossyQueue>& tx_queue,
     const UpstreamLink::TxSequences* resume)
 {
     if (uc.mode != UpstreamMode::queue)
@@ -336,15 +334,14 @@ std::shared_ptr<UpstreamLink> NodeImpl::construct_upstream(
     up->bind_callbacks();
     if (publish != on_queue.end() && publish->second)
     {
-        // User code on the node's thread: its l3 calls return EDEADLK.
+        // User code on l3's thread: its l3 calls return EDEADLK.
         publish->second(up->app_transport());
     }
     return up;
 }
 
-
-bool NodeImpl::replace_upstream(size_t index, const UpstreamConfig& uc,
-                           std::string* error)
+bool L3Impl::replace_upstream(size_t index, const UpstreamConfig& uc,
+                              std::string* error)
 {
     const auto original = cfg.upstreams[index];
     {
@@ -402,9 +399,8 @@ bool NodeImpl::replace_upstream(size_t index, const UpstreamConfig& uc,
     return true;
 }
 
-
-bool NodeImpl::set_upstream_scheduler_budget(size_t index, size_t budget,
-                                        std::string* error)
+bool L3Impl::set_upstream_scheduler_budget(size_t index, size_t budget,
+                                           std::string* error)
 {
     auto fail = [&](const char* msg) -> bool
     {
@@ -431,8 +427,7 @@ bool NodeImpl::set_upstream_scheduler_budget(size_t index, size_t budget,
     return true;
 }
 
-
-size_t NodeImpl::upstream_index(uint8_t id) const
+size_t L3Impl::upstream_index(uint8_t id) const
 {
     for (size_t i = 0; i < cfg.upstreams.size(); ++i)
     {
@@ -444,12 +439,12 @@ size_t NodeImpl::upstream_index(uint8_t id) const
     return k_upstream_not_found;
 }
 
-bool NodeImpl::has_upstream(uint8_t id) const
+bool L3Impl::has_upstream(uint8_t id) const
 {
     return upstream_index(id) != k_upstream_not_found;
 }
 
-std::vector<uint8_t> NodeImpl::upstream_ids() const
+std::vector<uint8_t> L3Impl::upstream_ids() const
 {
     std::vector<uint8_t> ids;
     ids.reserve(cfg.upstreams.size());
@@ -460,7 +455,7 @@ std::vector<uint8_t> NodeImpl::upstream_ids() const
     return ids;
 }
 
-api::UpstreamSpec NodeImpl::upstream_spec_at(size_t index) const
+api::UpstreamSpec L3Impl::upstream_spec_at(size_t index) const
 {
     const UpstreamConfig& uc = cfg.upstreams[index];
     const UpstreamLink* endpoint =
@@ -492,7 +487,7 @@ api::UpstreamSpec NodeImpl::upstream_spec_at(size_t index) const
     return spec;
 }
 
-api::Status NodeImpl::add_upstream(const api::UpstreamSpec& spec)
+api::Status L3Impl::add_upstream(const api::UpstreamSpec& spec)
 {
     if (!radio_created)
     {
@@ -541,7 +536,7 @@ api::Status NodeImpl::add_upstream(const api::UpstreamSpec& spec)
     uc.fec_k = spec.fec.k;
     uc.fec_n = spec.fec.n;
     uc.fec_timeout_ms = static_cast<int>(spec.fec.timeout.count());
-    if (uc.fec_type == FecType::none)
+    if (uc.fec_type == core::FecType::none)
     {
         uc.fec_k = 0;
         uc.fec_n = 0;
@@ -575,7 +570,7 @@ api::Status NodeImpl::add_upstream(const api::UpstreamSpec& spec)
     return {};
 }
 
-api::Status NodeImpl::remove_upstream(uint8_t id)
+api::Status L3Impl::remove_upstream(uint8_t id)
 {
     const size_t index = upstream_index(id);
     if (index == k_upstream_not_found || !radio_upstream_table.remove(index))
@@ -590,7 +585,7 @@ api::Status NodeImpl::remove_upstream(uint8_t id)
     return {};
 }
 
-NodeImpl::Result<api::UpstreamSpec> NodeImpl::upstream_spec(uint8_t id) const
+L3Impl::Result<api::UpstreamSpec> L3Impl::upstream_spec(uint8_t id) const
 {
     const size_t index = upstream_index(id);
     if (index == k_upstream_not_found)
@@ -600,7 +595,7 @@ NodeImpl::Result<api::UpstreamSpec> NodeImpl::upstream_spec(uint8_t id) const
     return value_result(upstream_spec_at(index));
 }
 
-NodeImpl::Result<api::UpstreamSpec> NodeImpl::update_upstream(
+L3Impl::Result<api::UpstreamSpec> L3Impl::update_upstream(
     uint8_t id, const api::UpstreamPatch& patch)
 {
     const size_t index = upstream_index(id);
@@ -647,8 +642,7 @@ NodeImpl::Result<api::UpstreamSpec> NodeImpl::update_upstream(
     return value_result(upstream_spec_at(index));
 }
 
-NodeImpl::Result<api::UpstreamRxStats> NodeImpl::upstream_rx_stats(
-    uint8_t id) const
+L3Impl::Result<api::UpstreamRxStats> L3Impl::upstream_rx_stats(uint8_t id) const
 {
     const size_t index = upstream_index(id);
     if (index == k_upstream_not_found)
@@ -679,8 +673,7 @@ NodeImpl::Result<api::UpstreamRxStats> NodeImpl::upstream_rx_stats(
     return value_result(s);
 }
 
-NodeImpl::Result<api::UpstreamTxStats> NodeImpl::upstream_tx_stats(
-    uint8_t id) const
+L3Impl::Result<api::UpstreamTxStats> L3Impl::upstream_tx_stats(uint8_t id) const
 {
     const size_t index = upstream_index(id);
     if (index == k_upstream_not_found)
@@ -703,7 +696,7 @@ NodeImpl::Result<api::UpstreamTxStats> NodeImpl::upstream_tx_stats(
     return value_result(s);
 }
 
-NodeImpl::Result<std::vector<api::Metric>> NodeImpl::metrics(
+L3Impl::Result<std::vector<api::Metric>> L3Impl::metrics(
     const std::vector<std::string>& keys)
 {
     refresh_host_metrics();
@@ -741,7 +734,7 @@ NodeImpl::Result<std::vector<api::Metric>> NodeImpl::metrics(
     return value_result(std::move(out));
 }
 
-void NodeImpl::refresh_host_metrics()
+void L3Impl::refresh_host_metrics()
 {
     metrics_registry.get_metrics<MetricU64>("rx_drop_domain")
         ->store(rx_demux.rx_drop_domain());
@@ -848,8 +841,7 @@ void NodeImpl::refresh_host_metrics()
     }
 }
 
-
-void NodeImpl::apply_radio_caps(const RadioCapsReply& caps)
+void L3Impl::apply_radio_caps(const RadioCapsReply& caps)
 {
     if (radio == nullptr)
     {
@@ -886,8 +878,7 @@ void NodeImpl::apply_radio_caps(const RadioCapsReply& caps)
     radio->set_fcs_mode(mode);
 }
 
-
-const char* NodeImpl::radio_unavailable_error() const
+const char* L3Impl::radio_unavailable_error() const
 {
     if (radio_version_known && !radio_proto_ok)
     {
@@ -896,7 +887,7 @@ const char* NodeImpl::radio_unavailable_error() const
     return k_enodev;
 }
 
-api::RadioInfo NodeImpl::radio_info_from(const RadioPhyReply& reply) const
+api::RadioInfo L3Impl::radio_info_from(const RadioPhyReply& reply) const
 {
     api::RadioInfo info;
     if (reply.phy)
@@ -926,15 +917,15 @@ api::RadioInfo NodeImpl::radio_info_from(const RadioPhyReply& reply) const
     return info;
 }
 
-api::Status NodeImpl::create_radio(const api::RadioSpec& spec)
+api::Status L3Impl::create_radio(const api::RadioSpec& spec)
 {
     if (radio_created)
     {
         return error_status(k_eexist);
     }
     const api::RadioDevice& d = spec.device;
-    const bool queue = !d.dplane_tx.empty() || !d.dplane_rx.empty() ||
-                       !d.reactor.empty();
+    const bool queue =
+        !d.dplane_tx.empty() || !d.dplane_rx.empty() || !d.reactor.empty();
     const std::string modulation =
         Config::canonical_modulation(spec.phy.modulation);
     if (spec.domain == 0 || !ipv4_set(d.mplane) || modulation.empty() ||
@@ -977,7 +968,7 @@ api::Status NodeImpl::create_radio(const api::RadioSpec& spec)
     return {};
 }
 
-api::Status NodeImpl::add_radio()
+api::Status L3Impl::add_radio()
 {
     if (!radio_created)
     {
@@ -1014,7 +1005,7 @@ api::Status NodeImpl::add_radio()
     return {};
 }
 
-api::Status NodeImpl::remove_radio()
+api::Status L3Impl::remove_radio()
 {
     if (!radio_created)
     {
@@ -1041,7 +1032,7 @@ api::Status NodeImpl::remove_radio()
     return {};
 }
 
-NodeImpl::Result<api::RadioState> NodeImpl::radio_state() const
+L3Impl::Result<api::RadioState> L3Impl::radio_state() const
 {
     if (!radio_created)
     {
@@ -1061,7 +1052,7 @@ NodeImpl::Result<api::RadioState> NodeImpl::radio_state() const
                             : api::RadioState::connecting);
 }
 
-NodeImpl::Result<api::RadioDevice> NodeImpl::radio_device() const
+L3Impl::Result<api::RadioDevice> L3Impl::radio_device() const
 {
     if (!radio_created)
     {
@@ -1078,7 +1069,7 @@ NodeImpl::Result<api::RadioDevice> NodeImpl::radio_device() const
     return value_result(out);
 }
 
-NodeImpl::Result<api::RadioSpec> NodeImpl::radio_spec() const
+L3Impl::Result<api::RadioSpec> L3Impl::radio_spec() const
 {
     const auto device = radio_device();
     if (!device.ok())
@@ -1099,7 +1090,7 @@ NodeImpl::Result<api::RadioSpec> NodeImpl::radio_spec() const
     return value_result(spec);
 }
 
-api::Status NodeImpl::set_radio_device(const api::RadioDevice& d)
+api::Status L3Impl::set_radio_device(const api::RadioDevice& d)
 {
     if (!radio_created)
     {
@@ -1169,8 +1160,8 @@ api::Status NodeImpl::set_radio_device(const api::RadioDevice& d)
     return {};
 }
 
-void NodeImpl::set_radio_phy(const api::RadioPhyPatch& patch,
-                             Reply<api::RadioInfo> reply)
+void L3Impl::set_radio_phy(const api::RadioPhyPatch& patch,
+                           Reply<api::RadioInfo> reply)
 {
     if (!radio_created)
     {
@@ -1295,22 +1286,21 @@ void NodeImpl::set_radio_phy(const api::RadioPhyPatch& patch,
                 radio_supervisor.set_actual_phy(*r1.phy);
             }
             const api::RadioInfo info = radio_info_from(r1);
-            console.send_save_slot(
-                cfg.config_slot,
-                [info, reply](MplaneResult r2)
-                {
-                    if (!r2.ok)
-                    {
-                        reply(error_result<api::RadioInfo>(
-                            mplane_err_string(r2.error)));
-                        return;
-                    }
-                    reply(value_result(info));
-                });
+            console.send_save_slot(cfg.config_slot,
+                                   [info, reply](MplaneResult r2)
+                                   {
+                                       if (!r2.ok)
+                                       {
+                                           reply(error_result<api::RadioInfo>(
+                                               mplane_err_string(r2.error)));
+                                           return;
+                                       }
+                                       reply(value_result(info));
+                                   });
         });
 }
 
-void NodeImpl::radio_info(Reply<api::RadioInfo> reply)
+void L3Impl::radio_info(Reply<api::RadioInfo> reply)
 {
     if (!radio_created)
     {
@@ -1339,7 +1329,7 @@ void NodeImpl::radio_info(Reply<api::RadioInfo> reply)
         });
 }
 
-void NodeImpl::radio_caps(Reply<api::RadioCaps> reply)
+void L3Impl::radio_caps(Reply<api::RadioCaps> reply)
 {
     if (!radio_created || radio == nullptr)
     {
@@ -1383,7 +1373,7 @@ void NodeImpl::radio_caps(Reply<api::RadioCaps> reply)
         });
 }
 
-void NodeImpl::radio_stats(Reply<api::RadioStats> reply)
+void L3Impl::radio_stats(Reply<api::RadioStats> reply)
 {
     if (!radio_created)
     {
@@ -1431,7 +1421,7 @@ void NodeImpl::radio_stats(Reply<api::RadioStats> reply)
         });
 }
 
-void NodeImpl::radio_reset(Reply<Empty> reply)
+void L3Impl::radio_reset(Reply<Empty> reply)
 {
     if (!radio_created)
     {
@@ -1456,8 +1446,8 @@ void NodeImpl::radio_reset(Reply<Empty> reply)
 }
 
 // Transparent radio m-plane: a radio-specific command line, forwarded
-// unchanged. The node does not track what it changes.
-void NodeImpl::radio_mplane(const std::string& line, Reply<std::string> reply)
+// unchanged. l3 does not track what it changes.
+void L3Impl::radio_mplane(const std::string& line, Reply<std::string> reply)
 {
     if (line.find_first_not_of(" \t") == std::string::npos ||
         line.find_first_of("\r\n") != std::string::npos)
@@ -1488,7 +1478,7 @@ void NodeImpl::radio_mplane(const std::string& line, Reply<std::string> reply)
                     });
 }
 
-void NodeImpl::set_config_slot(uint8_t slot, Reply<Empty> reply)
+void L3Impl::set_config_slot(uint8_t slot, Reply<Empty> reply)
 {
     if (!radio_created)
     {
@@ -1524,7 +1514,7 @@ void NodeImpl::set_config_slot(uint8_t slot, Reply<Empty> reply)
         });
 }
 
-void NodeImpl::on_radio_version(bool known, const WinjectVersion& v)
+void L3Impl::on_radio_version(bool known, const WinjectVersion& v)
 {
     radio_version_known = known;
     radio_version = v;
@@ -1539,7 +1529,7 @@ void NodeImpl::on_radio_version(bool known, const WinjectVersion& v)
     }
 }
 
-void NodeImpl::log_proto_mismatch_once(const WinjectVersion& radio_ver)
+void L3Impl::log_proto_mismatch_once(const WinjectVersion& radio_ver)
 {
     if (proto_mismatch_logged)
     {
@@ -1557,8 +1547,7 @@ void NodeImpl::log_proto_mismatch_once(const WinjectVersion& radio_ver)
         static_cast<unsigned>(mgr.x), static_cast<unsigned>(mgr.y));
 }
 
-
-void NodeImpl::reapply_radio_console(std::function<void(bool ok)> done)
+void L3Impl::reapply_radio_console(std::function<void(bool ok)> done)
 {
     if (!console_ok || !radio)
     {
@@ -1600,7 +1589,7 @@ void NodeImpl::reapply_radio_console(std::function<void(bool ok)> done)
         });
 }
 
-bool NodeImpl::apply_console()
+bool L3Impl::apply_console()
 {
     if (!hold_console())
     {
@@ -1621,7 +1610,7 @@ bool NodeImpl::apply_console()
     return true;
 }
 
-bool NodeImpl::hold_console()
+bool L3Impl::hold_console()
 {
     console.clear_pending();
     console_ok = true;
@@ -1639,7 +1628,7 @@ bool NodeImpl::hold_console()
     return true;
 }
 
-void NodeImpl::close_console()
+void L3Impl::close_console()
 {
     const int fd = console.fd();
     if (fd >= 0)
@@ -1655,7 +1644,7 @@ void NodeImpl::close_console()
     radio_programmed = false;
 }
 
-void NodeImpl::drop_console()
+void L3Impl::drop_console()
 {
     close_console();
     if (radio_added && !reconnect_timer.armed())
@@ -1664,21 +1653,21 @@ void NodeImpl::drop_console()
     }
 }
 
-void NodeImpl::schedule_reconnect(std::chrono::milliseconds after)
+void L3Impl::schedule_reconnect(std::chrono::milliseconds after)
 {
     reconnect_timer.arm(after,
-                         [this]()
-                         {
-                             if (console_ok || !radio_added)
-                             {
-                                 return;
-                             }
-                             LOG_INF("retrying console");
-                             begin_console();
-                         });
+                        [this]()
+                        {
+                            if (console_ok || !radio_added)
+                            {
+                                return;
+                            }
+                            LOG_INF("retrying console");
+                            begin_console();
+                        });
 }
 
-void NodeImpl::on_console_request_deadline(
+void L3Impl::on_console_request_deadline(
     std::chrono::steady_clock::time_point deadline)
 {
     if (console_deadline_timer.armed() && console_deadline_at <= deadline)
@@ -1700,7 +1689,7 @@ void NodeImpl::on_console_request_deadline(
 // After deadlines were polled: arm for the earliest one still pending. A
 // timeout callback may already have armed for a later request; this moves
 // the timer earlier if an older request is still due first.
-void NodeImpl::arm_console_deadline()
+void L3Impl::arm_console_deadline()
 {
     if (const auto next = console.next_deadline())
     {
@@ -1708,7 +1697,7 @@ void NodeImpl::arm_console_deadline()
     }
 }
 
-void NodeImpl::begin_console()
+void L3Impl::begin_console()
 {
     if (console_ok)
     {
@@ -1732,7 +1721,7 @@ void NodeImpl::begin_console()
     LOG_INF("console upstreams reapplied");
 }
 
-void NodeImpl::on_console()
+void L3Impl::on_console()
 {
     if (!console_ok)
     {
@@ -1765,7 +1754,7 @@ void NodeImpl::on_console()
     console.on_lines(lines);
 }
 
-void NodeImpl::arm_stats()
+void L3Impl::arm_stats()
 {
     if (cfg.stats_sec == 0)
     {
@@ -1786,17 +1775,16 @@ void NodeImpl::arm_stats()
         });
 }
 
-void NodeImpl::stop()
+void L3Impl::stop()
 {
     stop_requested.store(true);
     reactor->stop();
 }
 
-
-void NodeImpl::start(winject_l3::detail::NodeCore* node_core,
-                     const winject_l3::ThreadSetup& thread_setup)
+void L3Impl::start(winject::l3::detail::L3Core* l3_core,
+                   const L3::ThreadSetup& thread_setup)
 {
-    core = node_core;
+    core = l3_core;
     LOG_INF("winject-manager %s", WINJECT_VERSION_STRING);
     auto started = std::make_shared<std::promise<void>>();
     auto ready = started->get_future();
@@ -1807,7 +1795,7 @@ void NodeImpl::start(winject_l3::detail::NodeCore* node_core,
         });
     if (thread_setup)
     {
-        thread_setup(winject_l3::Thread::upstream);
+        thread_setup(L3::Thread::upstream);
     }
     upstream_reactor_thread = std::thread(
         [cv = upstream_reactor]
@@ -1818,24 +1806,24 @@ void NodeImpl::start(winject_l3::detail::NodeCore* node_core,
     core->attach(reactor.get(), this);
     if (thread_setup)
     {
-        thread_setup(winject_l3::Thread::node);
+        thread_setup(L3::Thread::l3);
     }
-    node_thread = std::thread(
+    l3_thread = std::thread(
         [this]
         {
             loop();
         });
 }
 
-void NodeImpl::join()
+void L3Impl::join()
 {
-    if (node_thread.joinable())
+    if (l3_thread.joinable())
     {
-        node_thread.join();
+        l3_thread.join();
     }
 }
 
-void NodeImpl::loop()
+void L3Impl::loop()
 {
     reconnect_timer.bind(reactor.get());
     console_deadline_timer.bind(reactor.get());
@@ -1916,16 +1904,16 @@ void NodeImpl::loop()
         while (::read(stop_fd, buf, sizeof(buf)) > 0)
         {
         }
-        reactor->add_read_rdy(stop_fd,
-                              [this, stop_fd]()
-                              {
-                                  char drain[16];
-                                  while (::read(stop_fd, drain, sizeof(drain)) >
-                                         0)
-                                  {
-                                  }
-                                  stop();
-                              });
+        reactor->add_read_rdy(
+            stop_fd,
+            [this, stop_fd]()
+            {
+                char drain[16];
+                while (::read(stop_fd, drain, sizeof(drain)) > 0)
+                {
+                }
+                stop();
+            });
     }
     last_stats = std::chrono::steady_clock::now();
     if (cfg.stats_sec > 0)
@@ -1937,15 +1925,15 @@ void NodeImpl::loop()
     arm_stats();
     // stop() before reactor->run() set it running would be lost; the first
     // loop pass runs this and stops then.
-    reactor->get_timer().wait_us(0,
-                                 [this]()
-                                 {
-                                     if (stop_requested.load() ||
-                                         core->stop_requested.load())
-                                     {
-                                         reactor->stop();
-                                     }
-                                 });
+    reactor->get_timer().wait_us(
+        0,
+        [this]()
+        {
+            if (stop_requested.load() || core->stop_requested.load())
+            {
+                reactor->stop();
+            }
+        });
     reactor->run();
     // Calls posted from here on get ESRCH; the ones still pending get
     // ECANCELED, also those whose wake-up the stopped loop will never run.
@@ -1956,7 +1944,7 @@ void NodeImpl::loop()
     core->callbacks.close();
 }
 
-void NodeImpl::begin_shutdown()
+void L3Impl::begin_shutdown()
 {
     tx_mux.stop();
     radio_upstream_table.clear();
@@ -1964,4 +1952,4 @@ void NodeImpl::begin_shutdown()
     close_radio();
 }
 
-}  // namespace winject
+}  // namespace winject::l3::detail

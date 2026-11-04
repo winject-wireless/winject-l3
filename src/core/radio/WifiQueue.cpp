@@ -5,7 +5,7 @@
 
 #include <utility>
 
-namespace winject
+namespace winject::core
 {
 
 namespace
@@ -347,4 +347,4 @@ void WifiQueue::on_wifi_rx()
     }
 }
 
-}  // namespace winject
+}  // namespace winject::core

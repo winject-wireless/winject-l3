@@ -12,7 +12,7 @@
 #include <mutex>
 #include <utility>
 
-namespace winject
+namespace winject::core
 {
 // After make_shared, call bind_callbacks before publishing the instance.
 // Hot-swap calls teardown() on the IO thread before dropping the last ref;
@@ -201,5 +201,5 @@ private:
     std::atomic<bool> is_active{false};
     bool bound = false;
 };
-}  // namespace winject
+}  // namespace winject::core
 #endif

@@ -18,7 +18,7 @@
 #include <sys/socket.h>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 // Typed replies: the parsed struct plus the radio's text (result.text()).
@@ -138,6 +138,6 @@ private:
     DeadlineFn on_deadline;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_MPLANE_CLIENT_H_

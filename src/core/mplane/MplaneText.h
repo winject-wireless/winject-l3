@@ -6,7 +6,7 @@
 #include <string>
 #include <sys/socket.h>
 
-namespace winject
+namespace winject::core
 {
 
 // key=value token helpers shared by the radio m-plane client and the l3
@@ -20,6 +20,6 @@ bool mplane_parse_u8(const char* text, uint8_t* out);
 bool mplane_parse_ipv4_port(const char* text, sockaddr_in* out);
 std::string mplane_format_ipv4_port(const sockaddr_in& addr);
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_CORE_MPLANE_MPLANE_TEXT_H_

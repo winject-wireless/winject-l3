@@ -11,7 +11,7 @@
 #include <sstream>
 #include <unordered_set>
 
-namespace winject
+namespace winject::core
 {
 
 static std::string trim(const std::string& s)
@@ -860,4 +860,4 @@ bool Config::validate_upstream_update(const UpstreamConfig& current,
     return true;
 }
 
-}  // namespace winject
+}  // namespace winject::core

@@ -1,4 +1,4 @@
-// winject_l3::console: execute, format and the UDP Service over the public
+// winject::l3::console: execute, format and the UDP Service over the public
 // API (include/winject_l3/Console.h).
 
 #include "winject_l3/Console.h"
@@ -17,13 +17,13 @@
 #include <stdio.h>
 #include <string.h>
 
-namespace winject_l3::console
+namespace winject::l3::console
 {
 
 namespace
 {
 
-using winject::ConsoleCommands;
+using winject::core::ConsoleCommands;
 
 std::string nok(const std::string& error)
 {
@@ -47,7 +47,7 @@ LineKind prepare_line(const std::string& line, std::string* text)
     }
     char trimmed[ConsoleCommands::k_line_max];
     snprintf(trimmed, sizeof(trimmed), "%s", line.c_str());
-    winject::console_trim_line(trimmed);
+    winject::core::console_trim_line(trimmed);
     if (trimmed[0] == '\0' || trimmed[0] == '#')
     {
         return LineKind::empty;
@@ -59,8 +59,8 @@ LineKind prepare_line(const std::string& line, std::string* text)
 std::string fec_text(const Fec& fec)
 {
     char buf[32];
-    winject::console_format_fec_display(fec.type, fec.k, fec.n, buf,
-                                        sizeof(buf));
+    winject::core::console_format_fec_display(fec.type, fec.k, fec.n, buf,
+                                              sizeof(buf));
     return buf;
 }
 
@@ -68,7 +68,7 @@ using ull = unsigned long long;
 
 }  // namespace
 
-void execute(const Node& node, const std::string& line,
+void execute(const L3& l3, const std::string& line,
              std::function<void(const std::string& reply)> done)
 {
     if (!done)
@@ -79,15 +79,15 @@ void execute(const Node& node, const std::string& line,
     switch (prepare_line(line, &text))
     {
         case LineKind::too_long:
-            done(nok(winject::k_einval));
+            done(nok(winject::core::k_einval));
             return;
         case LineKind::empty:
             return;
         case LineKind::command:
             break;
     }
-    const Status posted = node.post(
-        [text, done](const Node& n)
+    const Status posted = l3.post(
+        [text, done](const L3& n)
         {
             ConsoleCommands::handle(n, text.c_str(), done, false,
                                     k_default_timeout);
@@ -98,20 +98,20 @@ void execute(const Node& node, const std::string& line,
     }
 }
 
-std::string execute(const Node& node, const std::string& line,
+std::string execute(const L3& l3, const std::string& line,
                     std::chrono::milliseconds t)
 {
     std::string text;
     switch (prepare_line(line, &text))
     {
         case LineKind::too_long:
-            return nok(winject::k_einval);
+            return nok(winject::core::k_einval);
         case LineKind::empty:
             return std::string();
         case LineKind::command:
             break;
     }
-    if (!node.running())
+    if (!l3.running())
     {
         return nok("ESRCH");
     }
@@ -119,7 +119,7 @@ std::string execute(const Node& node, const std::string& line,
     // from inside a Done on l3's callback thread.
     std::string out;
     ConsoleCommands::handle(
-        node, text.c_str(),
+        l3, text.c_str(),
         [&out](const std::string& reply)
         {
             out = reply;
@@ -184,7 +184,7 @@ struct Service::Impl
     std::mutex mu;
     std::shared_ptr<Reactor> reactor;  // set while started
     // Touched only on reactor's thread.
-    winject::ConsoleService service;
+    winject::core::ConsoleService service;
 };
 
 namespace
@@ -222,7 +222,7 @@ const char* bind_error(int err)
         case EADDRNOTAVAIL:
             return "EADDRNOTAVAIL";
         default:
-            return winject::k_eio;
+            return winject::core::k_eio;
     }
 }
 
@@ -242,24 +242,24 @@ Service::~Service()
     stop();
 }
 
-Status Service::start(const Node& node, const std::string& bind_host_port,
+Status Service::start(const L3& l3, const std::string& bind_host_port,
                       const std::string& reactor_name)
 {
     sockaddr_in addr{};
-    if (!winject::parse_host_port(bind_host_port, &addr))
+    if (!winject::core::parse_host_port(bind_host_port, &addr))
     {
-        return error(winject::k_einval);
+        return error(winject::core::k_einval);
     }
     auto reactor = ReactorRegistry::get_instance().get(reactor_name);
     if (!reactor)
     {
-        return error(winject::k_enoent);
+        return error(winject::core::k_enoent);
     }
     {
         std::lock_guard<std::mutex> lock(impl->mu);
         if (impl->reactor)
         {
-            return error(winject::k_ealready);
+            return error(winject::core::k_ealready);
         }
         impl->reactor = reactor;
     }
@@ -275,7 +275,7 @@ Status Service::start(const Node& node, const std::string& bind_host_port,
     auto self = impl;
     const bool ran = on_reactor(
         *reactor,
-        [self, reactor, addr, node, attempt]()
+        [self, reactor, addr, l3, attempt]()
         {
             if (attempt->cancelled)
             {
@@ -283,7 +283,7 @@ Status Service::start(const Node& node, const std::string& bind_host_port,
             }
             std::string err;
             errno = 0;
-            attempt->ok = self->service.start(reactor, addr, node, &err);
+            attempt->ok = self->service.start(reactor, addr, l3, &err);
             attempt->bind_errno = errno;
         },
         k_default_timeout);
@@ -331,4 +331,4 @@ Status Service::stop()
     return {};
 }
 
-}  // namespace winject_l3::console
+}  // namespace winject::l3::console

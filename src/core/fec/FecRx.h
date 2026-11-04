@@ -11,7 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-namespace winject
+namespace winject::core
 {
 
 // RX half of the RS FEC: air shards in, app datagrams out in sequence through
@@ -57,6 +57,6 @@ private:
     std::atomic<uint64_t> decode_fail_total{0};
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_FEC_FEC_RX_H_

@@ -17,7 +17,7 @@
 #include "soc/soc.h"
 #endif
 
-namespace winject::fec_vendor
+namespace winject::core::fec_vendor
 {
 namespace
 {
@@ -375,4 +375,4 @@ int rs_encode_selftest(int k, int rows, int len, int iterations, int64_t (*now_u
     return bad;
 }
 
-}  // namespace winject::fec_vendor
+}  // namespace winject::core::fec_vendor

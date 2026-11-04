@@ -1,5 +1,5 @@
-# ESP-IDF component: the winject-l3 core, the node and its public API
-# (include/winject_l3/*.h: run / stop, Node, managers, handles, console).
+# ESP-IDF component: the winject-l3 core, the l3 applet and its public API
+# (include/winject_l3/*.h: winject::L3, managers, handles, console).
 # Add <winject-l3>/idf/winject_l3 to EXTRA_COMPONENT_DIRS of an IDF project.
 set(WINJECT_L3_ROOT ${CMAKE_CURRENT_LIST_DIR}/../..)
 set(WINJECT_CORE_DIR ${WINJECT_L3_ROOT}/src/core)

@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 class RxDemux
@@ -29,6 +29,6 @@ private:
     std::atomic<uint64_t> rx_drop_bus_total{0};
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_RX_DEMUX_H_

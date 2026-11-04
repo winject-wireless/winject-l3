@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 // TX half of the RS FEC: app datagrams in, air shards out through emit.
@@ -67,6 +67,6 @@ private:
     std::atomic<uint64_t> pending_bytes{0};
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_FEC_FEC_TX_H_

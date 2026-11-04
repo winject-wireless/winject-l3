@@ -3,7 +3,7 @@
 #include <cctype>
 #include <string>
 
-namespace winject
+namespace winject::core
 {
 
 namespace
@@ -157,4 +157,4 @@ uint32_t phy_default_gap_us(const PhyMode& m)
     return m.band_2g4 ? 96u : 102u;
 }
 
-}  // namespace winject
+}  // namespace winject::core

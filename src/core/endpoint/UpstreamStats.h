@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace winject
+namespace winject::core
 {
 
 struct UpstreamStats
@@ -34,6 +34,6 @@ constexpr uint16_t k_air_rx_reorder_window = 64;
 bool accept_air_payload(UpstreamStats* stats, const uint8_t* data, size_t len,
                         const uint8_t** payload, size_t* plen, bool* is_fec);
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_ENDPOINT_UPSTREAM_STATS_H_

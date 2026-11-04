@@ -10,7 +10,7 @@
 #include <strings.h>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 bool parse_radio_tx_line(const std::string& line, RadioPhyView* out)
@@ -342,4 +342,4 @@ bool radio_phy_matches_desired(const RadioPhyView& actual, uint8_t channel,
            static_cast<int>(power_dbm) == actual.tx_power && want == have;
 }
 
-}  // namespace winject
+}  // namespace winject::core

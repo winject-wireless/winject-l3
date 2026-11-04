@@ -5,7 +5,7 @@
 
 #include <cstring>
 
-namespace winject
+namespace winject::core
 {
 
 namespace
@@ -101,4 +101,4 @@ bool accept_air_payload(UpstreamStats* stats, const uint8_t* data, size_t len,
     return true;
 }
 
-}  // namespace winject
+}  // namespace winject::core

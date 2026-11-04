@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 // Reactive BFC queue; packets retain the slot prefix (route + upstream air
 // header). UpstreamLink interprets sequence/FEC; demux only reads the route bus
@@ -141,5 +141,5 @@ private:
     uint64_t bytes = 0;
     std::vector<std::optional<bfc::shared_sized_buffer>> slots;
 };
-}  // namespace winject
+}  // namespace winject::core
 #endif  // WINJECT_MANAGER_UTILS_RADIO_QUEUES_H_

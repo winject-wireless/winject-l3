@@ -17,13 +17,13 @@
 
 namespace
 {
-using winject::Config;
-using winject::RadioMplaneClient;
-using winject::MplaneResult;
-using winject::RadioCapsReply;
-using winject::RadioCountersReply;
-using winject::RadioPhyReply;
-using winject::RadioPhyView;
+using winject::core::Config;
+using winject::core::RadioMplaneClient;
+using winject::core::MplaneResult;
+using winject::core::RadioCapsReply;
+using winject::core::RadioCountersReply;
+using winject::core::RadioPhyReply;
+using winject::core::RadioPhyView;
 int open_udp_server(uint16_t* port_out)
 {
     const int fd = socket(AF_INET, SOCK_DGRAM, 0);

@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace winject
+namespace winject::core
 {
 
 // Demux/radio routing: first byte of each slot payload.
@@ -95,6 +95,6 @@ struct LCHeader
     }
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_FRAMES_LC_HEADER_H_

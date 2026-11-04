@@ -9,7 +9,7 @@
 #include <sys/socket.h>
 #include <variant>
 
-namespace winject
+namespace winject::core
 {
 
 bool WifiUdp::forward_trailer_ok(const uint8_t* frame, size_t len) const
@@ -212,4 +212,4 @@ void WifiUdp::on_forward()
     }
 }
 
-}  // namespace winject
+}  // namespace winject::core

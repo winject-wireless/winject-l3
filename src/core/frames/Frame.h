@@ -24,7 +24,7 @@
 #include <cstdint>
 #include <string>
 
-namespace winject
+namespace winject::core
 {
 namespace ieee_802_11
 {
@@ -160,6 +160,6 @@ public:
 std::string to_string(Frame& frame80211);
 
 }  // namespace ieee_802_11
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_FRAMES_FRAME_H_

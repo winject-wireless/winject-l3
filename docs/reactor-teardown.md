@@ -103,7 +103,7 @@ Most manager code runs on one reactor thread ([`IOReactor`](../src/core/utils/IO
 | [`UDPUpstream`](../src/core/endpoint/UDPUpstream.cpp) | `add_read_rdy` on app UDP socket | `teardown()` / `rem_read_rdy(fd, done_cb)`; `done_cb` holds the socket, so it closes after removal |
 | [`WifiUdp`](../src/core/radio/WifiUdp.cpp) | d-plane forward socket | `rem_read_rdy` then close in `close()` |
 | [`ConsoleService`](../src/l3/console/ConsoleService.cpp) | manager m-plane socket | `rem_read_rdy` on shutdown |
-| [`NodeImpl`](../src/l3/NodeImpl.cpp) | radio m-plane client fd | `rem_read_rdy` when dropping the m-plane |
+| [`L3Impl`](../src/l3/L3Impl.cpp) | radio m-plane client fd | `rem_read_rdy` when dropping the m-plane |
 
 Cross-thread control that must run on the reactor thread should use
 `reactor.wake_up(...)`, as [`WifiUdp::post_rx_event`](../src/core/radio/WifiUdp.cpp)
@@ -122,7 +122,7 @@ does for d-plane address changes.
 
 ### CV upstream reactor (queue upstream path)
 
-When queue upstreams are enabled, the node runs a dedicated `cv_reactor` thread for
+When queue upstreams are enabled, l3 runs a dedicated `cv_reactor` thread for
 UDP/CV processing while queue upstreams may use a host-registered CV reactor from
 BFC's registry. That reactor may be stopped or stuck in a long app handler, so
 `UpstreamLink::teardown()` never waits for a reactor fence. It uses the sync remove

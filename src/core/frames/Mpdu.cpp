@@ -110,7 +110,7 @@ void unpack_slot_sizes_from_addrs(const uint8_t addr1[6], const uint8_t addr2[6]
 
 }  // namespace
 
-namespace winject
+namespace winject::core
 {
 
 Mpdu::Mpdu(uint8_t* data, size_t len)
@@ -462,4 +462,4 @@ uint16_t next_tx_sequence()
     return next_tx_seq();
 }
 
-}  // namespace winject
+}  // namespace winject::core

@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 inline constexpr size_t k_pacing_full_psdu_bytes = 1504;
@@ -118,6 +118,6 @@ private:
     std::shared_ptr<ReactorState> reactor_state;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_TX_MUX_H_

@@ -8,7 +8,7 @@
 #include <string>
 #include <unistd.h>
 
-using namespace winject;
+using namespace winject::core;
 
 namespace
 {

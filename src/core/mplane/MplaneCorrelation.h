@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <string>
 
-namespace winject
+namespace winject::core
 {
 
 // cmd:<u8> <line> on TX; OK:<u8> / NOK:<u8> on RX (radio m-plane and manager
@@ -26,6 +26,6 @@ bool mplane_nok_token(const std::string& err, std::string* token);
 
 std::string mplane_err_string(const std::string& err);
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_CONSOLE_MPLANE_CORRELATION_H_

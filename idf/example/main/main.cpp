@@ -1,5 +1,5 @@
-// Runs winject_l3::run with a Config filled here. run() blocks, so it gets
-// its own pthread: that thread becomes l3's callback thread. The node's
+// Runs winject::L3::run with a Config filled here. run() blocks, so it gets
+// its own pthread: that thread becomes l3's callback thread. l3's
 // reactor and the upstream reactor are threads run() starts; ThreadSetup sets
 // their stack and name before each one.
 
@@ -37,21 +37,21 @@ winject::Config make_config()
     cfg.power_dbm = 20;
     cfg.domain = 0x1234;
     cfg.stats_sec = 1;
-    cfg.radio_device.fcs = winject::RadioFcsConfig::signal;
+    cfg.radio_device.fcs = winject::core::RadioFcsConfig::signal;
     cfg.radio_device.mplane = ipv4_port("192.168.253.11", 22);
     cfg.radio_device.dplane = ipv4_port("192.168.253.11", 9000);
 
-    winject::UpstreamConfig to_peer;
+    winject::core::UpstreamConfig to_peer;
     to_peer.index = 0;
-    to_peer.mode = winject::UpstreamMode::udp_server;
+    to_peer.mode = winject::core::UpstreamMode::udp_server;
     to_peer.bus_tx = 0xb2;
     to_peer.bus_rx = 0xa1;
     to_peer.scheduler_budget = 65536;
     to_peer.endpoint.rx = "127.0.0.1:29000";
 
-    winject::UpstreamConfig from_peer;
+    winject::core::UpstreamConfig from_peer;
     from_peer.index = 1;
-    from_peer.mode = winject::UpstreamMode::udp_client;
+    from_peer.mode = winject::core::UpstreamMode::udp_client;
     from_peer.bus_tx = 0xc3;
     from_peer.bus_rx = 0xd4;
     from_peer.scheduler_budget = 65536;
@@ -62,14 +62,14 @@ winject::Config make_config()
     return cfg;
 }
 
-void set_thread_cfg(winject_l3::Thread thread)
+void set_thread_cfg(winject::L3::Thread thread)
 {
     esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
-    if (thread == winject_l3::Thread::node)
+    if (thread == winject::L3::Thread::l3)
     {
-        // The node's reactor: radio m-plane, TX timers, handle calls.
+        // l3's reactor: radio m-plane, TX timers, handle calls.
         cfg.stack_size = 16 * 1024;
-        cfg.thread_name = "l3_node";
+        cfg.thread_name = "l3_reactor";
     }
     else
     {
@@ -82,8 +82,8 @@ void* run(void*)
 {
     const winject::Config cfg = make_config();
     // No UDP console here: started is empty.
-    const int rc = winject_l3::run(cfg, {}, set_thread_cfg);
-    printf("winject_l3::run returned %d\n", rc);
+    const int rc = winject::L3::run(cfg, {}, set_thread_cfg);
+    printf("winject::L3::run returned %d\n", rc);
     return nullptr;
 }
 

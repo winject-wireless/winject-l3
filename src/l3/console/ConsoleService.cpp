@@ -15,7 +15,7 @@
 #include <string>
 #include <strings.h>
 
-namespace winject
+namespace winject::core
 {
 
 ConsoleService::~ConsoleService()
@@ -24,8 +24,8 @@ ConsoleService::~ConsoleService()
 }
 
 bool ConsoleService::start(const std::shared_ptr<IOReactor>& on_reactor,
-                           const sockaddr_in& console_in,
-                           winject_l3::Node bound_node, std::string* error)
+                           const sockaddr_in& console_in, winject::L3 bound_l3,
+                           std::string* error)
 {
     auto fail = [&](const char* msg) -> bool
     {
@@ -41,7 +41,7 @@ bool ConsoleService::start(const std::shared_ptr<IOReactor>& on_reactor,
     }
     stop();
     this->reactor = on_reactor;
-    this->node = std::move(bound_node);
+    this->l3 = std::move(bound_l3);
     this->alive = std::make_shared<ConsoleService*>(this);
     sock = bfc::socket(bfc::create_udp4());
     if (sock.fd() < 0)
@@ -86,7 +86,7 @@ void ConsoleService::stop()
         bfc::socket(std::move(sock));
     }
     this->reactor.reset();
-    this->node = {};
+    this->l3 = {};
     this->alive.reset();
     routes.clear();
     in_flight.clear();
@@ -256,8 +256,8 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
 {
     std::weak_ptr<ConsoleService*> weak = alive;
     std::weak_ptr<IOReactor> weak_reactor = reactor;
-    winject_l3::console::execute(
-        node, line,
+    winject::l3::console::execute(
+        l3, line,
         [weak, weak_reactor, l3_id](const std::string& text)
         {
             auto on = weak_reactor.lock();
@@ -276,4 +276,4 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         });
 }
 
-}  // namespace winject
+}  // namespace winject::core

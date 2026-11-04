@@ -10,7 +10,7 @@
 #include <string>
 #include <sys/socket.h>
 
-namespace winject_l3
+namespace winject
 {
 
 enum class RadioFcs
@@ -48,7 +48,7 @@ struct RadioPhyPatch
     std::optional<bool> cca;
 };
 
-// The node's one radio.
+// l3's one radio.
 struct RadioSpec
 {
     RadioDevice device;
@@ -113,7 +113,7 @@ struct RadioStats
     RadioRxStats rx;
 };
 
-// A handle to the node's radio. Cheap to copy, safe from any thread. After
+// A handle to l3's radio. Cheap to copy, safe from any thread. After
 // remove its calls return ENOENT; once a radio is created again, the handle
 // reaches the new one (as an Upstream handle does its id). A default handle
 // is attached to nothing: calls return ESRCH.
@@ -177,8 +177,8 @@ public:
                                std::chrono::milliseconds t = k_default_timeout);
 
 private:
-    friend struct detail::HandleAccess;
-    std::shared_ptr<detail::NodeCore> core;
+    friend struct l3::detail::HandleAccess;
+    std::shared_ptr<l3::detail::L3Core> core;
 };
 
 class RadioManager
@@ -186,8 +186,8 @@ class RadioManager
 public:
     RadioManager() = default;
 
-    // Validates spec and builds the node's radio (UDP or queue d-plane). Not
-    // on air yet. EINVAL. EEXIST if the node already has a radio, added or
+    // Validates spec and builds l3's radio (UDP or queue d-plane). Not
+    // on air yet. EINVAL. EEXIST if l3 already has a radio, added or
     // not.
     Result<Radio> create(const RadioSpec& spec);
     // Attaches the created radio: m-plane connect, programming, d-plane into
@@ -198,10 +198,10 @@ public:
     Status remove();            // added or only created; upstreams on it: EBUSY
 
 private:
-    friend struct detail::HandleAccess;
-    std::shared_ptr<detail::NodeCore> core;
+    friend struct l3::detail::HandleAccess;
+    std::shared_ptr<l3::detail::L3Core> core;
 };
 
-}  // namespace winject_l3
+}  // namespace winject
 
 #endif  // WINJECT_L3_PUBLIC_RADIO_H_

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <string>
 
-namespace winject
+namespace winject::core
 {
 
 enum class UpstreamMode
@@ -70,6 +70,6 @@ struct UpstreamConfig
     int fec_timeout_ms = 20;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_CORE_ENDPOINT_UPSTREAM_CONFIG_H_

@@ -12,12 +12,12 @@
 #include <sys/socket.h>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 class UpstreamQueue;
 
-// The l3 node's configuration: the radio (RadioConfig, core) plus upstreams
+// l3's configuration: the radio (RadioConfig, core) plus upstreams
 // and the l3 console. Parsed from a file (load) or filled in by the host.
 struct Config : RadioConfig
 {
@@ -60,6 +60,6 @@ struct Config : RadioConfig
     unsigned stats_sec = 0;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_CONFIG_H_

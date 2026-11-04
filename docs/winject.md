@@ -40,14 +40,14 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 
 | Component | Source | Role |
 |---|---|---|
-| `NodeImpl` | [`NodeImpl.*`](../src/l3/NodeImpl.cpp) | The node behind the public API ([`include/winject_l3`](../include/winject_l3)): owns everything below; startup, radio programming sequence, metrics. Handle calls run on its reactor thread |
+| `L3Impl` | [`L3Impl.*`](../src/l3/L3Impl.cpp) | The l3 applet behind the public API ([`include/winject_l3`](../include/winject_l3)): owns everything below; startup, radio programming sequence, metrics. Handle calls run on its reactor thread |
 | `Config` | [`Config.*`](../src/l3/Config.cpp) | Parses the `winject.*`, `radio.*`, and `upstream-N.*` keys |
 | `IOReactor` | [`IOReactor.h`](../src/core/utils/IOReactor.h) | epoll reactor (`bfc::epoll_reactor`); runs all socket I/O and timers on one thread. Teardown and `wake_up` ordering: [reactor-teardown.md](reactor-teardown.md) |
 | `RadioMplaneClient` | [`RadioMplaneClient.*`](../src/core/mplane/RadioMplaneClient.cpp) | Radio m-plane client: correlated requests (`cmd:<u8>`), timeouts, `apply_radio`; queries return parsed structs plus the raw reply |
-| `ConsoleService` | [`ConsoleService.*`](../src/l3/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender), behind `winject_l3::console::Service` |
+| `ConsoleService` | [`ConsoleService.*`](../src/l3/console/ConsoleService.cpp) | Manager m-plane server (`console_in`; replies to sender), behind `winject::l3::console::Service` |
 | `RadioSupervisor` | [`RadioSupervisor.*`](../src/core/radio/RadioSupervisor.cpp) | Keeps the radio in the configured state: PHY reconcile, filter reconcile, heartbeat, forward re-registration, TX pacing per modulation |
 | `WifiUdp` | [`WifiUdp.*`](../src/core/radio/WifiUdp.cpp) | d-plane socket to `radio_device.dplane`: MPDUs and 1-byte registration; checks the forward trailer per FCS mode |
-| `WifiQueue` | [`WifiQueue.*`](../src/core/radio/WifiQueue.cpp) | Same d-plane bytes through registered lossy queues (`radio.dplane_tx` / `radio.dplane_rx` + `radio.reactor`); peer is typically winject_proxy on the same host. m-plane stays UDP. RX runs on that CV reactor's thread. Both transports implement [`RadioDplane`](../src/core/radio/RadioDplane.h); `NodeImpl` picks one from the radio spec |
+| `WifiQueue` | [`WifiQueue.*`](../src/core/radio/WifiQueue.cpp) | Same d-plane bytes through registered lossy queues (`radio.dplane_tx` / `radio.dplane_rx` + `radio.reactor`); peer is typically winject_proxy on the same host. m-plane stays UDP. RX runs on that CV reactor's thread. Both transports implement [`RadioDplane`](../src/core/radio/RadioDplane.h); `L3Impl` picks one from the radio spec |
 | `TxMux` | [`TxMux.*`](../src/core/radio/TxMux.cpp) | TX scheduler: picks upstreams, builds MPDUs, paces them at 90 % of the modulation's airtime |
 | `RxDemux` | [`RxDemux.*`](../src/core/radio/RxDemux.cpp) | RX: validates domain, splits slots, routes each slot by its LC bus to upstreams |
 | `RadioUpstreamTable` | [`RadioUpstreamTable.*`](../src/core/radio/RadioUpstreamTable.cpp) | Shared bus routing, RX/TX queue handles and weak statistics references, guarded by one mutex |
@@ -61,10 +61,10 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 
 | Thread | Runs |
 |---|---|
-| Callback thread (`winject_l3::run`'s caller) | `apply`, `started`, every `Done` and `Node::post`: all user code. Never the node's own work |
-| Node reactor (`std::thread` from `run`) | The work of each API call, UDP socket input, Wi-Fi RX depayload/routing, TX scheduling (UDP radio), radio m-plane, management and statistics. Upstream socket callbacks only enqueue application datagrams. Runs no user code except `UpstreamSpec::on_queue` |
-| Supplied upstream CV reactor | Application input, radio RX queue processing, TX/RX FEC timers, and application delivery. The node runs a shared CV reactor for UDP (a `std::thread` from `run`); queue upstreams use the host's configured reactor. A queue radio's TX scheduling runs on `radio.reactor` |
-| Console reactor (host) | `winject_l3::console::Service`: the UDP console socket only; it never waits on the node |
+| Callback thread (`winject::L3::run`'s caller) | `apply`, `started`, every `Done` and `L3::post`: all user code. Never l3's own work |
+| l3 reactor (`std::thread` from `run`) | The work of each API call, UDP socket input, Wi-Fi RX depayload/routing, TX scheduling (UDP radio), radio m-plane, management and statistics. Upstream socket callbacks only enqueue application datagrams. Runs no user code except `UpstreamSpec::on_queue` |
+| Supplied upstream CV reactor | Application input, radio RX queue processing, TX/RX FEC timers, and application delivery. l3 runs a shared CV reactor for UDP (a `std::thread` from `run`); queue upstreams use the host's configured reactor. A queue radio's TX scheduling runs on `radio.reactor` |
+| Console reactor (host) | `winject::l3::console::Service`: the UDP console socket only; it never waits on l3 |
 
 Upstream instances create no threads. Their radio RX queues are bound to the
 supplied reactor. TX queues are supplied at construction and bound to wake the

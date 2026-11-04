@@ -10,7 +10,7 @@
 #include <functional>
 #include <string>
 
-namespace winject
+namespace winject::core
 {
 
 struct RadioConfig;
@@ -84,6 +84,6 @@ private:
     static constexpr std::chrono::milliseconds k_radio_info_interval{5000};
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_RADIO_SUPERVISOR_H_

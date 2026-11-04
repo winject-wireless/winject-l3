@@ -5,8 +5,8 @@
 set(WINJECT_L3_SOURCES
     Api.cpp
     Run.cpp
-    NodeCore.cpp
-    NodeImpl.cpp
+    L3Core.cpp
+    L3Impl.cpp
     Config.cpp
     console/Console.cpp
     console/ConsoleCommands.cpp

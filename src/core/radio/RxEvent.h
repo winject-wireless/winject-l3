@@ -5,7 +5,7 @@
 #include <sys/socket.h>
 #include <variant>
 
-namespace winject
+namespace winject::core
 {
 
 struct EventCtrlRecvSocketChange
@@ -15,6 +15,6 @@ struct EventCtrlRecvSocketChange
 
 using RxEvent = std::variant<EventCtrlRecvSocketChange>;
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_RX_EVENT_H_

@@ -14,7 +14,7 @@
 #include "utils/MetricsRegistry.h"
 #include "utils/OneShotTimer.h"
 #include "utils/Version.h"
-#include "winject_l3/Node.h"
+#include "winject_l3/L3.h"
 
 #include <atomic>
 #include <chrono>
@@ -26,77 +26,91 @@
 #include <thread>
 #include <vector>
 
-namespace winject_l3::detail
-{
-struct NodeCore;
-}
-
-namespace winject
+namespace winject::l3::detail
 {
 
-// The l3 node: reactor, data path and the radio. Every method below runs on
-// the node's reactor thread; the public handles (winject_l3::Node, Upstream,
-// Radio, ...) post to it. The node never calls user code there except
+struct L3Core;
+
+// The core types l3 is built from.
+using core::BoundedLossyQueue;
+using core::IOReactor;
+using core::MetricsRegistry;
+using core::OneShotTimer;
+using core::RadioCapsReply;
+using core::RadioDplane;
+using core::RadioMplaneClient;
+using core::RadioPhyReply;
+using core::RadioSupervisor;
+using core::RadioUpstreamTable;
+using core::RxDemux;
+using core::TxMux;
+using core::UpstreamConfig;
+using core::UpstreamLink;
+using core::WinjectVersion;
+
+// The l3 applet behind the handles: reactor, data path and the radio. Every
+// method below runs on l3's reactor thread; the public handles (winject::L3,
+// Upstream, Radio, ...) post to it. l3 never calls user code there except
 // UpstreamSpec::on_queue, and never waits on another thread.
-class NodeImpl
+class L3Impl
 {
 public:
     template <class T>
-    using Result = winject_l3::Result<T>;
-    using Status = winject_l3::Status;
+    using Result = winject::Result<T>;
+    using Status = winject::Status;
     template <class T>
     using Reply = std::function<void(Result<T>)>;
     struct Empty
     {
     };
 
-    explicit NodeImpl(unsigned stats_sec);
-    ~NodeImpl();
-    NodeImpl(const NodeImpl&) = delete;
-    NodeImpl& operator=(const NodeImpl&) = delete;
+    explicit L3Impl(unsigned stats_sec);
+    ~L3Impl();
+    L3Impl(const L3Impl&) = delete;
+    L3Impl& operator=(const L3Impl&) = delete;
 
-    // Starts the upstream reactor thread and the node's thread, attached to
+    // Starts the upstream reactor thread and l3's thread, attached to
     // core. thread_setup runs on this thread before each one starts.
-    void start(winject_l3::detail::NodeCore* core,
-               const winject_l3::ThreadSetup& thread_setup);
-    // Waits for the node's thread, which exits after stop().
+    void start(winject::l3::detail::L3Core* core,
+               const L3::ThreadSetup& thread_setup);
+    // Waits for l3's thread, which exits after stop().
     void join();
     void stop();
-    winject::IOReactor& io_reactor()
+    winject::core::IOReactor& io_reactor()
     {
         return *reactor;
     }
 
     // Upstreams.
-    Status add_upstream(const winject_l3::UpstreamSpec& spec);
+    Status add_upstream(const winject::UpstreamSpec& spec);
     Status remove_upstream(uint8_t id);
     bool has_upstream(uint8_t id) const;
     std::vector<uint8_t> upstream_ids() const;
-    Result<winject_l3::UpstreamSpec> upstream_spec(uint8_t id) const;
-    Result<winject_l3::UpstreamSpec> update_upstream(
-        uint8_t id, const winject_l3::UpstreamPatch& patch);
-    Result<winject_l3::UpstreamRxStats> upstream_rx_stats(uint8_t id) const;
-    Result<winject_l3::UpstreamTxStats> upstream_tx_stats(uint8_t id) const;
-    Result<std::vector<winject_l3::Metric>> metrics(
+    Result<winject::UpstreamSpec> upstream_spec(uint8_t id) const;
+    Result<winject::UpstreamSpec> update_upstream(
+        uint8_t id, const winject::UpstreamPatch& patch);
+    Result<winject::UpstreamRxStats> upstream_rx_stats(uint8_t id) const;
+    Result<winject::UpstreamTxStats> upstream_tx_stats(uint8_t id) const;
+    Result<std::vector<winject::Metric>> metrics(
         const std::vector<std::string>& keys);
 
     // The radio.
-    Status create_radio(const winject_l3::RadioSpec& spec);
+    Status create_radio(const winject::RadioSpec& spec);
     Status add_radio();
     Status remove_radio();
     bool has_radio() const
     {
         return radio_created;
     }
-    Result<winject_l3::RadioState> radio_state() const;
-    Result<winject_l3::RadioSpec> radio_spec() const;
-    Result<winject_l3::RadioDevice> radio_device() const;
-    Status set_radio_device(const winject_l3::RadioDevice& device);
-    void set_radio_phy(const winject_l3::RadioPhyPatch& patch,
-                       Reply<winject_l3::RadioInfo> reply);
-    void radio_info(Reply<winject_l3::RadioInfo> reply);
-    void radio_caps(Reply<winject_l3::RadioCaps> reply);
-    void radio_stats(Reply<winject_l3::RadioStats> reply);
+    Result<winject::RadioState> radio_state() const;
+    Result<winject::RadioSpec> radio_spec() const;
+    Result<winject::RadioDevice> radio_device() const;
+    Status set_radio_device(const winject::RadioDevice& device);
+    void set_radio_phy(const winject::RadioPhyPatch& patch,
+                       Reply<winject::RadioInfo> reply);
+    void radio_info(Reply<winject::RadioInfo> reply);
+    void radio_caps(Reply<winject::RadioCaps> reply);
+    void radio_stats(Reply<winject::RadioStats> reply);
     void set_config_slot(uint8_t slot, Reply<Empty> reply);
     void radio_reset(Reply<Empty> reply);
     void radio_mplane(const std::string& line, Reply<std::string> reply);
@@ -131,19 +145,19 @@ private:
     bool set_upstream_scheduler_budget(size_t index, size_t budget,
                                        std::string* error);
     size_t upstream_index(uint8_t id) const;
-    winject_l3::UpstreamSpec upstream_spec_at(size_t index) const;
+    winject::UpstreamSpec upstream_spec_at(size_t index) const;
     void apply_radio_caps(const RadioCapsReply& caps);
     void apply_radio_dplane();
     void close_radio();
     void apply_configured_fcs();
     const char* radio_unavailable_error() const;
-    winject_l3::RadioInfo radio_info_from(const RadioPhyReply& reply) const;
+    winject::RadioInfo radio_info_from(const RadioPhyReply& reply) const;
     void on_radio_version(bool known, const WinjectVersion& v);
     void log_proto_mismatch_once(const WinjectVersion& radio_ver);
 
     static constexpr std::chrono::milliseconds k_reconnect_interval{1000};
 
-    winject_l3::detail::NodeCore* core = nullptr;
+    winject::l3::detail::L3Core* core = nullptr;
     // The radio and upstreams as configured: the radio fields from
     // RadioSpec, upstreams in add order.
     Config cfg;
@@ -165,7 +179,7 @@ private:
     std::shared_ptr<UpstreamLink::Reactor> upstream_reactor =
         std::make_shared<UpstreamLink::Reactor>();
     std::thread upstream_reactor_thread;
-    std::thread node_thread;
+    std::thread l3_thread;
     OneShotTimer reconnect_timer;
     // Runs RadioMplaneClient::poll_deadlines() at the earliest request
     // deadline.
@@ -186,6 +200,6 @@ private:
     MetricsRegistry metrics_registry;
 };
 
-}  // namespace winject
+}  // namespace winject::l3::detail
 
 #endif  // WINJECT_L3_NODE_IMPL_H_

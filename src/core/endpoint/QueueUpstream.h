@@ -2,7 +2,7 @@
 #define WINJECT_MANAGER_QUEUE_UPSTREAM_H_
 #include "endpoint/UpstreamLink.h"
 #include "endpoint/UpstreamQueue.h"
-namespace winject
+namespace winject::core
 {
 class QueueUpstream final : public UpstreamLink
 {
@@ -28,5 +28,5 @@ private:
     bool claimed = false;
     std::shared_ptr<UpstreamQueue> app_transport_;
 };
-}  // namespace winject
+}  // namespace winject::core
 #endif

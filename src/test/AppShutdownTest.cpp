@@ -1,6 +1,6 @@
 #include "ConsoleTestHelpers.h"
-#include "NodeCore.h"
-#include "NodeImpl.h"
+#include "L3Core.h"
+#include "L3Impl.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
 
@@ -12,10 +12,10 @@
 #include <poll.h>
 #include <thread>
 
-using namespace winject;
+using namespace winject::core;
 namespace
 {
-// These data-path tests predate the public API: App runs one node through
+// These data-path tests predate the public API: App runs one l3 through
 // run() on its own core, with the UDP console when console_in is set.
 class App
 {
@@ -32,13 +32,13 @@ public:
     }
     int run()
     {
-        return winject_l3::detail::run_node(
+        return winject::l3::detail::run_l3(
             core, cfg,
-            [this](const winject_l3::Node& node)
+            [this](const winject::L3& l3)
             {
                 if (!cfg.console_in.empty())
                 {
-                    service.start(node, cfg.console_in, reactor.name);
+                    service.start(l3, cfg.console_in, reactor.name);
                 }
             },
             {});
@@ -50,10 +50,10 @@ public:
 
 private:
     Config cfg;
-    std::shared_ptr<winject_l3::detail::NodeCore> core =
-        winject_l3::detail::NodeCore::create();
+    std::shared_ptr<winject::l3::detail::L3Core> core =
+        winject::l3::detail::L3Core::create();
     test::ConsoleReactor reactor;
-    winject_l3::console::Service service;
+    winject::l3::console::Service service;
 };
 
 Config config_for(const sockaddr_in& radio)
@@ -592,7 +592,7 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
     EXPECT_TRUE(peer.saw_tx_deadline.load());
 
     // Stop with another paced batch outstanding. The host owns this
-    // reactor, so node teardown must cancel its TX work without stopping it.
+    // reactor, so l3 teardown must cancel its TX work without stopping it.
     for (int i = 0; i < 20; ++i)
     {
         app_in->push(bfc::shared_sized_buffer::copy_from(full_sdu.data(),

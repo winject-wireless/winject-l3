@@ -5,7 +5,7 @@
 
 #include <bfc/socket.hpp>
 #include <memory>
-namespace winject
+namespace winject::core
 {
 class UDPUpstream final : public UpstreamLink
 {
@@ -30,5 +30,5 @@ private:
     bool have_destination = false;
     bool registered = false;
 };
-}  // namespace winject
+}  // namespace winject::core
 #endif

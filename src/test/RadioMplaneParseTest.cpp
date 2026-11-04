@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-using namespace winject;
+using namespace winject::core;
 
 TEST(RadioMplaneParseTest, ParseInfoBody)
 {
@@ -91,8 +91,8 @@ TEST(RadioMplaneParseTest, CountersNeedEveryKey)
         "ts=123456789",
         "rx_info rx_queue_sz=1 dropped_filter_mismatched=14 dropped_rx_queue=0 "
         "dropped_no_peer=2 dropped_send_failed=0 ether_pkt=7 air_pkt=8 ts=5"};
-    winject::RadioCounters c;
-    ASSERT_TRUE(winject::parse_radio_counters(ok, &c));
+    winject::core::RadioCounters c;
+    ASSERT_TRUE(winject::core::parse_radio_counters(ok, &c));
     EXPECT_EQ(c.tx.dropped_invalid_frame, 4294967295u);
     EXPECT_EQ(c.tx.timestamp_us, 123456789u);
     EXPECT_EQ(c.rx.dropped_filter_mismatched, 14u);
@@ -101,15 +101,15 @@ TEST(RadioMplaneParseTest, CountersNeedEveryKey)
     // Unknown keys are ignored.
     std::vector<std::string> extra = ok;
     extra[0] += " new_counter=1";
-    EXPECT_TRUE(winject::parse_radio_counters(extra, &c));
+    EXPECT_TRUE(winject::core::parse_radio_counters(extra, &c));
 
     std::vector<std::string> missing = ok;
     missing[1] = "rx_info rx_queue_sz=1 ether_pkt=7 air_pkt=8 ts=5";
-    EXPECT_FALSE(winject::parse_radio_counters(missing, &c));
+    EXPECT_FALSE(winject::core::parse_radio_counters(missing, &c));
     std::vector<std::string> swapped = {ok[1], ok[0]};
-    EXPECT_FALSE(winject::parse_radio_counters(swapped, &c));
+    EXPECT_FALSE(winject::core::parse_radio_counters(swapped, &c));
     std::vector<std::string> bad = ok;
     bad[0].replace(bad[0].find("in_flight=2"), 11, "in_flight=x");
-    EXPECT_FALSE(winject::parse_radio_counters(bad, &c));
-    EXPECT_FALSE(winject::parse_radio_counters({ok[0]}, &c));
+    EXPECT_FALSE(winject::core::parse_radio_counters(bad, &c));
+    EXPECT_FALSE(winject::core::parse_radio_counters({ok[0]}, &c));
 }

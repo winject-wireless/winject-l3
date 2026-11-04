@@ -11,20 +11,20 @@
 
 namespace
 {
-using winject::LCHeader;
-using winject::Mpdu;
-using winject::RadioUpstreamTable;
-using winject::RxDemux;
-using winject::UpstreamLink;
+using winject::core::LCHeader;
+using winject::core::Mpdu;
+using winject::core::RadioUpstreamTable;
+using winject::core::RxDemux;
+using winject::core::UpstreamLink;
 
 bool assign_tx_sequence(Mpdu& mpdu)
 {
-    winject::ieee_802_11::SeqControl* seq = mpdu.ieee().seq_ctl;
+    winject::core::ieee_802_11::SeqControl* seq = mpdu.ieee().seq_ctl;
     if (seq == nullptr)
     {
         return false;
     }
-    seq->set_seq_num(winject::next_tx_sequence());
+    seq->set_seq_num(winject::core::next_tx_sequence());
     seq->set_fragment_num(0);
     return true;
 }
@@ -60,7 +60,7 @@ bfc::shared_sized_buffer make_slot_mpdu(uint16_t domain, uint8_t bus,
 TEST(RxDemuxTest, DropsForeignDomain)
 {
     RadioUpstreamTable table;
-    auto queue = std::make_shared<winject::ReactiveLossyQueue>();
+    auto queue = std::make_shared<winject::core::ReactiveLossyQueue>();
     queue->set_capacity(16);
     table.add(queue, nullptr, nullptr, 1, 1, 1);
     RxDemux demux(table);
@@ -76,7 +76,7 @@ TEST(RxDemuxTest, DropsForeignDomain)
 TEST(RxDemuxTest, DeliversMatchingDomainAndBus)
 {
     RadioUpstreamTable table;
-    auto queue = std::make_shared<winject::ReactiveLossyQueue>();
+    auto queue = std::make_shared<winject::core::ReactiveLossyQueue>();
     queue->set_capacity(16);
     table.add(queue, nullptr, nullptr, 1, 1, 1);
     RxDemux demux(table);
@@ -96,7 +96,7 @@ TEST(RxDemuxTest, DeliversMatchingDomainAndBus)
 TEST(RxDemuxTest, DropsUnknownBus)
 {
     RadioUpstreamTable table;
-    auto queue = std::make_shared<winject::ReactiveLossyQueue>();
+    auto queue = std::make_shared<winject::core::ReactiveLossyQueue>();
     queue->set_capacity(16);
     table.add(queue, nullptr, nullptr, 1, 1, 1);
     RxDemux demux(table);
@@ -112,7 +112,7 @@ TEST(RxDemuxTest, DropsUnknownBus)
 TEST(RxDemuxTest, DeliversLcFecFlag)
 {
     RadioUpstreamTable table;
-    auto queue = std::make_shared<winject::ReactiveLossyQueue>();
+    auto queue = std::make_shared<winject::core::ReactiveLossyQueue>();
     queue->set_capacity(16);
     table.add(queue, nullptr, nullptr, 1, 1, 1);
     RxDemux demux(table);
@@ -135,7 +135,7 @@ TEST(RxDemuxTest, DeliversLcFecFlag)
 TEST(RxDemuxTest, CountsInboxEvictions)
 {
     RadioUpstreamTable table;
-    auto queue = std::make_shared<winject::ReactiveLossyQueue>();
+    auto queue = std::make_shared<winject::core::ReactiveLossyQueue>();
     queue->set_capacity(1);
     table.add(queue, nullptr, nullptr, 1, 1, 1);
     RxDemux demux(table);

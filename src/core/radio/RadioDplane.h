@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include <sys/socket.h>
 
-namespace winject
+namespace winject::core
 {
 
 // Radio d-plane transport: inject MPDUs out, forward frames in. WifiUdp
@@ -63,6 +63,6 @@ private:
     std::atomic<RadioFcsMode> fcs_mode_acc{RadioFcsMode::unknown};
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_DPLANE_H_

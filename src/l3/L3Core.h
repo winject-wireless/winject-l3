@@ -2,7 +2,7 @@
 #define WINJECT_L3_NODE_CORE_H_
 
 #include "utils/IOReactor.h"
-#include "winject_l3/Node.h"
+#include "winject_l3/L3.h"
 
 #include <atomic>
 #include <chrono>
@@ -15,13 +15,10 @@
 #include <unordered_map>
 #include <utility>
 
-namespace winject
+namespace winject::l3::detail
 {
-class NodeImpl;
-}
 
-namespace winject_l3::detail
-{
+class L3Impl;
 
 inline constexpr const char k_esrch[] = "ESRCH";
 inline constexpr const char k_etimedout[] = "ETIMEDOUT";
@@ -52,7 +49,7 @@ Result<T> value_result(T value)
 }
 
 // l3's callback thread: run()'s calling thread runs every Done and every
-// Node::post here, in order.
+// L3::post here, in order.
 class CallbackQueue
 {
 public:
@@ -72,7 +69,7 @@ private:
     bool opened = false;
 };
 
-// One call in flight. The node keeps every one until it finishes, so a node
+// One call in flight. l3 keeps every one until it finishes, so an l3
 // that stops can cancel them: a bfc reactor never runs wake-ups queued after
 // its loop exits.
 struct Request
@@ -80,42 +77,42 @@ struct Request
     virtual ~Request() = default;
     // Finishes with ECANCELED, once.
     virtual void cancel() = 0;
-    // The blocking caller gave up (ETIMEDOUT). The node skips the request if
+    // The blocking caller gave up (ETIMEDOUT). l3 skips the request if
     // it has not started.
     std::atomic<bool> abandoned{false};
     uint64_t id = 0;
 };
 
-// The state every handle shares: the attached node, the pending requests and
-// the callback queue. Outlives the node it attaches.
-struct NodeCore
+// The state every handle shares: the attached l3, the pending requests and
+// the callback queue. Outlives the l3 it attaches.
+struct L3Core
 {
-    NodeCore();
-    ~NodeCore();
-    NodeCore(const NodeCore&) = delete;
-    NodeCore& operator=(const NodeCore&) = delete;
+    L3Core();
+    ~L3Core();
+    L3Core(const L3Core&) = delete;
+    L3Core& operator=(const L3Core&) = delete;
 
-    static std::shared_ptr<NodeCore> create()
+    static std::shared_ptr<L3Core> create()
     {
-        return std::make_shared<NodeCore>();
+        return std::make_shared<L3Core>();
     }
 
-    // The node's side, from NodeImpl. attach before the node's thread
-    // starts; detach_and_cancel on the node's thread once its loop exited.
-    void attach(winject::IOReactor* node_reactor, winject::NodeImpl* node);
+    // l3's side, from L3Impl. attach before l3's thread
+    // starts; detach_and_cancel on l3's thread once its loop exited.
+    void attach(winject::core::IOReactor* l3_reactor, L3Impl* l3);
     void detach_and_cancel();
-    // Only valid on the node's thread.
-    winject::NodeImpl* node_impl() const
+    // Only valid on l3's thread.
+    L3Impl* l3_impl() const
     {
         return impl;
     }
 
     bool attached() const;
-    bool on_node_thread() const;
-    // Queues fn for the node's thread and keeps req pending until forget().
-    // False when no node is attached (fn dropped).
-    bool post_node(const std::shared_ptr<Request>& req,
-                   std::function<void(winject::NodeImpl&)> fn);
+    bool on_l3_thread() const;
+    // Queues fn for l3's thread and keeps req pending until forget().
+    // False when no l3 is attached (fn dropped).
+    bool post_l3(const std::shared_ptr<Request>& req,
+                 std::function<void(L3Impl&)> fn);
     void forget(uint64_t id);
 
     void request_stop();
@@ -132,8 +129,8 @@ struct NodeCore
 
 private:
     mutable std::mutex mu;
-    winject::IOReactor* reactor = nullptr;
-    winject::NodeImpl* impl = nullptr;
+    winject::core::IOReactor* reactor = nullptr;
+    L3Impl* impl = nullptr;
     std::unordered_map<uint64_t, std::shared_ptr<Request>> pending;
     uint64_t next_id = 1;
     int stop_pipe[2] = {-1, -1};
@@ -142,39 +139,39 @@ private:
 // Builds handles; the handles only have default constructors in public.
 struct HandleAccess
 {
-    static Node node(std::shared_ptr<NodeCore> core)
+    static L3 l3(std::shared_ptr<L3Core> core)
     {
-        Node n;
+        L3 n;
         n.core = std::move(core);
         return n;
     }
-    static UpstreamManager upstreams(std::shared_ptr<NodeCore> core)
+    static UpstreamManager upstreams(std::shared_ptr<L3Core> core)
     {
         UpstreamManager m;
         m.core = std::move(core);
         return m;
     }
-    static RadioManager radios(std::shared_ptr<NodeCore> core)
+    static RadioManager radios(std::shared_ptr<L3Core> core)
     {
         RadioManager m;
         m.core = std::move(core);
         return m;
     }
-    static Upstream upstream(std::shared_ptr<NodeCore> core, uint8_t id)
+    static Upstream upstream(std::shared_ptr<L3Core> core, uint8_t id)
     {
         Upstream u;
         u.core = std::move(core);
         u.upstream_id = id;
         return u;
     }
-    static Radio radio(std::shared_ptr<NodeCore> core)
+    static Radio radio(std::shared_ptr<L3Core> core)
     {
         Radio r;
         r.core = std::move(core);
         return r;
     }
     template <class H>
-    static const std::shared_ptr<NodeCore>& core(const H& handle)
+    static const std::shared_ptr<L3Core>& core(const H& handle)
     {
         return handle.core;
     }
@@ -220,32 +217,31 @@ private:
     Result<T> value;
 };
 
-// Calls fn on the node's thread and waits for its result.
+// Calls fn on l3's thread and waits for its result.
 template <class T>
-Result<T> call(const std::shared_ptr<NodeCore>& core,
-               std::function<Result<T>(winject::NodeImpl&)> fn,
+Result<T> call(const std::shared_ptr<L3Core>& core,
+               std::function<Result<T>(L3Impl&)> fn,
                std::chrono::milliseconds timeout = k_default_timeout)
 {
     if (!core)
     {
         return error_result<T>(k_esrch);
     }
-    if (core->on_node_thread())
+    if (core->on_l3_thread())
     {
         return error_result<T>(k_edeadlk);
     }
     auto req = std::make_shared<SyncRequest<T>>();
-    NodeCore* raw = core.get();
-    const bool posted =
-        core->post_node(req,
-                        [raw, req, fn = std::move(fn)](winject::NodeImpl& node)
-                        {
-                            if (!req->abandoned)
-                            {
-                                req->set(fn(node));
-                            }
-                            raw->forget(req->id);
-                        });
+    L3Core* raw = core.get();
+    const bool posted = core->post_l3(req,
+                                      [raw, req, fn = std::move(fn)](L3Impl& l3)
+                                      {
+                                          if (!req->abandoned)
+                                          {
+                                              req->set(fn(l3));
+                                          }
+                                          raw->forget(req->id);
+                                      });
     if (!posted)
     {
         return error_result<T>(k_esrch);
@@ -259,8 +255,8 @@ Result<T> call(const std::shared_ptr<NodeCore>& core,
     return out;
 }
 
-inline Status call_status(const std::shared_ptr<NodeCore>& core,
-                          std::function<Status(winject::NodeImpl&)> fn,
+inline Status call_status(const std::shared_ptr<L3Core>& core,
+                          std::function<Status(L3Impl&)> fn,
                           std::chrono::milliseconds timeout = k_default_timeout)
 {
     struct None
@@ -268,10 +264,10 @@ inline Status call_status(const std::shared_ptr<NodeCore>& core,
     };
     return call<None>(
                core,
-               [fn = std::move(fn)](winject::NodeImpl& node)
+               [fn = std::move(fn)](L3Impl& l3)
                {
                    Result<None> r;
-                   r.status = fn(node);
+                   r.status = fn(l3);
                    return r;
                },
                timeout)
@@ -281,7 +277,7 @@ inline Status call_status(const std::shared_ptr<NodeCore>& core,
 template <class T>
 struct AsyncRequest : Request
 {
-    std::shared_ptr<NodeCore> core;
+    std::shared_ptr<L3Core> core;
     std::function<void(Result<T>)> deliver;
     std::atomic<bool> finished{false};
 
@@ -306,7 +302,7 @@ struct AsyncRequest : Request
     }
 };
 
-// Finishes the request with ECANCELED if the node drops its reply unanswered.
+// Finishes the request with ECANCELED if l3 drops its reply unanswered.
 template <class T>
 struct ReplyGuard
 {
@@ -317,14 +313,13 @@ struct ReplyGuard
     }
 };
 
-// start(node, reply) runs on the node's thread and calls reply exactly once,
-// later or at once. deliver gets the result on the node's thread, or with
-// ECANCELED wherever the node cancels it. False: no node.
+// start(l3, reply) runs on l3's thread and calls reply exactly once,
+// later or at once. deliver gets the result on l3's thread, or with
+// ECANCELED wherever l3 cancels it. False: l3 not running.
 template <class T>
 bool start_async(
-    const std::shared_ptr<NodeCore>& core,
-    std::function<void(winject::NodeImpl&, std::function<void(Result<T>)>)>
-        start,
+    const std::shared_ptr<L3Core>& core,
+    std::function<void(L3Impl&, std::function<void(Result<T>)>)> start,
     std::function<void(Result<T>)> deliver,
     std::shared_ptr<AsyncRequest<T>>* out_req = nullptr)
 {
@@ -336,22 +331,22 @@ bool start_async(
         *out_req = req;
     }
     const bool posted =
-        core->post_node(req,
-                        [req, start = std::move(start)](winject::NodeImpl& node)
-                        {
-                            if (req->abandoned)
-                            {
-                                req->cancel();
-                                return;
-                            }
-                            auto guard = std::make_shared<ReplyGuard<T>>();
-                            guard->req = req;
-                            start(node,
-                                  [guard](Result<T> r)
-                                  {
-                                      guard->req->finish(std::move(r));
-                                  });
-                        });
+        core->post_l3(req,
+                      [req, start = std::move(start)](L3Impl& l3)
+                      {
+                          if (req->abandoned)
+                          {
+                              req->cancel();
+                              return;
+                          }
+                          auto guard = std::make_shared<ReplyGuard<T>>();
+                          guard->req = req;
+                          start(l3,
+                                [guard](Result<T> r)
+                                {
+                                    guard->req->finish(std::move(r));
+                                });
+                      });
     if (!posted)
     {
         req->deliver = nullptr;
@@ -361,13 +356,12 @@ bool start_async(
     return posted;
 }
 
-// Callback form: done runs on l3's callback thread; ESRCH at once without a
-// node.
+// Callback form: done runs on l3's callback thread; ESRCH at once when l3
+// is not running.
 template <class T>
 void call_async(
-    const std::shared_ptr<NodeCore>& core,
-    std::function<void(winject::NodeImpl&, std::function<void(Result<T>)>)>
-        start,
+    const std::shared_ptr<L3Core>& core,
+    std::function<void(L3Impl&, std::function<void(Result<T>)>)> start,
     Done<T> done)
 {
     if (!done)
@@ -396,20 +390,19 @@ void call_async(
     }
 }
 
-// Blocking form: the node's thread wakes the caller directly, never through
+// Blocking form: l3's thread wakes the caller directly, never through
 // the callback thread, so it works from inside a Done.
 template <class T>
 Result<T> call_async_wait(
-    const std::shared_ptr<NodeCore>& core,
-    std::function<void(winject::NodeImpl&, std::function<void(Result<T>)>)>
-        start,
+    const std::shared_ptr<L3Core>& core,
+    std::function<void(L3Impl&, std::function<void(Result<T>)>)> start,
     std::chrono::milliseconds timeout)
 {
     if (!core)
     {
         return error_result<T>(k_esrch);
     }
-    if (core->on_node_thread())
+    if (core->on_l3_thread())
     {
         return error_result<T>(k_edeadlk);
     }
@@ -434,11 +427,11 @@ Result<T> call_async_wait(
     return out;
 }
 
-// run() for a given core; winject_l3::run uses the process's core.
-int run_node(const std::shared_ptr<NodeCore>& core, const Config& cfg,
-             std::function<void(const Node&)> started,
-             ThreadSetup thread_setup);
+// L3::run for a given core; L3::run uses the process's core.
+int run_l3(const std::shared_ptr<L3Core>& core, const Config& cfg,
+           std::function<void(const L3&)> started,
+           L3::ThreadSetup thread_setup);
 
-}  // namespace winject_l3::detail
+}  // namespace winject::l3::detail
 
 #endif  // WINJECT_L3_NODE_CORE_H_

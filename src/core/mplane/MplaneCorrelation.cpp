@@ -7,7 +7,7 @@
 #include <cstring>
 #include <string>
 
-namespace winject
+namespace winject::core
 {
 
 bool parse_mplane_cmd(const char* line, uint8_t* id, const char** body,
@@ -222,4 +222,4 @@ std::string mplane_err_string(const std::string& err)
     return err.empty() ? k_eio : k_eio;
 }
 
-}  // namespace winject
+}  // namespace winject::core

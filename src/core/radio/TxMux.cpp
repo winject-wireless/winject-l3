@@ -24,7 +24,7 @@ struct TxMpduEntryPlan
 };
 }  // namespace
 
-namespace winject
+namespace winject::core
 {
 
 struct TxMux::QueueWake
@@ -643,4 +643,4 @@ void TxMux::on_reactor(const std::shared_ptr<ReactorState>& state, bool wake)
         });
 }
 
-}  // namespace winject
+}  // namespace winject::core

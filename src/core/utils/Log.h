@@ -1,7 +1,7 @@
 #ifndef WINJECT_MANAGER_LOG_H_
 #define WINJECT_MANAGER_LOG_H_
 
-namespace winject
+namespace winject::core
 {
 
 // Line format: YYYY-MM-DD HH:MM:SS.sss | LEVEL | msg
@@ -11,10 +11,10 @@ void log_printf(const char* level, const char* fmt, ...)
 #endif
     ;
 
-}  // namespace winject
+}  // namespace winject::core
 
-#define LOG_INF(fmt, ...) winject::log_printf("INF", fmt, ##__VA_ARGS__)
-#define LOG_ERR(fmt, ...) winject::log_printf("ERR", fmt, ##__VA_ARGS__)
-#define LOG_WRN(fmt, ...) winject::log_printf("WRN", fmt, ##__VA_ARGS__)
+#define LOG_INF(fmt, ...) winject::core::log_printf("INF", fmt, ##__VA_ARGS__)
+#define LOG_ERR(fmt, ...) winject::core::log_printf("ERR", fmt, ##__VA_ARGS__)
+#define LOG_WRN(fmt, ...) winject::core::log_printf("WRN", fmt, ##__VA_ARGS__)
 
 #endif  // WINJECT_MANAGER_LOG_H_

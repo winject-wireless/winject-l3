@@ -34,7 +34,7 @@ constexpr auto k_rx_idle = std::chrono::milliseconds(10);
 
 }  // namespace
 
-Bwtest::Bwtest(std::shared_ptr<winject::UpstreamQueue> upstream,
+Bwtest::Bwtest(std::shared_ptr<winject::core::UpstreamQueue> upstream,
                size_t payload_bytes, NowUs now_us)
     : upstream_(std::move(upstream)), payload_bytes_(payload_bytes),
       now_us_(std::move(now_us))
@@ -63,7 +63,7 @@ bool Bwtest::start_send(uint32_t offer_kbps, uint32_t duration_ms)
 {
     if (offer_kbps == 0 || duration_ms == 0 ||
         payload_bytes_ < k_timestamp_header_bytes ||
-        payload_bytes_ > winject::k_stream_payload_max)
+        payload_bytes_ > winject::core::k_stream_payload_max)
     {
         return false;
     }
@@ -287,14 +287,14 @@ std::string Bwtest::handle_command(const std::string& line)
 int main(const Config& config)
 {
     if (!config.upstream || config.payload_bytes < k_timestamp_header_bytes ||
-        config.payload_bytes > winject::k_stream_payload_max)
+        config.payload_bytes > winject::core::k_stream_payload_max)
     {
         fprintf(stderr, "bwtest: needs an upstream and 16..%zu payload bytes\n",
-                winject::k_stream_payload_max);
+                winject::core::k_stream_payload_max);
         return 1;
     }
     sockaddr_in addr{};
-    if (!winject::parse_host_port(config.console, &addr))
+    if (!winject::core::parse_host_port(config.console, &addr))
     {
         fprintf(stderr, "bwtest: bad console address %s\n",
                 config.console.c_str());

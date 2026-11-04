@@ -6,7 +6,7 @@
 #include <string>
 #include <sys/socket.h>
 
-namespace winject
+namespace winject::core
 {
 
 // radio.fcs config (runtime mode is RadioFcsMode on the radio d-plane).
@@ -55,6 +55,6 @@ struct RadioConfig
     uint8_t config_slot = 0;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_CORE_RADIO_RADIO_CONFIG_H_

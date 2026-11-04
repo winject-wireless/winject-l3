@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace winject
+namespace winject::core
 {
 
 bool FecTx::start(std::shared_ptr<Reactor> reactor, int k, int n,
@@ -87,4 +87,4 @@ void FecTx::pending_stats(uint64_t* packets, uint64_t* bytes) const
     }
 }
 
-}  // namespace winject
+}  // namespace winject::core

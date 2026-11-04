@@ -22,7 +22,7 @@ using atomic_int64_t = std::atomic<std::int64_t>;
 using atomic_double = std::atomic<double>;
 #endif
 
-namespace winject
+namespace winject::core
 {
 
 using MetricU64 = std::shared_ptr<atomic_uint64_t>;
@@ -112,6 +112,6 @@ T MetricsRegistry::get_metrics(const std::string& index)
     return created;
 }
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_UTILS_METRICS_REGISTRY_H_

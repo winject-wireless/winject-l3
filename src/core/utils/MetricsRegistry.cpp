@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <sstream>
 
-namespace winject
+namespace winject::core
 {
 
 std::string metric_value_to_string(const Metrics& metric)
@@ -90,4 +90,4 @@ void MetricsRegistry::remove_prefix(const std::string& prefix)
     }
 }
 
-}  // namespace winject
+}  // namespace winject::core

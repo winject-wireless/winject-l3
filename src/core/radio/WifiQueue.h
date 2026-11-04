@@ -16,7 +16,7 @@
 #include <sys/socket.h>
 #include <thread>
 
-namespace winject
+namespace winject::core
 {
 
 // In-process d-plane transport between winject-l3 and a radio peer (for example
@@ -122,6 +122,6 @@ private:
     std::shared_ptr<DplaneReactor> cv_reactor;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_WIFI_QUEUE_H_

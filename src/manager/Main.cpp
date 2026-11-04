@@ -1,4 +1,4 @@
-// winject-manager: reads the config file, runs the node, serves the UDP
+// winject-manager: reads the config file, runs l3, serves the UDP
 // console on its own reactor. Signals live here, not in the library.
 
 #include "WinjectL3.h"
@@ -20,7 +20,7 @@ constexpr const char k_console_reactor[] = "winject-manager-console";
 
 void on_stop_signal(int)
 {
-    winject_l3::stop_from_signal();
+    winject::L3::stop_from_signal();
 }
 
 void install_handler(int signum, void (*handler)(int))
@@ -50,8 +50,8 @@ int main(int argc, char** argv)
     install_handler(SIGTERM, on_stop_signal);
 
     // The console's reactor: this binary's to make, name and run.
-    using winject_l3::console::Reactor;
-    using winject_l3::console::ReactorRegistry;
+    using winject::l3::console::Reactor;
+    using winject::l3::console::ReactorRegistry;
     auto reactor = std::make_shared<Reactor>();
     ReactorRegistry::get_instance().add(k_console_reactor, reactor);
     // A stop() before run() set the reactor running would be lost: wait
@@ -70,24 +70,24 @@ int main(int argc, char** argv)
         });
     is_running.wait();
 
-    winject_l3::console::Service console;
+    winject::l3::console::Service console;
     bool console_failed = false;
-    const int rc = winject_l3::run(
+    const int rc = winject::L3::run(
         cfg,
-        [&](const winject_l3::Node& node)
+        [&](const winject::L3& l3)
         {
             if (cfg.console_in.empty())
             {
                 return;
             }
-            const winject_l3::Status s =
-                console.start(node, cfg.console_in, k_console_reactor);
+            const winject::Status s =
+                console.start(l3, cfg.console_in, k_console_reactor);
             if (!s.ok())
             {
                 LOG_ERR("manager console %s: %s", cfg.console_in.c_str(),
                         s.error.c_str());
                 console_failed = true;
-                winject_l3::stop();
+                winject::L3::stop();
             }
         });
     console.stop();

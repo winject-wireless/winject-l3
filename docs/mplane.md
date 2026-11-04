@@ -162,44 +162,44 @@ get_metrics keys=radio_tx_pkt,radio_rx_pkt,radio_proto_ok,radio_version
 
 ## Function-call API
 
-[`include/winject_l3`](../include/winject_l3) is the m-plane as C++ objects, for a host that runs the node in-process, such as the rover and ground ESP32-P4 apps. The text console is a client of it. The design and its decisions are in the l3 public API plan (aidocs/public-api.md, outside this repo).
+[`include/winject_l3`](../include/winject_l3) is the m-plane as C++ objects, for a host that runs l3 in-process, such as the rover and ground ESP32-P4 apps. The text console is a client of it. The design and its decisions are in the l3 public API plan (aidocs/public-api.md, outside this repo).
 
 ```cpp
-#include "WinjectL3.h"            // winject_l3::run / stop, Node and the handles
+#include "WinjectL3.h"            // winject::L3 and the handles
 #include "winject_l3/Console.h"   // console::execute / format / Service
 
-int rc = winject_l3::run(cfg, [&](const winject_l3::Node& node) {
-    console.start(node, cfg.console_in, "my-console-reactor");  // optional
+int rc = winject::L3::run(cfg, [&](const winject::L3& l3) {
+    console.start(l3, cfg.console_in, "my-console-reactor");  // optional
 });
 ```
 
 | Command | Call | Result |
 |---|---|---|
-| `add_upstream` / `remove_upstream` | `node.upstreams().add(UpstreamSpec)` / `remove(id)` | `Result<Upstream>` / `Status` |
+| `add_upstream` / `remove_upstream` | `l3.upstreams().add(UpstreamSpec)` / `remove(id)` | `Result<Upstream>` / `Status` |
 | `list_upstream` | `upstreams().list()` or `get(id)`, then `Upstream::spec()` | `Result<UpstreamSpec>` |
 | `update_upstream` | `Upstream::update(UpstreamPatch)`, or `set_fec` / `set_quanta` | `Result<UpstreamSpec>` |
 | `list_upstream_rx_stat` / `_tx_stat` | `Upstream::rx_stats()` / `tx_stats()` | `Result<Upstream{Rx,Tx}Stats>` |
-| `get_metrics` | `node.metrics(keys)` | `Result<vector<Metric>>` |
-| `radio_device` | `node.radios().get()`, then `Radio::device()` / `set_device(RadioDevice)` | `Result<RadioDevice>` / `Status` |
+| `get_metrics` | `l3.metrics(keys)` | `Result<vector<Metric>>` |
+| `radio_device` | `l3.radios().get()`, then `Radio::device()` / `set_device(RadioDevice)` | `Result<RadioDevice>` / `Status` |
 | `radio_domain` | `Radio::domain()` | `Result<uint16_t>` |
 | `radio_tx` | `Radio::set_phy(RadioPhyPatch)`, or `set_channel` / `set_modulation` / `set_power` / `set_cca` | `Result<RadioInfo>` |
 | `radio_info` / `radio_caps_info` / `radio_stats` | `Radio::info()` / `caps()` / `stats()` | `Result<RadioInfo>` / `Result<RadioCaps>` / `Result<RadioStats>` |
 | `reset` / `config slot=` | `Radio::reset()` / `set_config_slot(slot)` | `Status` |
 | `radio_mplane` | `Radio::mplane(line)` | `Result<std::string>`: the radio's reply body |
-| `version` | `winject_l3::version()` | `Version` |
-| any line | `console::execute(node, line)` | the console's reply text |
+| `version` | `winject::L3::version()` | `Version` |
+| any line | `console::execute(l3, line)` | the console's reply text |
 
-- The node has one radio. `RadioManager::create(RadioSpec)` checks it and builds the d-plane off air; `add` connects and programs it. `apply(node, cfg)` does create, then the upstreams, then add, which is what `run` does with its `Config`.
-- `Status::error` is empty on success, else the console's `NOK` code (`EINVAL`, `ENOENT`, `ENODEV`, ... or a radio code). The API adds `ESRCH` (no node), `ETIMEDOUT` (no answer within the call's timeout, default 5 s: the outcome is unknown, so read the state back before retrying a change), `ECANCELED` (the node stopped first) and `EDEADLK` (a blocking call from inside `UpstreamSpec::on_queue`).
-- Any thread may call the node. `run`'s calling thread is l3's callback thread: it runs `apply`, then `started`, then every `Done` and every `Node::post`. Blocking calls, radio ones included, also work from there. The node's own thread runs no user code except `on_queue`.
+- l3 has one radio. `RadioManager::create(RadioSpec)` checks it and builds the d-plane off air; `add` connects and programs it. `l3.apply(cfg)` does create, then the upstreams, then add, which is what `run` does with its `Config`.
+- `Status::error` is empty on success, else the console's `NOK` code (`EINVAL`, `ENOENT`, `ENODEV`, ... or a radio code). The API adds `ESRCH` (l3 not running), `ETIMEDOUT` (no answer within the call's timeout, default 5 s: the outcome is unknown, so read the state back before retrying a change), `ECANCELED` (l3 stopped first) and `EDEADLK` (a blocking call from inside `UpstreamSpec::on_queue`).
+- Any thread may call l3. `run`'s calling thread is l3's callback thread: it runs `apply`, then `started`, then every `Done` and every `L3::post`. Blocking calls, radio ones included, also work from there. l3's own thread runs no user code except `on_queue`.
 - Radio calls also have a callback form (`Radio::info(Done<RadioInfo>)`), called exactly once.
 - `RadioInfo::text` and `RadioCaps::text` are the radio's reply as sent; the console relays them. `radio_stats` is rebuilt from `RadioStats` by `console::format`, which prints the same lines the radio firmwares do.
-- `console::Service` runs the UDP console on a reactor the host creates, registers in `console::ReactorRegistry` (vstreamer's registry type) and runs. It never waits on the node, so that reactor can be shared.
-- `run(cfg, started, thread_setup)`: `thread_setup` runs before each thread `run` starts (`Thread::upstream`, `Thread::node`), so an ESP-IDF host can set `esp_pthread_set_cfg` per thread.
+- `console::Service` runs the UDP console on a reactor the host creates, registers in `console::ReactorRegistry` (vstreamer's registry type) and runs. It never waits on l3, so that reactor can be shared.
+- `run(cfg, started, thread_setup)`: `thread_setup` runs before each thread `run` starts (`L3::Thread::upstream`, `L3::Thread::l3`), so an ESP-IDF host can set `esp_pthread_set_cfg` per thread.
 
 ## Configuration file
 
-Run the Linux manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`). That process parses the file in its `main`, calls `winject_l3::run(const Config&, started)` and starts the UDP console from `started`. An ESP-IDF host fills the same `Config` in code (`idf/example/main/main.cpp`) and does not pass argv.
+Run the Linux manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`). That process parses the file in its `main`, calls `winject::L3::run(const Config&, started)` and starts the UDP console from `started`. An ESP-IDF host fills the same `Config` in code (`idf/example/main/main.cpp`) and does not pass argv.
 
 ### Format overview
 

@@ -14,16 +14,16 @@
 #include <strings.h>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 namespace
 {
 
-using winject_l3::FecType;
-using winject_l3::Node;
-using winject_l3::Result;
-using winject_l3::Status;
+using winject::FecType;
+using winject::L3;
+using winject::Result;
+using winject::Status;
 
 // One upstream as add_upstream and list_upstream print it.
 struct UpstreamLine
@@ -341,13 +341,13 @@ std::string with_newline(std::string text)
     return text;
 }
 
-UpstreamLine line_of(const winject_l3::UpstreamSpec& u)
+UpstreamLine line_of(const winject::UpstreamSpec& u)
 {
     UpstreamLine line;
     line.id = u.id;
     line.bus_tx = u.bus_tx;
     line.bus_rx = u.bus_rx;
-    line.type = u.transport == winject_l3::Transport::queue ? "QUEUE" : "UDP";
+    line.type = u.transport == winject::Transport::queue ? "QUEUE" : "UDP";
     line.rx = u.rx;
     line.tx = u.tx;
     line.fec = u.fec.type;
@@ -359,12 +359,11 @@ UpstreamLine line_of(const winject_l3::UpstreamSpec& u)
 }
 
 // The upstreams a listing covers: ids, or every upstream in add order.
-bool listing_upstreams(const Node& node, const std::vector<uint8_t>& ids,
-                       std::vector<winject_l3::Upstream>* out,
-                       std::string* error)
+bool listing_upstreams(const L3& l3, const std::vector<uint8_t>& ids,
+                       std::vector<winject::Upstream>* out, std::string* error)
 {
     out->clear();
-    winject_l3::UpstreamManager upstreams = node.upstreams();
+    winject::UpstreamManager upstreams = l3.upstreams();
     if (ids.empty())
     {
         auto all = upstreams.list();
@@ -392,7 +391,7 @@ bool listing_upstreams(const Node& node, const std::vector<uint8_t>& ids,
 // Calls a radio command in the callback or the blocking form.
 template <class T>
 void radio_call(bool blocking, std::chrono::milliseconds timeout,
-                const std::function<void(winject_l3::Done<T>)>& async,
+                const std::function<void(winject::Done<T>)>& async,
                 const std::function<Result<T>(std::chrono::milliseconds)>& sync,
                 std::function<void(const Result<T>&)> then)
 {
@@ -415,7 +414,7 @@ struct NoValue
 // The Status-only radio commands (reset, config slot) as Result<NoValue>.
 void radio_status_call(
     bool blocking, std::chrono::milliseconds timeout,
-    const std::function<void(winject_l3::StatusDone)>& async,
+    const std::function<void(winject::StatusDone)>& async,
     const std::function<Status(std::chrono::milliseconds)>& sync,
     std::function<void(const Status&)> then)
 {
@@ -433,7 +432,7 @@ void radio_status_call(
 
 }  // namespace
 
-void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
+void ConsoleCommands::handle(const L3& l3, const char* line, Reply reply,
                              bool blocking, std::chrono::milliseconds timeout)
 {
     char copy[k_line_max];
@@ -465,7 +464,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(k_einval));
             return;
         }
-        const winject_l3::Version v = winject_l3::version();
+        const winject::Version v = winject::L3::version();
         char buf[128];
         snprintf(buf, sizeof(buf), "version ver=%s proto=%u.%u",
                  WINJECT_VERSION_STRING, static_cast<unsigned>(v.x),
@@ -488,7 +487,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(k_einval));
             return;
         }
-        auto radio = node.radios().get();
+        auto radio = l3.radios().get();
         if (!radio.ok())
         {
             reply(nok_status(radio.status));
@@ -500,7 +499,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok_status(device.status));
             return;
         }
-        winject_l3::RadioDevice d = device.value;
+        winject::RadioDevice d = device.value;
         if (patch.have_dplane && !d.dplane_tx.empty())
         {
             // A queue d-plane is fixed at startup.
@@ -543,7 +542,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
                 return;
             }
         }
-        auto radio = node.radios().get();
+        auto radio = l3.radios().get();
         if (!radio.ok())
         {
             reply(nok_status(radio.status));
@@ -571,11 +570,11 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(err.c_str()));
             return;
         }
-        winject_l3::UpstreamSpec add;
+        winject::UpstreamSpec add;
         add.id = spec.id;
         add.bus_tx = spec.bus_tx;
         add.bus_rx = spec.bus_rx;
-        add.transport = winject_l3::Transport::udp;
+        add.transport = winject::Transport::udp;
         add.rx = spec.rx;
         add.tx = spec.tx;
         add.fec.type = spec.fec;
@@ -583,7 +582,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
         add.fec.n = spec.fec_n;
         add.fec.timeout = std::chrono::milliseconds(spec.fec_timeout_ms);
         add.quanta = spec.quanta;
-        const auto added = node.upstreams().add(add);
+        const auto added = l3.upstreams().add(add);
         if (!added.ok())
         {
             reply(nok_status(added.status));
@@ -604,8 +603,8 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(err.c_str()));
             return;
         }
-        std::vector<winject_l3::Upstream> ups;
-        if (!listing_upstreams(node, ids, &ups, &err))
+        std::vector<winject::Upstream> ups;
+        if (!listing_upstreams(l3, ids, &ups, &err))
         {
             reply(nok(err.empty() ? "error" : err.c_str()));
             return;
@@ -643,7 +642,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
         uint8_t id = 0;
         bool got_id = false;
         bool have_fec = false;
-        winject_l3::FecType fec = winject_l3::FecType::none;
+        winject::FecType fec = winject::FecType::none;
         bool have_k = false;
         int fec_k = 0;
         bool have_n = false;
@@ -717,7 +716,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(k_einval));
             return;
         }
-        auto up = node.upstreams().get(id);
+        auto up = l3.upstreams().get(id);
         if (!up.ok())
         {
             reply(nok_status(up.status));
@@ -736,7 +735,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(k_einval));
             return;
         }
-        winject_l3::UpstreamPatch patch;
+        winject::UpstreamPatch patch;
         if (fec_field)
         {
             const auto current = up.value.spec();
@@ -745,7 +744,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
                 reply(nok_status(current.status));
                 return;
             }
-            winject_l3::Fec merged = current.value.fec;
+            winject::Fec merged = current.value.fec;
             if (have_fec)
             {
                 merged.type = fec;
@@ -792,7 +791,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(k_einval));
             return;
         }
-        const Status removed = node.upstreams().remove(id);
+        const Status removed = l3.upstreams().remove(id);
         if (!removed.ok())
         {
             reply(nok_status(removed));
@@ -812,8 +811,8 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(err.c_str()));
             return;
         }
-        std::vector<winject_l3::Upstream> ups;
-        if (!listing_upstreams(node, ids, &ups, &err))
+        std::vector<winject::Upstream> ups;
+        if (!listing_upstreams(l3, ids, &ups, &err))
         {
             reply(nok(err.empty() ? "error" : err.c_str()));
             return;
@@ -829,7 +828,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
                     reply(nok_status(s.status));
                     return;
                 }
-                lines.push_back(winject_l3::console::format(up.id(), s.value));
+                lines.push_back(winject::l3::console::format(up.id(), s.value));
             }
             else
             {
@@ -839,7 +838,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
                     reply(nok_status(s.status));
                     return;
                 }
-                lines.push_back(winject_l3::console::format(up.id(), s.value));
+                lines.push_back(winject::l3::console::format(up.id(), s.value));
             }
         }
         char hdr[64];
@@ -865,7 +864,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(err.c_str()));
             return;
         }
-        const auto rows = node.metrics(keys);
+        const auto rows = l3.metrics(keys);
         if (!rows.ok())
         {
             reply(nok_status(rows.status));
@@ -902,17 +901,17 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
             reply(nok(k_einval));
             return;
         }
-        auto got = node.radios().get();
+        auto got = l3.radios().get();
         if (!got.ok())
         {
             reply(nok_status(got.status));
             return;
         }
-        auto radio = std::make_shared<winject_l3::Radio>(got.value);
+        auto radio = std::make_shared<winject::Radio>(got.value);
         const std::string line(rest);
         radio_call<std::string>(
             blocking, timeout,
-            [radio, line](winject_l3::Done<std::string> done)
+            [radio, line](winject::Done<std::string> done)
             {
                 radio->mplane(line, std::move(done));
             },
@@ -946,7 +945,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
 
     // Arguments first, as before: a bad line is EINVAL with or without a
     // radio.
-    winject_l3::RadioPhyPatch phy;
+    winject::RadioPhyPatch phy;
     unsigned long slot = 0;
     if ((is_caps || is_stats || is_reset) &&
         strtok_r(nullptr, " \t", &save) != nullptr)
@@ -1034,24 +1033,24 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
         }
     }
 
-    auto got = node.radios().get();
+    auto got = l3.radios().get();
     if (!got.ok())
     {
         reply(nok_status(got.status));
         return;
     }
     // Copies: the callback forms may answer after this returns.
-    auto radio = std::make_shared<winject_l3::Radio>(got.value);
-    using winject_l3::RadioCaps;
-    using winject_l3::RadioInfo;
-    using winject_l3::RadioStats;
+    auto radio = std::make_shared<winject::Radio>(got.value);
+    using winject::RadioCaps;
+    using winject::RadioInfo;
+    using winject::RadioStats;
     if (is_info || is_tx)
     {
-        std::function<void(winject_l3::Done<RadioInfo>)> async;
+        std::function<void(winject::Done<RadioInfo>)> async;
         std::function<Result<RadioInfo>(std::chrono::milliseconds)> sync;
         if (is_info)
         {
-            async = [radio](winject_l3::Done<RadioInfo> done)
+            async = [radio](winject::Done<RadioInfo> done)
             {
                 radio->info(std::move(done));
             };
@@ -1062,7 +1061,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
         }
         else
         {
-            async = [radio, phy](winject_l3::Done<RadioInfo> done)
+            async = [radio, phy](winject::Done<RadioInfo> done)
             {
                 radio->set_phy(phy, std::move(done));
             };
@@ -1089,7 +1088,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
     {
         radio_call<RadioCaps>(
             blocking, timeout,
-            [radio](winject_l3::Done<RadioCaps> done)
+            [radio](winject::Done<RadioCaps> done)
             {
                 radio->caps(std::move(done));
             },
@@ -1112,7 +1111,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
     {
         radio_call<RadioStats>(
             blocking, timeout,
-            [radio](winject_l3::Done<RadioStats> done)
+            [radio](winject::Done<RadioStats> done)
             {
                 radio->stats(std::move(done));
             },
@@ -1127,7 +1126,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
                     reply(nok_status(r.status));
                     return;
                 }
-                reply(with_newline(winject_l3::console::format(r.value)));
+                reply(with_newline(winject::l3::console::format(r.value)));
             });
         return;
     }
@@ -1135,7 +1134,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
     {
         radio_status_call(
             blocking, timeout,
-            [radio](winject_l3::StatusDone done)
+            [radio](winject::StatusDone done)
             {
                 radio->reset(std::move(done));
             },
@@ -1157,7 +1156,7 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
     const uint8_t slot_u8 = static_cast<uint8_t>(slot);
     radio_status_call(
         blocking, timeout,
-        [radio, slot_u8](winject_l3::StatusDone done)
+        [radio, slot_u8](winject::StatusDone done)
         {
             radio->set_config_slot(slot_u8, std::move(done));
         },
@@ -1178,4 +1177,4 @@ void ConsoleCommands::handle(const Node& node, const char* line, Reply reply,
         });
 }
 
-}  // namespace winject
+}  // namespace winject::core

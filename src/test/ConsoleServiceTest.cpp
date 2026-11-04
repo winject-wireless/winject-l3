@@ -7,8 +7,8 @@
 #include <string.h>
 #include <vector>
 
-using namespace winject;
-using winject_l3::FecType;
+using namespace winject::core;
+using winject::FecType;
 
 TEST(ConsoleParseTest, ParseKv)
 {
@@ -139,7 +139,7 @@ TEST(ConsoleParseTest, ParseRadioDeviceArgs)
 
 TEST(ConsoleParseTest, FormatRadioDevice)
 {
-    winject_l3::RadioDevice device;
+    winject::RadioDevice device;
     device.mplane.sin_family = AF_INET;
     ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &device.mplane.sin_addr), 1);
     device.mplane.sin_port = htons(22);

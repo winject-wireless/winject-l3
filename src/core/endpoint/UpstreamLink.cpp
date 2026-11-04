@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-namespace winject
+namespace winject::core
 {
 UpstreamLink::UpstreamLink(std::shared_ptr<Reactor> reactor,
                    const UpstreamConfig& config,
@@ -254,4 +254,4 @@ void UpstreamLink::tx_pending_stats(uint64_t* packets, uint64_t* bytes) const
         *bytes = b + qb;
     }
 }
-}  // namespace winject
+}  // namespace winject::core

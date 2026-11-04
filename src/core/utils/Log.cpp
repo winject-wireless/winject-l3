@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <time.h>
 
-namespace winject
+namespace winject::core
 {
 
 void log_printf(const char* level, const char* fmt, ...)
@@ -28,4 +28,4 @@ void log_printf(const char* level, const char* fmt, ...)
     funlockfile(stderr);
 }
 
-}  // namespace winject
+}  // namespace winject::core

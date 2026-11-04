@@ -8,7 +8,7 @@
 #include <functional>
 #include <optional>
 
-namespace winject
+namespace winject::core
 {
 
 // One pending reactor timer. arm() replaces the previous arm. bfc may still
@@ -74,6 +74,6 @@ private:
     uint64_t seq = 0;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_UTILS_ONE_SHOT_TIMER_H_

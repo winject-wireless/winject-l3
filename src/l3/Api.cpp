@@ -1,28 +1,28 @@
-// The public handles: each call posts to the node's thread (NodeCore.h).
+// The public handles: each call posts to l3's thread (L3Core.h).
 
-#include "NodeCore.h"
-#include "NodeImpl.h"
+#include "L3Core.h"
+#include "L3Impl.h"
 #include "mplane/MplaneErrno.h"
-#include "winject_l3/Node.h"
+#include "winject_l3/L3.h"
 
 #include <utility>
 
-namespace winject_l3
+namespace winject
 {
 
-using detail::call;
-using detail::call_async;
-using detail::call_async_wait;
-using detail::call_status;
-using detail::error_result;
-using detail::HandleAccess;
-using detail::value_result;
-using winject::NodeImpl;
+using l3::detail::call;
+using l3::detail::call_async;
+using l3::detail::call_async_wait;
+using l3::detail::call_status;
+using l3::detail::error_result;
+using l3::detail::HandleAccess;
+using l3::detail::value_result;
+using winject::l3::detail::L3Impl;
 
 namespace
 {
 
-using Empty = NodeImpl::Empty;
+using Empty = L3Impl::Empty;
 
 Status to_status(const Result<Empty>& r)
 {
@@ -36,38 +36,38 @@ StatusDone status_done(StatusDone done)
 
 }  // namespace
 
-// ---- Node
+// ---- L3
 
-bool Node::running() const
+bool L3::running() const
 {
     return core && core->attached();
 }
 
-UpstreamManager Node::upstreams() const
+UpstreamManager L3::upstreams() const
 {
     return HandleAccess::upstreams(core);
 }
 
-RadioManager Node::radios() const
+RadioManager L3::radios() const
 {
     return HandleAccess::radios(core);
 }
 
-Result<std::vector<Metric>> Node::metrics(
+Result<std::vector<Metric>> L3::metrics(
     const std::vector<std::string>& keys) const
 {
     return call<std::vector<Metric>>(core,
-                                     [keys](NodeImpl& node)
+                                     [keys](L3Impl& l3)
                                      {
-                                         return node.metrics(keys);
+                                         return l3.metrics(keys);
                                      });
 }
 
-Status Node::post(std::function<void(const Node&)> fn) const
+Status L3::post(std::function<void(const L3&)> fn) const
 {
     if (!core || !core->attached())
     {
-        return detail::error_status(detail::k_esrch);
+        return l3::detail::error_status(l3::detail::k_esrch);
     }
     auto shared = core;
     if (!core->callbacks.push(
@@ -75,11 +75,11 @@ Status Node::post(std::function<void(const Node&)> fn) const
             {
                 if (fn)
                 {
-                    fn(HandleAccess::node(shared));
+                    fn(HandleAccess::l3(shared));
                 }
             }))
     {
-        return detail::error_status(detail::k_esrch);
+        return l3::detail::error_status(l3::detail::k_esrch);
     }
     return {};
 }
@@ -89,9 +89,9 @@ Status Node::post(std::function<void(const Node&)> fn) const
 Result<Upstream> UpstreamManager::add(const UpstreamSpec& spec)
 {
     const Status s = call_status(core,
-                                 [spec](NodeImpl& node)
+                                 [spec](L3Impl& l3)
                                  {
-                                     return node.add_upstream(spec);
+                                     return l3.add_upstream(spec);
                                  });
     if (!s.ok())
     {
@@ -107,11 +107,11 @@ Result<Upstream> UpstreamManager::get(uint8_t id) const
     auto shared = core;
     return call<Upstream>(
         core,
-        [shared, id](NodeImpl& node)
+        [shared, id](L3Impl& l3)
         {
-            if (!node.has_upstream(id))
+            if (!l3.has_upstream(id))
             {
-                return error_result<Upstream>(winject::k_enoent);
+                return error_result<Upstream>(winject::core::k_enoent);
             }
             return value_result(HandleAccess::upstream(shared, id));
         });
@@ -120,9 +120,9 @@ Result<Upstream> UpstreamManager::get(uint8_t id) const
 Status UpstreamManager::remove(uint8_t id)
 {
     return call_status(core,
-                       [id](NodeImpl& node)
+                       [id](L3Impl& l3)
                        {
-                           return node.remove_upstream(id);
+                           return l3.remove_upstream(id);
                        });
 }
 
@@ -131,10 +131,10 @@ Result<std::vector<Upstream>> UpstreamManager::list() const
     auto shared = core;
     return call<std::vector<Upstream>>(
         core,
-        [shared](NodeImpl& node)
+        [shared](L3Impl& l3)
         {
             std::vector<Upstream> out;
-            for (uint8_t id : node.upstream_ids())
+            for (uint8_t id : l3.upstream_ids())
             {
                 out.push_back(HandleAccess::upstream(shared, id));
             }
@@ -148,9 +148,9 @@ bool Upstream::valid() const
 {
     const uint8_t id = upstream_id;
     return call<bool>(core,
-                      [id](NodeImpl& node)
+                      [id](L3Impl& l3)
                       {
-                          return value_result(node.has_upstream(id));
+                          return value_result(l3.has_upstream(id));
                       })
         .value;
 }
@@ -159,9 +159,9 @@ Result<UpstreamSpec> Upstream::spec() const
 {
     const uint8_t id = upstream_id;
     return call<UpstreamSpec>(core,
-                              [id](NodeImpl& node)
+                              [id](L3Impl& l3)
                               {
-                                  return node.upstream_spec(id);
+                                  return l3.upstream_spec(id);
                               });
 }
 
@@ -203,9 +203,9 @@ Result<UpstreamSpec> Upstream::update(const UpstreamPatch& patch)
 {
     const uint8_t id = upstream_id;
     return call<UpstreamSpec>(core,
-                              [id, patch](NodeImpl& node)
+                              [id, patch](L3Impl& l3)
                               {
-                                  return node.update_upstream(id, patch);
+                                  return l3.update_upstream(id, patch);
                               });
 }
 
@@ -213,9 +213,9 @@ Result<UpstreamRxStats> Upstream::rx_stats() const
 {
     const uint8_t id = upstream_id;
     return call<UpstreamRxStats>(core,
-                                 [id](NodeImpl& node)
+                                 [id](L3Impl& l3)
                                  {
-                                     return node.upstream_rx_stats(id);
+                                     return l3.upstream_rx_stats(id);
                                  });
 }
 
@@ -223,9 +223,9 @@ Result<UpstreamTxStats> Upstream::tx_stats() const
 {
     const uint8_t id = upstream_id;
     return call<UpstreamTxStats>(core,
-                                 [id](NodeImpl& node)
+                                 [id](L3Impl& l3)
                                  {
-                                     return node.upstream_tx_stats(id);
+                                     return l3.upstream_tx_stats(id);
                                  });
 }
 
@@ -234,9 +234,9 @@ Result<UpstreamTxStats> Upstream::tx_stats() const
 Result<Radio> RadioManager::create(const RadioSpec& spec)
 {
     const Status s = call_status(core,
-                                 [spec](NodeImpl& node)
+                                 [spec](L3Impl& l3)
                                  {
-                                     return node.create_radio(spec);
+                                     return l3.create_radio(spec);
                                  });
     if (!s.ok())
     {
@@ -251,35 +251,36 @@ Status RadioManager::add(const Radio& radio)
 {
     if (HandleAccess::core(radio) != core)
     {
-        return detail::error_status(winject::k_einval);
+        return l3::detail::error_status(winject::core::k_einval);
     }
     return call_status(core,
-                       [](NodeImpl& node)
+                       [](L3Impl& l3)
                        {
-                           return node.add_radio();
+                           return l3.add_radio();
                        });
 }
 
 Result<Radio> RadioManager::get() const
 {
     auto shared = core;
-    return call<Radio>(core,
-                       [shared](NodeImpl& node)
-                       {
-                           if (!node.has_radio())
-                           {
-                               return error_result<Radio>(winject::k_enoent);
-                           }
-                           return value_result(HandleAccess::radio(shared));
-                       });
+    return call<Radio>(
+        core,
+        [shared](L3Impl& l3)
+        {
+            if (!l3.has_radio())
+            {
+                return error_result<Radio>(winject::core::k_enoent);
+            }
+            return value_result(HandleAccess::radio(shared));
+        });
 }
 
 Status RadioManager::remove()
 {
     return call_status(core,
-                       [](NodeImpl& node)
+                       [](L3Impl& l3)
                        {
-                           return node.remove_radio();
+                           return l3.remove_radio();
                        });
 }
 
@@ -288,9 +289,9 @@ Status RadioManager::remove()
 bool Radio::valid() const
 {
     return call<bool>(core,
-                      [](NodeImpl& node)
+                      [](L3Impl& l3)
                       {
-                          return value_result(node.has_radio());
+                          return value_result(l3.has_radio());
                       })
         .value;
 }
@@ -298,18 +299,18 @@ bool Radio::valid() const
 Result<RadioState> Radio::state() const
 {
     return call<RadioState>(core,
-                            [](NodeImpl& node)
+                            [](L3Impl& l3)
                             {
-                                return node.radio_state();
+                                return l3.radio_state();
                             });
 }
 
 Result<RadioSpec> Radio::spec() const
 {
     return call<RadioSpec>(core,
-                           [](NodeImpl& node)
+                           [](L3Impl& l3)
                            {
-                               return node.radio_spec();
+                               return l3.radio_spec();
                            });
 }
 
@@ -326,18 +327,18 @@ Result<uint16_t> Radio::domain() const
 Result<RadioDevice> Radio::device() const
 {
     return call<RadioDevice>(core,
-                             [](NodeImpl& node)
+                             [](L3Impl& l3)
                              {
-                                 return node.radio_device();
+                                 return l3.radio_device();
                              });
 }
 
 Status Radio::set_device(const RadioDevice& d)
 {
     return call_status(core,
-                       [d](NodeImpl& node)
+                       [d](L3Impl& l3)
                        {
-                           return node.set_radio_device(d);
+                           return l3.set_radio_device(d);
                        });
 }
 
@@ -355,9 +356,9 @@ void Radio::set_phy(const RadioPhyPatch& p, Done<RadioInfo> done)
 {
     call_async<RadioInfo>(
         core,
-        [p](NodeImpl& node, std::function<void(Result<RadioInfo>)> reply)
+        [p](L3Impl& l3, std::function<void(Result<RadioInfo>)> reply)
         {
-            node.set_radio_phy(p, std::move(reply));
+            l3.set_radio_phy(p, std::move(reply));
         },
         std::move(done));
 }
@@ -367,9 +368,9 @@ Result<RadioInfo> Radio::set_phy(const RadioPhyPatch& p,
 {
     return call_async_wait<RadioInfo>(
         core,
-        [p](NodeImpl& node, std::function<void(Result<RadioInfo>)> reply)
+        [p](L3Impl& l3, std::function<void(Result<RadioInfo>)> reply)
         {
-            node.set_radio_phy(p, std::move(reply));
+            l3.set_radio_phy(p, std::move(reply));
         },
         t);
 }
@@ -406,9 +407,9 @@ void Radio::info(Done<RadioInfo> done)
 {
     call_async<RadioInfo>(
         core,
-        [](NodeImpl& node, std::function<void(Result<RadioInfo>)> reply)
+        [](L3Impl& l3, std::function<void(Result<RadioInfo>)> reply)
         {
-            node.radio_info(std::move(reply));
+            l3.radio_info(std::move(reply));
         },
         std::move(done));
 }
@@ -417,9 +418,9 @@ Result<RadioInfo> Radio::info(std::chrono::milliseconds t)
 {
     return call_async_wait<RadioInfo>(
         core,
-        [](NodeImpl& node, std::function<void(Result<RadioInfo>)> reply)
+        [](L3Impl& l3, std::function<void(Result<RadioInfo>)> reply)
         {
-            node.radio_info(std::move(reply));
+            l3.radio_info(std::move(reply));
         },
         t);
 }
@@ -428,9 +429,9 @@ void Radio::caps(Done<RadioCaps> done)
 {
     call_async<RadioCaps>(
         core,
-        [](NodeImpl& node, std::function<void(Result<RadioCaps>)> reply)
+        [](L3Impl& l3, std::function<void(Result<RadioCaps>)> reply)
         {
-            node.radio_caps(std::move(reply));
+            l3.radio_caps(std::move(reply));
         },
         std::move(done));
 }
@@ -439,9 +440,9 @@ Result<RadioCaps> Radio::caps(std::chrono::milliseconds t)
 {
     return call_async_wait<RadioCaps>(
         core,
-        [](NodeImpl& node, std::function<void(Result<RadioCaps>)> reply)
+        [](L3Impl& l3, std::function<void(Result<RadioCaps>)> reply)
         {
-            node.radio_caps(std::move(reply));
+            l3.radio_caps(std::move(reply));
         },
         t);
 }
@@ -450,9 +451,9 @@ void Radio::stats(Done<RadioStats> done)
 {
     call_async<RadioStats>(
         core,
-        [](NodeImpl& node, std::function<void(Result<RadioStats>)> reply)
+        [](L3Impl& l3, std::function<void(Result<RadioStats>)> reply)
         {
-            node.radio_stats(std::move(reply));
+            l3.radio_stats(std::move(reply));
         },
         std::move(done));
 }
@@ -461,9 +462,9 @@ Result<RadioStats> Radio::stats(std::chrono::milliseconds t)
 {
     return call_async_wait<RadioStats>(
         core,
-        [](NodeImpl& node, std::function<void(Result<RadioStats>)> reply)
+        [](L3Impl& l3, std::function<void(Result<RadioStats>)> reply)
         {
-            node.radio_stats(std::move(reply));
+            l3.radio_stats(std::move(reply));
         },
         t);
 }
@@ -473,9 +474,9 @@ void Radio::set_config_slot(uint8_t slot, StatusDone done)
     auto finish = status_done(std::move(done));
     call_async<Empty>(
         core,
-        [slot](NodeImpl& node, std::function<void(Result<Empty>)> reply)
+        [slot](L3Impl& l3, std::function<void(Result<Empty>)> reply)
         {
-            node.set_config_slot(slot, std::move(reply));
+            l3.set_config_slot(slot, std::move(reply));
         },
         [finish](Result<Empty> r)
         {
@@ -487,9 +488,9 @@ Status Radio::set_config_slot(uint8_t slot, std::chrono::milliseconds t)
 {
     return to_status(call_async_wait<Empty>(
         core,
-        [slot](NodeImpl& node, std::function<void(Result<Empty>)> reply)
+        [slot](L3Impl& l3, std::function<void(Result<Empty>)> reply)
         {
-            node.set_config_slot(slot, std::move(reply));
+            l3.set_config_slot(slot, std::move(reply));
         },
         t));
 }
@@ -499,9 +500,9 @@ void Radio::reset(StatusDone done)
     auto finish = status_done(std::move(done));
     call_async<Empty>(
         core,
-        [](NodeImpl& node, std::function<void(Result<Empty>)> reply)
+        [](L3Impl& l3, std::function<void(Result<Empty>)> reply)
         {
-            node.radio_reset(std::move(reply));
+            l3.radio_reset(std::move(reply));
         },
         [finish](Result<Empty> r)
         {
@@ -513,9 +514,9 @@ Status Radio::reset(std::chrono::milliseconds t)
 {
     return to_status(call_async_wait<Empty>(
         core,
-        [](NodeImpl& node, std::function<void(Result<Empty>)> reply)
+        [](L3Impl& l3, std::function<void(Result<Empty>)> reply)
         {
-            node.radio_reset(std::move(reply));
+            l3.radio_reset(std::move(reply));
         },
         t));
 }
@@ -524,9 +525,9 @@ void Radio::mplane(const std::string& line, Done<std::string> done)
 {
     call_async<std::string>(
         core,
-        [line](NodeImpl& node, std::function<void(Result<std::string>)> reply)
+        [line](L3Impl& l3, std::function<void(Result<std::string>)> reply)
         {
-            node.radio_mplane(line, std::move(reply));
+            l3.radio_mplane(line, std::move(reply));
         },
         std::move(done));
 }
@@ -536,11 +537,11 @@ Result<std::string> Radio::mplane(const std::string& line,
 {
     return call_async_wait<std::string>(
         core,
-        [line](NodeImpl& node, std::function<void(Result<std::string>)> reply)
+        [line](L3Impl& l3, std::function<void(Result<std::string>)> reply)
         {
-            node.radio_mplane(line, std::move(reply));
+            l3.radio_mplane(line, std::move(reply));
         },
         t);
 }
 
-}  // namespace winject_l3
+}  // namespace winject

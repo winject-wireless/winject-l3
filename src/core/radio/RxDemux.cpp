@@ -9,7 +9,7 @@
 
 #include <array>
 
-namespace winject
+namespace winject::core
 {
 
 RxDemux::RxDemux(RadioUpstreamTable& table) : table(table) {}
@@ -127,4 +127,4 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
     }
 }
 
-}  // namespace winject
+}  // namespace winject::core

@@ -10,7 +10,7 @@
 #include <string>
 #include <sys/socket.h>
 
-namespace winject
+namespace winject::core
 {
 
 constexpr size_t k_wifi_payload_max = 1448;
@@ -32,6 +32,6 @@ std::string domain_to_string(uint16_t domain);
 bool domain_to_filter_mac(uint16_t domain, std::string* mac_out);
 std::string ipv4_to_string(in_addr addr);
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_NET_UTIL_H_

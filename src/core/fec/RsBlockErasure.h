@@ -5,7 +5,7 @@
 
 #include "fec/vendor/rs_block_erasure.hpp"
 
-namespace winject
+namespace winject::core
 {
 // Winject's existing MTU/config profile over the vendored vstreamer codec.
 // The codec supports n == k; winject config continues to require parity.
@@ -24,5 +24,5 @@ public:
         return k_stream_payload_max - k_header_len - k_len_prefix;
     }
 };
-}  // namespace winject
+}  // namespace winject::core
 #endif

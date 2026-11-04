@@ -11,7 +11,7 @@
 #include <bfc/epoll_reactor.hpp>
 #endif
 
-namespace winject
+namespace winject::core
 {
 
 #if defined(ESP_PLATFORM)
@@ -21,6 +21,6 @@ using IOReactor = bfc::epoll_reactor<std::function<void()>>;
 #endif
 using IOTimerId = bfc::timer<std::function<void()>>::timer_id_t;
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_UTILS_IO_REACTOR_H_

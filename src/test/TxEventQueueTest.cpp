@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 #include <netinet/in.h>
 
-using namespace winject;
+using namespace winject::core;
 
 TEST(TxEventQueueTest, PushDataDedupes)
 {

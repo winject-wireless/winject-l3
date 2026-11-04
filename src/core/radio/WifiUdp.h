@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <sys/socket.h>
 
-namespace winject
+namespace winject::core
 {
 
 // Opaque full-MPDU UDP transport to/from the ESP32 radio.
@@ -71,6 +71,6 @@ private:
     bfc::shared_sized_buffer rx_buf;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_WIFI_UDP_H_

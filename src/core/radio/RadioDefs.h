@@ -21,7 +21,7 @@ static_assert(WIFI_RADIO_INJECT_MAX + 28 <= 1500,
 
 #define WIFI_BSSID_PREFIX 0xCA, 0xFE, 0xBA, 0xBE
 
-namespace winject
+namespace winject::core
 {
 
 enum class RadioFcsMode : uint8_t
@@ -31,6 +31,6 @@ enum class RadioFcsMode : uint8_t
     actual = 2,
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_DEFS_H_

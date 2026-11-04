@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <utility>
 
-namespace winject
+namespace winject::core
 {
 
 // One CV reactor timer that follows a moving deadline. Arm on the reactor
@@ -141,6 +141,6 @@ private:
     bool armed = false;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_UTILS_DEADLINE_TIMER_H_

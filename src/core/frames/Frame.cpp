@@ -20,7 +20,7 @@
 #include <algorithm>
 #include <cstdio>
 
-namespace winject
+namespace winject::core
 {
 namespace ieee_802_11
 {
@@ -220,4 +220,4 @@ std::string to_string(Frame& frame80211)
 }
 
 }  // namespace ieee_802_11
-}  // namespace winject
+}  // namespace winject::core

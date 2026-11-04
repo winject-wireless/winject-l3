@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string>
 
-namespace winject
+namespace winject::core
 {
 
 // The PHY a radio reports (radio_info / radio_tx reply).
@@ -19,6 +19,6 @@ struct RadioPhyView
     bool cca_valid = false;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_CORE_RADIO_RADIO_PHY_VIEW_H_

@@ -1,6 +1,6 @@
 #include "radio/WifiFcs.h"
 
-namespace winject
+namespace winject::core
 {
 
 namespace
@@ -97,4 +97,4 @@ bool wifi_forward_trailer_ok(const uint8_t* frame, size_t len,
     }
 }
 
-}  // namespace winject
+}  // namespace winject::core

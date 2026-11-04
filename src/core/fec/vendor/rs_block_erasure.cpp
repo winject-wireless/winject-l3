@@ -23,7 +23,7 @@ extern "C" void winject_ec_encode_data(int len, int k, int rows,
                                          unsigned char** coding);
 #define WINJECT_EC_ENCODE winject_ec_encode_data
 #else
-#define WINJECT_EC_ENCODE winject::fec_vendor::rs_encode_scalar
+#define WINJECT_EC_ENCODE winject::core::fec_vendor::rs_encode_scalar
 #endif
 
 namespace
@@ -76,7 +76,7 @@ const kn_encode_tables& kn_encode_tables_for(int k, int n)
 }
 }  // namespace
 
-size_t winject::fec_vendor::rs_block_erasure::max_original() const
+size_t winject::core::fec_vendor::rs_block_erasure::max_original() const
 {
     if (max_shard_bytes <= k_header_len + k_len_prefix)
     {
@@ -85,7 +85,7 @@ size_t winject::fec_vendor::rs_block_erasure::max_original() const
     return max_shard_bytes - k_header_len - k_len_prefix;
 }
 
-const char* winject::fec_vendor::rs_block_erasure::impl_name() const
+const char* winject::core::fec_vendor::rs_block_erasure::impl_name() const
 {
 #ifdef WINJECT_ISAL_NEON
     return "isa-l neon";
@@ -94,7 +94,7 @@ const char* winject::fec_vendor::rs_block_erasure::impl_name() const
 #endif
 }
 
-winject::fec_vendor::rs_block_erasure::rs_block_erasure()
+winject::core::fec_vendor::rs_block_erasure::rs_block_erasure()
 {
     // Random TX start id: a restarted sender must not replay ids that the
     // receiver's duplicate filter / in-order emit queue still remembers.
@@ -102,7 +102,7 @@ winject::fec_vendor::rs_block_erasure::rs_block_erasure()
     sdu_seq = static_cast<uint16_t>(rd());
 }
 
-bool winject::fec_vendor::rs_block_erasure::init(int k, int n, int timeout_ms, size_t max_shard_bytes_in)
+bool winject::core::fec_vendor::rs_block_erasure::init(int k, int n, int timeout_ms, size_t max_shard_bytes_in)
 {
     if (k < k_header_k_n_min || n < k || n > k_header_k_n_max ||
         k > k_header_k_n_max || timeout_ms < 0 ||
@@ -150,7 +150,7 @@ bool winject::fec_vendor::rs_block_erasure::init(int k, int n, int timeout_ms, s
     return true;
 }
 
-void winject::fec_vendor::rs_block_erasure::disable()
+void winject::core::fec_vendor::rs_block_erasure::disable()
 {
     active = false;
     pending.clear();
@@ -166,7 +166,7 @@ void winject::fec_vendor::rs_block_erasure::disable()
     emit_next = 0;
 }
 
-bool winject::fec_vendor::rs_block_erasure::pack_header(uint8_t* out, uint16_t sdu_base, int index, int k,
+bool winject::core::fec_vendor::rs_block_erasure::pack_header(uint8_t* out, uint16_t sdu_base, int index, int k,
                                               int n, int sdu_n)
 {
     if (out == nullptr || index < 0 || index >= n || k < k_header_k_n_min ||
@@ -184,7 +184,7 @@ bool winject::fec_vendor::rs_block_erasure::pack_header(uint8_t* out, uint16_t s
     return true;
 }
 
-bool winject::fec_vendor::rs_block_erasure::unpack_header(const uint8_t* data, size_t len,
+bool winject::core::fec_vendor::rs_block_erasure::unpack_header(const uint8_t* data, size_t len,
                                                 uint16_t* sdu_base, int* index, int* k, int* n,
                                                 int* sdu_n)
 {
@@ -220,7 +220,7 @@ bool winject::fec_vendor::rs_block_erasure::unpack_header(const uint8_t* data, s
     return true;
 }
 
-bool winject::fec_vendor::rs_block_erasure::encode_block(
+bool winject::core::fec_vendor::rs_block_erasure::encode_block(
     const std::vector<std::vector<uint8_t>>& packets, uint16_t sdu_base,
     std::vector<std::vector<uint8_t>>* out) const
 {
@@ -308,7 +308,7 @@ bool winject::fec_vendor::rs_block_erasure::encode_block(
     return true;
 }
 
-int winject::fec_vendor::rs_block_erasure::gen_decode_matrix(int k, int n,
+int winject::core::fec_vendor::rs_block_erasure::gen_decode_matrix(int k, int n,
                                         const uint8_t* encode_matrix,
                                         const uint8_t* err_list, int nerrs,
                                         uint8_t* decode_matrix,
@@ -383,7 +383,7 @@ int winject::fec_vendor::rs_block_erasure::gen_decode_matrix(int k, int n,
     return 0;
 }
 
-bool winject::fec_vendor::rs_block_erasure::decode_block(
+bool winject::core::fec_vendor::rs_block_erasure::decode_block(
     const std::unordered_map<int, bfc::shared_sized_buffer>& frags, fec_rx_payload_list* payloads,
     int* recovered) const
 {
@@ -394,7 +394,7 @@ bool winject::fec_vendor::rs_block_erasure::decode_block(
     return decode_block(cfg_k, cfg_n, cfg_k, frags, payloads, recovered);
 }
 
-bool winject::fec_vendor::rs_block_erasure::decode_block(
+bool winject::core::fec_vendor::rs_block_erasure::decode_block(
     int k, int n, int sdu_n, const std::unordered_map<int, bfc::shared_sized_buffer>& frags,
     fec_rx_payload_list* payloads, int* recovered) const
 {
@@ -606,7 +606,7 @@ bool winject::fec_vendor::rs_block_erasure::decode_block(
     return true;
 }
 
-void winject::fec_vendor::rs_block_erasure::push_app(const uint8_t* data, size_t len,
+void winject::core::fec_vendor::rs_block_erasure::push_app(const uint8_t* data, size_t len,
                               std::vector<std::vector<uint8_t>>* out)
 {
     if (out != nullptr)
@@ -635,7 +635,7 @@ void winject::fec_vendor::rs_block_erasure::push_app(const uint8_t* data, size_t
     }
 }
 
-void winject::fec_vendor::rs_block_erasure::flush(std::vector<std::vector<uint8_t>>* out)
+void winject::core::fec_vendor::rs_block_erasure::flush(std::vector<std::vector<uint8_t>>* out)
 {
     if (out != nullptr)
     {
@@ -660,7 +660,7 @@ void winject::fec_vendor::rs_block_erasure::flush(std::vector<std::vector<uint8_
     blocks_count++;
 }
 
-void winject::fec_vendor::rs_block_erasure::on_tick(std::vector<std::vector<uint8_t>>* out)
+void winject::core::fec_vendor::rs_block_erasure::on_tick(std::vector<std::vector<uint8_t>>* out)
 {
     if (out != nullptr)
     {
@@ -677,7 +677,7 @@ void winject::fec_vendor::rs_block_erasure::on_tick(std::vector<std::vector<uint
     flush(out);
 }
 
-bool winject::fec_vendor::rs_block_erasure::next_deadline(
+bool winject::core::fec_vendor::rs_block_erasure::next_deadline(
     std::chrono::steady_clock::time_point* out) const
 {
     if (!active || !deadline_set || timeout_ms <= 0)
@@ -691,14 +691,14 @@ bool winject::fec_vendor::rs_block_erasure::next_deadline(
     return true;
 }
 
-uint64_t winject::fec_vendor::rs_block_erasure::take_recovered()
+uint64_t winject::core::fec_vendor::rs_block_erasure::take_recovered()
 {
     const uint64_t n = recovered_count - recovered_seen;
     recovered_seen = recovered_count;
     return n;
 }
 
-uint64_t winject::fec_vendor::rs_block_erasure::take_decode_fail()
+uint64_t winject::core::fec_vendor::rs_block_erasure::take_decode_fail()
 {
     const uint64_t total = decode_fail();
     const uint64_t n = total - decode_fail_seen;
@@ -706,49 +706,49 @@ uint64_t winject::fec_vendor::rs_block_erasure::take_decode_fail()
     return n;
 }
 
-uint64_t winject::fec_vendor::rs_block_erasure::take_hdr_errors()
+uint64_t winject::core::fec_vendor::rs_block_erasure::take_hdr_errors()
 {
     const uint64_t n = hdr_errors_count - hdr_errors_seen;
     hdr_errors_seen = hdr_errors_count;
     return n;
 }
 
-uint64_t winject::fec_vendor::rs_block_erasure::take_kn_mismatch()
+uint64_t winject::core::fec_vendor::rs_block_erasure::take_kn_mismatch()
 {
     const uint64_t n = kn_mismatch_count - kn_mismatch_seen;
     kn_mismatch_seen = kn_mismatch_count;
     return n;
 }
 
-uint64_t winject::fec_vendor::rs_block_erasure::take_evicted_blocks()
+uint64_t winject::core::fec_vendor::rs_block_erasure::take_evicted_blocks()
 {
     const uint64_t n = evicted_blocks_count - evicted_blocks_seen;
     evicted_blocks_seen = evicted_blocks_count;
     return n;
 }
 
-uint64_t winject::fec_vendor::rs_block_erasure::take_rs_failures()
+uint64_t winject::core::fec_vendor::rs_block_erasure::take_rs_failures()
 {
     const uint64_t n = rs_failures_count - rs_failures_seen;
     rs_failures_seen = rs_failures_count;
     return n;
 }
 
-uint64_t winject::fec_vendor::rs_block_erasure::take_fail_missing_shards()
+uint64_t winject::core::fec_vendor::rs_block_erasure::take_fail_missing_shards()
 {
     const uint64_t n = missing_shards_count - missing_shards_seen;
     missing_shards_seen = missing_shards_count;
     return n;
 }
 
-uint64_t winject::fec_vendor::rs_block_erasure::take_late_blocks()
+uint64_t winject::core::fec_vendor::rs_block_erasure::take_late_blocks()
 {
     const uint64_t n = late_blocks_count - late_blocks_seen;
     late_blocks_seen = late_blocks_count;
     return n;
 }
 
-uint64_t winject::fec_vendor::rs_block_erasure::take_fail_lost_app_pkts()
+uint64_t winject::core::fec_vendor::rs_block_erasure::take_fail_lost_app_pkts()
 {
     const uint64_t n = fail_lost_app_pkts_count - fail_lost_app_pkts_seen;
     fail_lost_app_pkts_seen = fail_lost_app_pkts_count;

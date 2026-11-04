@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 class UpstreamLink;
@@ -58,6 +58,6 @@ private:
     std::vector<RadioUpstreamEntry> upstream_entries;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_RADIO_UPSTREAM_TABLE_H_

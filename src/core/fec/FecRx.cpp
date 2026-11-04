@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace winject
+namespace winject::core
 {
 
 bool FecRx::start(std::shared_ptr<Reactor> reactor, Deliver deliver)
@@ -78,4 +78,4 @@ void FecRx::sync()
         std::memory_order_relaxed);
 }
 
-}  // namespace winject
+}  // namespace winject::core

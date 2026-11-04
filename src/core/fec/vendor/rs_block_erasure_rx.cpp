@@ -10,7 +10,7 @@
 namespace
 {
 
-using winject::fec_vendor::rs_block_erasure;
+using winject::core::fec_vendor::rs_block_erasure;
 using clock_type = std::chrono::steady_clock;
 
 uint16_t load_be16(const uint8_t* p)
@@ -33,22 +33,22 @@ double median(std::vector<double>* v)
 
 }  // namespace
 
-std::chrono::steady_clock::time_point winject::fec_vendor::rs_block_erasure::now() const
+std::chrono::steady_clock::time_point winject::core::fec_vendor::rs_block_erasure::now() const
 {
     return clock ? clock() : clock_type::now();
 }
 
-int winject::fec_vendor::rs_block_erasure::ring_dist(uint16_t a, uint16_t b)
+int winject::core::fec_vendor::rs_block_erasure::ring_dist(uint16_t a, uint16_t b)
 {
     return static_cast<int>(static_cast<int16_t>(static_cast<uint16_t>(a - b)));
 }
 
-int winject::fec_vendor::rs_block_erasure::dist_from_emit(uint16_t sdu_base) const
+int winject::core::fec_vendor::rs_block_erasure::dist_from_emit(uint16_t sdu_base) const
 {
     return ring_dist(sdu_base, emit_next);
 }
 
-void winject::fec_vendor::rs_block_erasure::note_head_hole_sdus(int gap_sdus)
+void winject::core::fec_vendor::rs_block_erasure::note_head_hole_sdus(int gap_sdus)
 {
     if (gap_sdus > 0)
     {
@@ -56,7 +56,7 @@ void winject::fec_vendor::rs_block_erasure::note_head_hole_sdus(int gap_sdus)
     }
 }
 
-void winject::fec_vendor::rs_block_erasure::emit_payload(fec_rx_payload_list* out,
+void winject::core::fec_vendor::rs_block_erasure::emit_payload(fec_rx_payload_list* out,
                                                bfc::shared_sized_buffer&& app)
 {
     if (nullptr == out || app.empty())
@@ -66,7 +66,7 @@ void winject::fec_vendor::rs_block_erasure::emit_payload(fec_rx_payload_list* ou
     out->push_back(std::move(app));
 }
 
-bool winject::fec_vendor::rs_block_erasure::frag_to_app(const bfc::shared_sized_buffer& shard,
+bool winject::core::fec_vendor::rs_block_erasure::frag_to_app(const bfc::shared_sized_buffer& shard,
                                               bfc::shared_sized_buffer* app)
 {
     if (nullptr == app || shard.size() < k_header_len + k_len_prefix)
@@ -89,7 +89,7 @@ bool winject::fec_vendor::rs_block_erasure::frag_to_app(const bfc::shared_sized_
     return !app->empty();
 }
 
-void winject::fec_vendor::rs_block_erasure::account_missing_shards(const rx_block_s& block)
+void winject::core::fec_vendor::rs_block_erasure::account_missing_shards(const rx_block_s& block)
 {
     const int sn = block.sdu_n > 0 ? block.sdu_n : block.k;
     if (sn <= 0 || block.n <= 0 || block.k <= 0)
@@ -104,7 +104,7 @@ void winject::fec_vendor::rs_block_erasure::account_missing_shards(const rx_bloc
     }
 }
 
-void winject::fec_vendor::rs_block_erasure::note_rx_block_output_shortfall(int expected, int available)
+void winject::core::fec_vendor::rs_block_erasure::note_rx_block_output_shortfall(int expected, int available)
 {
     if (expected > available)
     {
@@ -112,7 +112,7 @@ void winject::fec_vendor::rs_block_erasure::note_rx_block_output_shortfall(int e
     }
 }
 
-int winject::fec_vendor::rs_block_erasure::expected_sdus(const rx_block_s& block)
+int winject::core::fec_vendor::rs_block_erasure::expected_sdus(const rx_block_s& block)
 {
     return block.sdu_n > 0 ? block.sdu_n : block.k;
 }
@@ -121,42 +121,42 @@ int winject::fec_vendor::rs_block_erasure::expected_sdus(const rx_block_s& block
 
 /* The sender puts data shards 0..sdu_n-1 on air first (empty tail slots are not sent), then
  * parity k..n-1, and releases position p of c at t0 + p * spread / c. */
-int winject::fec_vendor::rs_block_erasure::air_pos(int index, int k, int sdu_n)
+int winject::core::fec_vendor::rs_block_erasure::air_pos(int index, int k, int sdu_n)
 {
     return index < k ? index : sdu_n + (index - k);
 }
 
-int winject::fec_vendor::rs_block_erasure::air_count(int k, int n, int sdu_n)
+int winject::core::fec_vendor::rs_block_erasure::air_count(int k, int n, int sdu_n)
 {
     return sdu_n + (n - k);
 }
 
-std::chrono::nanoseconds winject::fec_vendor::rs_block_erasure::spread_now() const
+std::chrono::nanoseconds winject::core::fec_vendor::rs_block_erasure::spread_now() const
 {
     const double s = have_spread_estimate() ? spread_est_s : k_spread_cap_ms / 1000.0;
     return std::chrono::nanoseconds(static_cast<int64_t>(s * 1e9));
 }
 
-std::chrono::nanoseconds winject::fec_vendor::rs_block_erasure::margin_now() const
+std::chrono::nanoseconds winject::core::fec_vendor::rs_block_erasure::margin_now() const
 {
     const double floor_s = k_deadline_margin_min_ms / 1000.0;
     const double s = have_spread_estimate() ? std::max(floor_s, 3.0 * jitter_est_s) : floor_s;
     return std::chrono::nanoseconds(static_cast<int64_t>(s * 1e9));
 }
 
-double winject::fec_vendor::rs_block_erasure::spread_estimate_ms() const
+double winject::core::fec_vendor::rs_block_erasure::spread_estimate_ms() const
 {
     return (have_spread_estimate() ? spread_est_s : k_spread_cap_ms / 1000.0) * 1000.0;
 }
 
-double winject::fec_vendor::rs_block_erasure::jitter_estimate_ms() const
+double winject::core::fec_vendor::rs_block_erasure::jitter_estimate_ms() const
 {
     return have_spread_estimate() ? jitter_est_s * 1000.0 : 0.;
 }
 
 /* The block's start as its received shards imply it (arrival minus position x interval), taking
  * the median so one early or late shard does not move it. */
-std::chrono::steady_clock::time_point winject::fec_vendor::rs_block_erasure::block_start(
+std::chrono::steady_clock::time_point winject::core::fec_vendor::rs_block_erasure::block_start(
     const rx_block_s& block) const
 {
     if (block.arrivals.empty())
@@ -180,7 +180,7 @@ std::chrono::steady_clock::time_point winject::fec_vendor::rs_block_erasure::blo
 /* When the block's last shard is due, plus the margin: from its fitted start, and never before
  * the highest-position shard received so far plus the positions still to come (a block the
  * link delayed as a whole keeps its time). */
-std::chrono::steady_clock::time_point winject::fec_vendor::rs_block_erasure::block_deadline(
+std::chrono::steady_clock::time_point winject::core::fec_vendor::rs_block_erasure::block_deadline(
     const rx_block_s& block) const
 {
     const int  count = std::max(1, air_count(block.k, block.n, block.sdu_n));
@@ -206,7 +206,7 @@ std::chrono::steady_clock::time_point winject::fec_vendor::rs_block_erasure::blo
 /* Theil-Sen over the block's arrivals: the median of the pairwise slopes is the per-position
  * interval (one late shard cannot skew it), spread = interval * count. The jitter is the
  * largest residual around the fitted line. Blocks are weighted by how many shards they gave. */
-void winject::fec_vendor::rs_block_erasure::learn_spread(const rx_block_s& block)
+void winject::core::fec_vendor::rs_block_erasure::learn_spread(const rx_block_s& block)
 {
     const auto& a = block.arrivals;
     if (a.size() < 2)
@@ -272,7 +272,7 @@ void winject::fec_vendor::rs_block_erasure::learn_spread(const rx_block_s& block
 
 /* --- sequencer --- */
 
-void winject::fec_vendor::rs_block_erasure::new_reference(uint16_t sdu_base)
+void winject::core::fec_vendor::rs_block_erasure::new_reference(uint16_t sdu_base)
 {
     evicted_blocks_count += rx_blocks.size();
     for (const auto& kv : rx_blocks)
@@ -286,7 +286,7 @@ void winject::fec_vendor::rs_block_erasure::new_reference(uint16_t sdu_base)
     new_references_count++;
 }
 
-void winject::fec_vendor::rs_block_erasure::advance_head(int sdu_n)
+void winject::core::fec_vendor::rs_block_erasure::advance_head(int sdu_n)
 {
     note_released(emit_next);
     emit_next = static_cast<uint16_t>(emit_next + static_cast<uint16_t>(sdu_n));
@@ -294,7 +294,7 @@ void winject::fec_vendor::rs_block_erasure::advance_head(int sdu_n)
 
 /* Ids of blocks already released (or already counted late), so the remaining parity of a
  * block delivered from its first k shards is not counted as a late block. */
-void winject::fec_vendor::rs_block_erasure::note_released(uint16_t sdu_base)
+void winject::core::fec_vendor::rs_block_erasure::note_released(uint16_t sdu_base)
 {
     recent_released.push_back(sdu_base);
     if (recent_released.size() > k_recent_released_max)
@@ -303,7 +303,7 @@ void winject::fec_vendor::rs_block_erasure::note_released(uint16_t sdu_base)
     }
 }
 
-void winject::fec_vendor::rs_block_erasure::try_stream_head_systematic(rx_block_s& block,
+void winject::core::fec_vendor::rs_block_erasure::try_stream_head_systematic(rx_block_s& block,
                                                              fec_rx_payload_list* out)
 {
     const int sn = expected_sdus(block);
@@ -324,7 +324,7 @@ void winject::fec_vendor::rs_block_erasure::try_stream_head_systematic(rx_block_
     }
 }
 
-int winject::fec_vendor::rs_block_erasure::abandon_partial_block(const rx_block_s& block,
+int winject::core::fec_vendor::rs_block_erasure::abandon_partial_block(const rx_block_s& block,
                                                        fec_rx_payload_list* out)
 {
     account_missing_shards(block);
@@ -351,7 +351,7 @@ int winject::fec_vendor::rs_block_erasure::abandon_partial_block(const rx_block_
 
 /* Releases everything that can go out in sequence, flushing the head block at its deadline
  * and skipping a run of ids never seen once the next block shows the sender is past them. */
-void winject::fec_vendor::rs_block_erasure::run_emit_engine(fec_rx_payload_list* out)
+void winject::core::fec_vendor::rs_block_erasure::run_emit_engine(fec_rx_payload_list* out)
 {
     if (!emit_base_set)
     {
@@ -405,7 +405,7 @@ void winject::fec_vendor::rs_block_erasure::run_emit_engine(fec_rx_payload_list*
     }
 }
 
-bool winject::fec_vendor::rs_block_erasure::nearest_block_after_head(
+bool winject::core::fec_vendor::rs_block_erasure::nearest_block_after_head(
     int* dist, clock_type::time_point* start) const
 {
     bool found = false;
@@ -433,7 +433,7 @@ bool winject::fec_vendor::rs_block_erasure::nearest_block_after_head(
 }
 
 /* Mirrors where run_emit_engine stops: the head block's deadline, or the gap skip time. */
-bool winject::fec_vendor::rs_block_erasure::next_rx_deadline(clock_type::time_point* out) const
+bool winject::core::fec_vendor::rs_block_erasure::next_rx_deadline(clock_type::time_point* out) const
 {
     if (!emit_base_set || nullptr == out)
     {
@@ -459,7 +459,7 @@ bool winject::fec_vendor::rs_block_erasure::next_rx_deadline(clock_type::time_po
     return true;
 }
 
-bool winject::fec_vendor::rs_block_erasure::try_decode_block(uint16_t sdu_base, rx_block_s* block,
+bool winject::core::fec_vendor::rs_block_erasure::try_decode_block(uint16_t sdu_base, rx_block_s* block,
                                                    fec_rx_payload_list* out)
 {
     if (nullptr == block)
@@ -524,7 +524,7 @@ bool winject::fec_vendor::rs_block_erasure::try_decode_block(uint16_t sdu_base, 
     return true;
 }
 
-void winject::fec_vendor::rs_block_erasure::poll_rx(fec_rx_payload_list* out)
+void winject::core::fec_vendor::rs_block_erasure::poll_rx(fec_rx_payload_list* out)
 {
     if (out != nullptr)
     {
@@ -533,7 +533,7 @@ void winject::fec_vendor::rs_block_erasure::poll_rx(fec_rx_payload_list* out)
     run_emit_engine(out);
 }
 
-void winject::fec_vendor::rs_block_erasure::push_air(const uint8_t* data, size_t len,
+void winject::core::fec_vendor::rs_block_erasure::push_air(const uint8_t* data, size_t len,
                                            fec_rx_payload_list* out)
 {
     if (nullptr == data || 0 == len)
@@ -543,7 +543,7 @@ void winject::fec_vendor::rs_block_erasure::push_air(const uint8_t* data, size_t
     push_air(bfc::shared_sized_buffer::copy_from(data, len), out);
 }
 
-void winject::fec_vendor::rs_block_erasure::push_air(bfc::shared_sized_buffer shard,
+void winject::core::fec_vendor::rs_block_erasure::push_air(bfc::shared_sized_buffer shard,
                                            fec_rx_payload_list* out)
 {
     if (out != nullptr)

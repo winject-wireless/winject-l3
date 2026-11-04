@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-namespace winject
+namespace winject::core
 {
 
 // 802.11 FCS: CRC-32 over the MPDU, 4-byte trailer LSB first on the wire.
@@ -18,6 +18,6 @@ void wifi_fcs_store(const uint8_t* mpdu, size_t len, uint8_t out[4]);
 bool wifi_forward_trailer_ok(const uint8_t* frame, size_t len,
                              RadioFcsMode mode);
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_WIFI_FCS_H_

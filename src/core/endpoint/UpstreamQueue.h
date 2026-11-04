@@ -7,7 +7,7 @@
 #include <atomic>
 #include <memory>
 
-namespace winject
+namespace winject::core
 {
 
 // App-facing queue transport, created and owned by L3 for a queue upstream
@@ -67,6 +67,6 @@ private:
     std::atomic<bool> active_{true};
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_UPSTREAM_QUEUE_H_

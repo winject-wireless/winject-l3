@@ -2,12 +2,12 @@
 #define WINJECT_TEST_CONSOLE_TEST_HELPERS_H_
 
 #include "Config.h"
-#include "NodeCore.h"
+#include "L3Core.h"
 #include "WinjectBuildVersion.h"
 #include "mplane/MplaneCorrelation.h"
 #include "utils/IOReactor.h"
 #include "winject_l3/Console.h"
-#include "winject_l3/Node.h"
+#include "winject_l3/L3.h"
 
 #include <arpa/inet.h>
 #include <atomic>
@@ -26,7 +26,7 @@
 #include <thread>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 namespace test
 {
@@ -100,9 +100,9 @@ inline bool wait_until(const std::function<bool()>& cond, int timeout_ms = 1000)
     return cond();
 }
 
-// A radio on loopback. Its m-plane answers what the node sends on connect
+// A radio on loopback. Its m-plane answers what l3 sends on connect
 // and while up, as the firmwares do. A test can hold a command to answer it
-// itself. The d-plane socket takes the node's registrations and frames.
+// itself. The d-plane socket takes l3's registrations and frames.
 class FakeRadio
 {
 public:
@@ -421,7 +421,7 @@ private:
     std::thread worker;
 };
 
-// A node config for a FakeRadio, with one UDP upstream (Config needs one).
+// A l3 config for a FakeRadio, with one UDP upstream (Config needs one).
 inline Config config_for(const FakeRadio& radio)
 {
     Config cfg;
@@ -440,24 +440,24 @@ inline Config config_for(const FakeRadio& radio)
     return cfg;
 }
 
-// Runs one node on its own core (not the process's), with run() on a
-// thread of its own that becomes the node's callback thread.
-class TestNode
+// Runs one l3 on its own core (not the process's), with run() on a
+// thread of its own that becomes l3's callback thread.
+class TestL3
 {
 public:
-    TestNode()
-        : core(winject_l3::detail::NodeCore::create()),
-          node(winject_l3::detail::HandleAccess::node(core))
+    TestL3()
+        : core(winject::l3::detail::L3Core::create()),
+          l3(winject::l3::detail::HandleAccess::l3(core))
     {
     }
-    ~TestNode()
+    ~TestL3()
     {
         stop();
     }
 
-    // Returns once started(node) ran, or run() returned early.
+    // Returns once started(l3) ran, or run() returned early.
     bool start(const Config& cfg,
-               std::function<void(const winject_l3::Node&)> started = {})
+               std::function<void(const winject::L3&)> started = {})
     {
         auto ready = std::make_shared<std::promise<void>>();
         auto is_ready = ready->get_future();
@@ -473,9 +473,9 @@ public:
         result = std::async(std::launch::async,
                             [this, cfg, started, signal]()
                             {
-                                const int rc = winject_l3::detail::run_node(
+                                const int rc = winject::l3::detail::run_l3(
                                     core, cfg,
-                                    [started, signal](const winject_l3::Node& n)
+                                    [started, signal](const winject::L3& n)
                                     {
                                         if (started)
                                         {
@@ -489,7 +489,7 @@ public:
                             });
         return is_ready.wait_for(std::chrono::seconds(5)) ==
                    std::future_status::ready &&
-               node.running();
+               l3.running();
     }
 
     bool radio_up(int timeout_ms = 2000)
@@ -497,18 +497,18 @@ public:
         return wait_until(
             [this]()
             {
-                auto radio = node.radios().get();
+                auto radio = l3.radios().get();
                 if (!radio.ok())
                 {
                     return false;
                 }
                 auto state = radio.value.state();
-                return state.ok() && state.value == winject_l3::RadioState::up;
+                return state.ok() && state.value == winject::RadioState::up;
             },
             timeout_ms);
     }
 
-    // Stops the node; returns run()'s result, or -1 if it did not return.
+    // Stops l3; returns run()'s result, or -1 if it did not return.
     int stop()
     {
         if (!result.valid())
@@ -526,8 +526,8 @@ public:
         return stopped_rc;
     }
 
-    std::shared_ptr<winject_l3::detail::NodeCore> core;
-    winject_l3::Node node;
+    std::shared_ptr<winject::l3::detail::L3Core> core;
+    winject::L3 l3;
 
 private:
     std::future<int> result;
@@ -540,8 +540,9 @@ class ConsoleReactor
 public:
     ConsoleReactor() : name("test-console-" + std::to_string(next_id()))
     {
-        reactor = std::make_shared<winject_l3::console::Reactor>();
-        winject_l3::console::ReactorRegistry::get_instance().add(name, reactor);
+        reactor = std::make_shared<winject::l3::console::Reactor>();
+        winject::l3::console::ReactorRegistry::get_instance().add(name,
+                                                                  reactor);
         std::promise<void> running;
         auto is_running = running.get_future();
         reactor->wake_up(
@@ -560,7 +561,7 @@ public:
     {
         reactor->stop();
         worker.join();
-        winject_l3::console::ReactorRegistry::get_instance().rem(name);
+        winject::l3::console::ReactorRegistry::get_instance().rem(name);
     }
 
     // Runs fn on the reactor's thread and waits for it.
@@ -579,7 +580,7 @@ public:
     }
 
     const std::string name;
-    std::shared_ptr<winject_l3::console::Reactor> reactor;
+    std::shared_ptr<winject::l3::console::Reactor> reactor;
 
 private:
     static int next_id()
@@ -590,7 +591,7 @@ private:
     std::thread worker;
 };
 
-// The UDP console of a real node, on a FakeRadio: what the manager binary
+// The UDP console of a real l3, on a FakeRadio: what the manager binary
 // runs.
 class ConsoleServiceHarness
 {
@@ -600,7 +601,7 @@ public:
         stop();
     }
 
-    // Starts the node and its console; with wait_up, also waits until the
+    // Starts l3 and its console; with wait_up, also waits until the
     // radio m-plane is up.
     bool start(std::string* error, bool wait_up = true)
     {
@@ -613,16 +614,16 @@ public:
         console_bind = loopback(port);
         Config cfg = config_for(radio);
         cfg.console_in = "127.0.0.1:" + std::to_string(port);
-        winject_l3::Status console_status;
+        winject::Status console_status;
         console_status.error = "not started";
-        if (!node.start(cfg,
-                        [&](const winject_l3::Node& n)
-                        {
-                            console_status =
-                                service.start(n, cfg.console_in, reactor.name);
-                        }))
+        if (!l3.start(cfg,
+                      [&](const winject::L3& n)
+                      {
+                          console_status =
+                              service.start(n, cfg.console_in, reactor.name);
+                      }))
         {
-            *error = "node did not start";
+            *error = "l3 did not start";
             return false;
         }
         if (!console_status.ok())
@@ -630,7 +631,7 @@ public:
             *error = console_status.error;
             return false;
         }
-        if (wait_up && !node.radio_up())
+        if (wait_up && !l3.radio_up())
         {
             *error = "radio not up";
             return false;
@@ -641,9 +642,9 @@ public:
     void stop()
     {
         service.stop();
-        node.stop();
+        l3.stop();
     }
-    // Stops only the console: the node keeps running.
+    // Stops only the console: l3 keeps running.
     void stop_console()
     {
         service.stop();
@@ -701,15 +702,15 @@ public:
     }
 
     FakeRadio radio;
-    TestNode node;
+    TestL3 l3;
     ConsoleReactor reactor;
-    winject_l3::console::Service service;
+    winject::l3::console::Service service;
 
 private:
     sockaddr_in console_bind{};
 };
 
 }  // namespace test
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_TEST_CONSOLE_TEST_HELPERS_H_

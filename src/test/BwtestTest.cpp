@@ -5,8 +5,8 @@
 #include <thread>
 
 using namespace app_bwtest;
-using winject::ReactiveLossyQueue;
-using winject::UpstreamQueue;
+using winject::core::ReactiveLossyQueue;
+using winject::core::UpstreamQueue;
 
 namespace
 {

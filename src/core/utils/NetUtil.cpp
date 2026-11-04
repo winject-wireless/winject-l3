@@ -9,7 +9,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace winject
+namespace winject::core
 {
 
 bool parse_host(const std::string& text, in_addr* out)
@@ -151,4 +151,4 @@ std::string ipv4_to_string(in_addr addr)
     return host;
 }
 
-}  // namespace winject
+}  // namespace winject::core

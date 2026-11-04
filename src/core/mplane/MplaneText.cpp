@@ -6,7 +6,7 @@
 #include <string.h>
 #include <strings.h>
 
-namespace winject
+namespace winject::core
 {
 
 bool mplane_parse_kv(const char* text, const char* key, const char** value)
@@ -108,4 +108,4 @@ std::string mplane_format_ipv4_port(const sockaddr_in& addr)
     return std::string(ip) + ':' + std::to_string(ntohs(addr.sin_port));
 }
 
-}  // namespace winject
+}  // namespace winject::core

@@ -17,7 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-namespace winject
+namespace winject::core
 {
 
 // Routes datagrams between an app and the air, shared by UDP and queue
@@ -161,6 +161,6 @@ private:
     std::atomic<uint64_t> fec_air_tx_packets_acc{0};
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_DATAGRAM_AIR_H_

@@ -11,7 +11,7 @@
 #include <sys/socket.h>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 namespace
@@ -654,4 +654,4 @@ void RadioMplaneClient::program(const RadioConfig& cfg, DoneFn done)
                 });
 }
 
-}  // namespace winject
+}  // namespace winject::core

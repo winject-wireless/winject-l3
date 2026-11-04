@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-namespace winject
+namespace winject::core
 {
 
 class UpstreamLink;
@@ -29,6 +29,6 @@ struct RadioUpstreamEntry
     size_t budget = 0;
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_MANAGER_RADIO_RADIO_UPSTREAM_ENTRY_H_

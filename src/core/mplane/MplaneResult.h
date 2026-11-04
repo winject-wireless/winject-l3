@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 
 // One radio m-plane reply: OK with its body, or NOK with the radio's error
@@ -50,6 +50,6 @@ struct MplaneResult
     }
 };
 
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_CORE_MPLANE_MPLANE_RESULT_H_

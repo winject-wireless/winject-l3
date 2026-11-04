@@ -7,7 +7,7 @@
 #include "radio/TxMux.h"
 #include "utils/Log.h"
 
-namespace winject
+namespace winject::core
 {
 
 void RadioSupervisor::bind(RadioConfig* cfg, TxMux* tx_mux, RadioDplane* wifi,
@@ -223,4 +223,4 @@ void RadioSupervisor::on_info_due()
         });
 }
 
-}  // namespace winject
+}  // namespace winject::core

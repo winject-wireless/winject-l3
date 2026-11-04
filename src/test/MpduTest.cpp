@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
 #include <string.h>
 
-using namespace winject;
+using namespace winject::core;
 
 namespace
 {
@@ -42,7 +42,7 @@ void pack_slot_sizes(uint8_t addr1[6], uint8_t addr2[6],
 
 static void assign_tx_sequence(Mpdu& mpdu)
 {
-    winject::ieee_802_11::SeqControl* seq = mpdu.ieee().seq_ctl;
+    winject::core::ieee_802_11::SeqControl* seq = mpdu.ieee().seq_ctl;
     ASSERT_NE(seq, nullptr);
     seq->set_seq_num(next_tx_sequence());
     seq->set_fragment_num(0);

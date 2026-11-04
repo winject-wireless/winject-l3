@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 #include <unordered_set>
-namespace winject
+namespace winject::core
 {
 namespace
 {
@@ -90,4 +90,4 @@ void QueueUpstream::deliver_owned_datagram(bfc::shared_sized_buffer packet)
     ++stored_rx_counters.accepted_packets;
     stored_rx_counters.accepted_bytes += len;
 }
-}  // namespace winject
+}  // namespace winject::core

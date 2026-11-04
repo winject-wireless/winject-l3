@@ -1,5 +1,5 @@
-#include "NodeCore.h"
-#include "NodeImpl.h"
+#include "L3Core.h"
+#include "L3Impl.h"
 #include "WinjectL3.h"
 #include "mplane/MplaneErrno.h"
 #include "utils/Log.h"
@@ -8,28 +8,28 @@
 #include <memory>
 #include <string>
 
-namespace winject_l3
+namespace winject
 {
 
 namespace
 {
 
-const std::shared_ptr<detail::NodeCore>& process_core()
+const std::shared_ptr<l3::detail::L3Core>& process_core()
 {
-    static const std::shared_ptr<detail::NodeCore> core =
-        detail::NodeCore::create();
+    static const std::shared_ptr<l3::detail::L3Core> core =
+        l3::detail::L3Core::create();
     return core;
 }
 
-RadioFcs api_fcs(winject::RadioFcsConfig fcs)
+RadioFcs api_fcs(winject::core::RadioFcsConfig fcs)
 {
     switch (fcs)
     {
-        case winject::RadioFcsConfig::signal:
+        case winject::core::RadioFcsConfig::signal:
             return RadioFcs::signal;
-        case winject::RadioFcsConfig::actual:
+        case winject::core::RadioFcsConfig::actual:
             return RadioFcs::actual;
-        case winject::RadioFcsConfig::auto_detect:
+        case winject::core::RadioFcsConfig::auto_detect:
         default:
             return RadioFcs::auto_detect;
     }
@@ -38,7 +38,7 @@ RadioFcs api_fcs(winject::RadioFcsConfig fcs)
 RadioSpec radio_spec_of(const Config& cfg)
 {
     RadioSpec spec;
-    const winject::RadioDeviceConfig& d = cfg.radio_device;
+    const winject::core::RadioDeviceConfig& d = cfg.radio_device;
     spec.device.mplane = d.mplane;
     spec.device.dplane = d.dplane;
     spec.device.dplane_tx = d.dplane_tx;
@@ -58,18 +58,19 @@ RadioSpec radio_spec_of(const Config& cfg)
 }
 
 UpstreamSpec upstream_spec_of(const Config& cfg,
-                              const winject::UpstreamConfig& u)
+                              const winject::core::UpstreamConfig& u)
 {
     UpstreamSpec spec;
     spec.id = static_cast<uint8_t>(u.index);
     spec.bus_tx = u.bus_tx;
     spec.bus_rx = u.bus_rx;
-    spec.transport = u.mode == winject::UpstreamMode::queue ? Transport::queue
-                                                            : Transport::udp;
+    spec.transport = u.mode == winject::core::UpstreamMode::queue
+                         ? Transport::queue
+                         : Transport::udp;
     spec.rx = u.endpoint.rx;
     spec.tx = u.endpoint.tx;
     spec.reactor = u.reactor;
-    spec.fec.type = u.fec_type == winject::FecType::RsBlockErasure
+    spec.fec.type = u.fec_type == winject::core::FecType::RsBlockErasure
                         ? FecType::rs_block
                         : FecType::none;
     spec.fec.k = u.fec_k;
@@ -82,7 +83,7 @@ UpstreamSpec upstream_spec_of(const Config& cfg,
         const size_t index = u.index;
         auto publish = cfg.on_upstream_queue;
         spec.on_queue =
-            [publish, index](std::shared_ptr<winject::UpstreamQueue> q)
+            [publish, index](std::shared_ptr<winject::core::UpstreamQueue> q)
         {
             publish(index, std::move(q));
         };
@@ -92,9 +93,9 @@ UpstreamSpec upstream_spec_of(const Config& cfg,
 
 }  // namespace
 
-Version version()
+Version L3::version()
 {
-    const winject::WinjectVersion v = winject::own_version();
+    const winject::core::WinjectVersion v = winject::core::own_version();
     Version out;
     out.x = v.x;
     out.y = v.y;
@@ -102,28 +103,28 @@ Version version()
     return out;
 }
 
-Node node()
+L3 L3::instance()
 {
-    return detail::HandleAccess::node(process_core());
+    return l3::detail::HandleAccess::l3(process_core());
 }
 
-Status apply(const Node& node, const Config& cfg)
+Status L3::apply(const Config& cfg) const
 {
     std::string err;
     if (!cfg.validate(&err))
     {
         LOG_ERR("%s", err.c_str());
-        return detail::error_status(winject::k_einval);
+        return l3::detail::error_status(winject::core::k_einval);
     }
-    RadioManager radios = node.radios();
+    RadioManager radios = this->radios();
     const Result<Radio> radio = radios.create(radio_spec_of(cfg));
     if (!radio.ok())
     {
         LOG_ERR("radio: %s", radio.status.error.c_str());
         return radio.status;
     }
-    UpstreamManager upstreams = node.upstreams();
-    for (const winject::UpstreamConfig& u : cfg.upstreams)
+    UpstreamManager upstreams = this->upstreams();
+    for (const winject::core::UpstreamConfig& u : cfg.upstreams)
     {
         const Result<Upstream> up = upstreams.add(upstream_spec_of(cfg, u));
         if (!up.ok())
@@ -140,9 +141,9 @@ Status apply(const Node& node, const Config& cfg)
     return added;
 }
 
-int detail::run_node(const std::shared_ptr<NodeCore>& core, const Config& cfg,
-                     std::function<void(const Node&)> started,
-                     ThreadSetup thread_setup)
+int l3::detail::run_l3(const std::shared_ptr<L3Core>& core, const Config& cfg,
+                       std::function<void(const L3&)> started,
+                       L3::ThreadSetup thread_setup)
 {
     std::string err;
     if (!cfg.validate(&err))
@@ -153,18 +154,18 @@ int detail::run_node(const std::shared_ptr<NodeCore>& core, const Config& cfg,
     bool idle = false;
     if (!core->busy.compare_exchange_strong(idle, true))
     {
-        LOG_ERR("winject-l3: this node is already running");
+        LOG_ERR("winject-l3: l3 is already running");
         return 1;
     }
     int rc = 0;
     {
-        winject::NodeImpl impl(cfg.stats_sec);
+        winject::l3::detail::L3Impl impl(cfg.stats_sec);
         core->callbacks.open();
         impl.start(core.get(), thread_setup);
-        const Node node = HandleAccess::node(core);
+        const L3 l3 = HandleAccess::l3(core);
         if (!core->stop_requested)
         {
-            const Status applied = apply(node, cfg);
+            const Status applied = l3.apply(cfg);
             if (!applied.ok())
             {
                 if (!core->stop_requested)
@@ -175,10 +176,10 @@ int detail::run_node(const std::shared_ptr<NodeCore>& core, const Config& cfg,
             }
             else if (started)
             {
-                started(node);
+                started(l3);
             }
         }
-        // Every Done and Node::post until the node's thread closes the queue,
+        // Every Done and L3::post until l3's thread closes the queue,
         // after it cancelled what was still pending.
         core->callbacks.run();
         impl.join();
@@ -188,21 +189,21 @@ int detail::run_node(const std::shared_ptr<NodeCore>& core, const Config& cfg,
     return rc;
 }
 
-int run(const Config& cfg, std::function<void(const Node&)> started,
-        ThreadSetup thread_setup)
+int L3::run(const Config& cfg, std::function<void(const L3&)> started,
+            ThreadSetup thread_setup)
 {
-    return detail::run_node(process_core(), cfg, std::move(started),
-                            std::move(thread_setup));
+    return l3::detail::run_l3(process_core(), cfg, std::move(started),
+                              std::move(thread_setup));
 }
 
-void stop()
+void L3::stop()
 {
     process_core()->request_stop();
 }
 
-void stop_from_signal()
+void L3::stop_from_signal()
 {
     process_core()->request_stop_from_signal();
 }
 
-}  // namespace winject_l3
+}  // namespace winject

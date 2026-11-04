@@ -26,7 +26,7 @@ using Command = std::function<std::string(const std::string& args)>;
 
 struct Config
 {
-    std::shared_ptr<winject::UpstreamQueue> upstream;
+    std::shared_ptr<winject::core::UpstreamQueue> upstream;
     // UDP console, one command per datagram, reply to the sender.
     std::string console = "0.0.0.0:5100";
     // Datagram size including timestamp header; 16..k_stream_payload_max.
@@ -61,7 +61,7 @@ struct Stats
 class Bwtest
 {
 public:
-    Bwtest(std::shared_ptr<winject::UpstreamQueue> upstream,
+    Bwtest(std::shared_ptr<winject::core::UpstreamQueue> upstream,
            size_t payload_bytes, NowUs now_us = {});
     ~Bwtest();
     Bwtest(const Bwtest&) = delete;
@@ -84,7 +84,7 @@ private:
     void run_send(uint32_t offer_kbps, uint32_t duration_ms);
     uint64_t evictions() const;
 
-    std::shared_ptr<winject::UpstreamQueue> upstream_;
+    std::shared_ptr<winject::core::UpstreamQueue> upstream_;
     size_t payload_bytes_;
     std::mutex send_mu_;
     std::thread send_thread_;

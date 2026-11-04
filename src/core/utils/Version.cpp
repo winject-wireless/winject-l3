@@ -5,7 +5,7 @@
 
 #include <cctype>
 
-namespace winject
+namespace winject::core
 {
 
 bool parse_winject_version(const std::string& text, WinjectVersion* out)
@@ -128,4 +128,4 @@ WinjectVersion own_version()
     return v;
 }
 
-}  // namespace winject
+}  // namespace winject::core
