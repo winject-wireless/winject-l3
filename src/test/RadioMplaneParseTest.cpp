@@ -72,3 +72,13 @@ TEST(RadioMplaneParseTest, PhyMatchesDesired)
     EXPECT_TRUE(radio_phy_matches_desired(view, 6, 18, "OFDM_24M"));
     EXPECT_FALSE(radio_phy_matches_desired(view, 7, 18, "OFDM_24M"));
 }
+
+TEST(RadioMplaneParseTest, ParseNegativePowerAndAppliedKey)
+{
+    ManagerRadioView view;
+    EXPECT_TRUE(parse_radio_tx_line(
+        "radio_tx channel=1 tx_power=-10 modulation=OFDM_24M cca=true tx_power_applied=-9",
+        &view));
+    EXPECT_EQ(view.tx_power, -10);
+    EXPECT_EQ(view.modulation, "OFDM_24M");
+}

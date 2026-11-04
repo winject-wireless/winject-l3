@@ -114,6 +114,7 @@ These are forwarded to the radio's m-plane when the console is up and the protoc
 | `radio_info\|ri` | Current PHY and last RSSI (radio `radio_tx_info`) | The radio's reply, for example `radio_tx channel=1 tx_power=20 modulation=OFDM_24M cca=false` and `radio_rx rssi=-10` |
 | `radio_stats\|rs` | Radio d-plane counters (radio `tx_info` and `rx_info`) | Two lines, for example `tx_info tx_queue_sz=0 in_flight=0 dropped_invalid_frame=0 dropped_tx_queue=0 dropped_wifi=0 ether_pkt=100 air_pkt=100 ts=<µs>` and `rx_info rx_queue_sz=0 dropped_filter_mismatched=0 dropped_rx_queue=0 dropped_no_peer=0 dropped_send_failed=0 ether_pkt=100 air_pkt=100 ts=<µs>` |
 | `radio_tx\|rt [channel=<1-14>] [tx_power=<dBm>] [modulation=<name>] [cca=<0\|1>]` | Change one or more PHY fields (radio `radio_tx`); the manager keeps them for its PHY reconcile | `OK radio_tx channel=... tx_power=... modulation=... cca=...` |
+| `radio_tx_cal\|rtc [group=<name> points=<drv:dBm,...>] [group=<name> scale=<dB/dB> offset=<dBm>] [[group=<name>] reset=true]` | The radio's per-board TX power calibration (radio `radio_tx_cal`), forwarded unchanged; the radio stores it, so it is not part of the config slot. No arguments lists it | The radio's reply, for example `radio_tx_cal group=dsss default=true points=8:-28.00,84:15.60` (one line per group) and the `radio_tx` line |
 | `radio_caps_info\|rci` | FCS trailer mode the manager applies to forwarded frames. Asks the radio when its console is up (and updates the manager); otherwise answers from the configured or last-learned mode | `OK radio_caps_info fcs=SIGNAL\|ACTUAL`, or `NOK ENODATA` if the mode is not known yet |
 | `reset\|r` | Restart the radio (not idempotent) | `OK` |
 | `config slot=<u8>` | Select the radio settings slot the manager saves to (0 = scratch pad until set). No alias | `OK slot=<u8>` |
@@ -206,7 +207,7 @@ Bench layout and scenarios: [configuration/scenario.md](../configuration/scenari
 | `radio.reactor` | | Queue d-plane: the host's running `cv_reactor` (registry name), which wakes both ends |
 | `radio.channel` | `1` | 1–14; channel 14 allows only DSSS/CCK modulations |
 | `radio.modulation` | `DSS_1M_L` | PHY rate name, for example `OFDM_24M` |
-| `radio.power` | `20` | TX power, dBm |
+| `radio.power` | `20` | TX power, dBm at the antenna connector (-30..30); the radio applies the nearest level it can and reports it as `tx_power_applied` |
 | `radio.cca` | | `0` or `1`: radio CCA, programmed with the PHY. Omitted = the radio keeps its current setting |
 | `radio.fcs` | `auto` | Initial `radio_device fcs` (`auto`, `signal`, `actual`) |
 

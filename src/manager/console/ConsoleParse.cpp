@@ -47,6 +47,23 @@ bool console_parse_u(const char* text, unsigned long* out)
     return true;
 }
 
+bool console_parse_i(const char* text, long* out)
+{
+    if (text == nullptr || out == nullptr || *text == '\0')
+    {
+        return false;
+    }
+    char* end = nullptr;
+    errno = 0;
+    const long v = strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0')
+    {
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
 bool console_parse_u8(const char* text, uint8_t* out)
 {
     unsigned long v = 0;

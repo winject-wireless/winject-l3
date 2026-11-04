@@ -302,3 +302,61 @@ TEST(ConsoleServiceSocketTest, VersionDiscoveryFrozen)
     ASSERT_TRUE(harness.exchange(client, "cmd:7 bogus", &reply));
     EXPECT_STREQ(reply.c_str(), "NOK:7 ENOSYS\n");
 }
+
+TEST(ConsoleServiceSocketTest, RadioTxCalForwardsArgs)
+{
+    ConsoleServiceHarness harness;
+    std::string err;
+    ManagerConsoleHandlers h = stub_console_handlers();
+    std::string seen;
+    h.radio_tx_cal = [&seen](const std::string& args, ManagerConsoleReply reply)
+    {
+        seen = args;
+        reply.send_text("radio_tx_cal group=dsss default=false points=8:-28.00,84:15.60");
+    };
+    ASSERT_TRUE(harness.start(std::move(h), &err)) << err;
+
+    bfc::socket client(bfc::create_udp4());
+    std::string reply;
+    ASSERT_TRUE(harness.exchange(client, "cmd:3 rtc group=dsss points=8:-28,84:15.6", &reply));
+    EXPECT_STREQ(reply.c_str(),
+                 "OK:3 radio_tx_cal group=dsss default=false points=8:-28.00,84:15.60\n");
+    EXPECT_EQ(seen, "group=dsss points=8:-28,84:15.6");
+
+    ASSERT_TRUE(harness.exchange(client, "radio_tx_cal", &reply));
+    EXPECT_EQ(seen, "");
+
+    ASSERT_TRUE(harness.exchange(client, "radio_tx_cal dsss", &reply));
+    EXPECT_STREQ(reply.c_str(), "NOK EINVAL\n");
+}
+
+TEST(ConsoleServiceSocketTest, RadioTxCalWithoutHandlerIsEnosys)
+{
+    ConsoleServiceHarness harness;
+    std::string err;
+    ASSERT_TRUE(harness.start(stub_console_handlers(), &err)) << err;
+    bfc::socket client(bfc::create_udp4());
+    std::string reply;
+    ASSERT_TRUE(harness.exchange(client, "radio_tx_cal", &reply));
+    EXPECT_STREQ(reply.c_str(), "NOK ENOSYS\n");
+}
+
+TEST(ConsoleServiceSocketTest, RadioTxNegativePower)
+{
+    ConsoleServiceHarness harness;
+    std::string err;
+    ManagerConsoleHandlers h = stub_console_handlers();
+    int power = 0;
+    h.radio_tx = [&power](const ManagerRadioUpdate& patch, ManagerConsoleReply reply)
+    {
+        power = patch.tx_power;
+        reply.send_text("radio_tx channel=1 tx_power=-10");
+    };
+    ASSERT_TRUE(harness.start(std::move(h), &err)) << err;
+    bfc::socket client(bfc::create_udp4());
+    std::string reply;
+    ASSERT_TRUE(harness.exchange(client, "rt tx_power=-10", &reply));
+    EXPECT_EQ(power, -10);
+    ASSERT_TRUE(harness.exchange(client, "rt tx_power=-200", &reply));
+    EXPECT_STREQ(reply.c_str(), "NOK EINVAL\n");
+}
