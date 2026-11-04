@@ -3,6 +3,8 @@
 #include "mplane/MplaneText.h"
 #include "radio/PhyAirtime.h"
 
+#include <initializer_list>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -102,6 +104,62 @@ bool parse_radio_info_body(const std::string& body, RadioPhyView* out)
 namespace
 {
 
+struct CounterKey
+{
+    const char* key;
+    uint64_t* field;
+};
+
+// "<name> k=v k=v ...": fills every key in keys, ignores others.
+bool parse_counter_line(const std::string& line, const char* name,
+                        std::initializer_list<CounterKey> keys)
+{
+    const size_t name_len = strlen(name);
+    if (line.compare(0, name_len, name) != 0 ||
+        (line.size() > name_len && line[name_len] != ' '))
+    {
+        return false;
+    }
+    std::vector<char> buf(line.begin() + static_cast<ptrdiff_t>(name_len),
+                          line.end());
+    buf.push_back('\0');
+    size_t found = 0;
+    char* save = nullptr;
+    for (char* tok = strtok_r(buf.data(), " \t", &save); tok != nullptr;
+         tok = strtok_r(nullptr, " \t", &save))
+    {
+        const char* eq = strchr(tok, '=');
+        if (eq == nullptr)
+        {
+            return false;
+        }
+        for (const CounterKey& k : keys)
+        {
+            const size_t key_len = strlen(k.key);
+            if (static_cast<size_t>(eq - tok) != key_len ||
+                strncmp(tok, k.key, key_len) != 0)
+            {
+                continue;
+            }
+            char* end = nullptr;
+            const char* value = eq + 1;
+            if (*value == '\0' || *value == '-')
+            {
+                return false;
+            }
+            const unsigned long long v = strtoull(value, &end, 10);
+            if (end == nullptr || *end != '\0')
+            {
+                return false;
+            }
+            *k.field = static_cast<uint64_t>(v);
+            ++found;
+            break;
+        }
+    }
+    return found == keys.size();
+}
+
 std::string trim_copy(const std::string& s)
 {
     const auto start = s.find_first_not_of(" \t\r\n");
@@ -134,6 +192,41 @@ bool parse_fcs_token(const char* tok, RadioFcsMode* out_mode)
 }
 
 }  // namespace
+
+bool parse_radio_counters(const std::vector<std::string>& lines,
+                          RadioCounters* out)
+{
+    if (out == nullptr || lines.size() != 2)
+    {
+        return false;
+    }
+    RadioCounters c;
+    if (!parse_counter_line(lines[0], "tx_info",
+                            {{"tx_queue_sz", &c.tx.queue_size},
+                             {"in_flight", &c.tx.in_flight},
+                             {"dropped_invalid_frame",
+                              &c.tx.dropped_invalid_frame},
+                             {"dropped_tx_queue", &c.tx.dropped_queue},
+                             {"dropped_wifi", &c.tx.dropped_wifi},
+                             {"ether_pkt", &c.tx.ether_packets},
+                             {"air_pkt", &c.tx.air_packets},
+                             {"ts", &c.tx.timestamp_us}}) ||
+        !parse_counter_line(lines[1], "rx_info",
+                            {{"rx_queue_sz", &c.rx.queue_size},
+                             {"dropped_filter_mismatched",
+                              &c.rx.dropped_filter_mismatched},
+                             {"dropped_rx_queue", &c.rx.dropped_queue},
+                             {"dropped_no_peer", &c.rx.dropped_no_peer},
+                             {"dropped_send_failed", &c.rx.dropped_send_failed},
+                             {"ether_pkt", &c.rx.ether_packets},
+                             {"air_pkt", &c.rx.air_packets},
+                             {"ts", &c.rx.timestamp_us}}))
+    {
+        return false;
+    }
+    *out = c;
+    return true;
+}
 
 bool parse_radio_caps_line(const std::string& line, RadioFcsMode* out_mode)
 {

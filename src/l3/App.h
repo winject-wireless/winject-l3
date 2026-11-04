@@ -97,7 +97,7 @@ private:
                                        std::string* error) const;
     bool console_get_metrics(const std::vector<std::string>& keys,
                              std::vector<MetricView>* out, std::string* error);
-    void apply_radio_caps_mplane(const MplaneResult& r);
+    void apply_radio_caps_mplane(const RadioCapsReply& caps);
     void console_radio_info(ControlReply reply);
     void console_radio_caps_info(ControlReply reply);
     void console_radio_stats(ControlReply reply);

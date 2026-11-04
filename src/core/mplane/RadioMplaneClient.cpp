@@ -392,31 +392,73 @@ void RadioMplaneClient::send_load_slot(uint8_t slot, DoneFn done)
     request("load " + std::to_string(slot), std::move(done));
 }
 
-void RadioMplaneClient::query_radio_caps(DoneFn done)
+namespace
 {
-    request("radio_caps_info", std::move(done));
+
+RadioCapsReply make_caps_reply(MplaneResult r)
+{
+    RadioCapsReply out;
+    out.resolved = resolve_radio_caps_mplane(r, &out.fcs, &out.legacy,
+                                             &out.error);
+    out.result = std::move(r);
+    return out;
 }
 
-void RadioMplaneClient::query_radio_info(DoneFn done)
+RadioPhyReply make_phy_reply(MplaneResult r)
+{
+    RadioPhyReply out;
+    if (r.ok)
+    {
+        RadioPhyView view;
+        if (parse_radio_info_body(r.text(), &view))
+        {
+            out.phy = view;
+        }
+    }
+    out.result = std::move(r);
+    return out;
+}
+
+}  // namespace
+
+void RadioMplaneClient::query_radio_caps(CapsDoneFn done)
+{
+    request("radio_caps_info",
+            [done = std::move(done)](MplaneResult r)
+            {
+                done(make_caps_reply(std::move(r)));
+            });
+}
+
+void RadioMplaneClient::query_radio_info(PhyDoneFn done)
 {
     request("radio_tx_info",
             [done = std::move(done)](MplaneResult r)
             {
-                if (!r.ok)
-                {
-                    done(std::move(r));
-                    return;
-                }
-                if (r.body_lines.empty() && !r.payload.empty())
+                if (r.ok && r.body_lines.empty() && !r.payload.empty())
                 {
                     r.body_lines.push_back(r.payload);
                 }
-                done(std::move(r));
+                done(make_phy_reply(std::move(r)));
             });
 }
 
-void RadioMplaneClient::query_radio_counters(DoneFn done)
+void RadioMplaneClient::query_radio_counters(CountersDoneFn done_counters)
 {
+    auto done = [done_counters = std::move(done_counters)](MplaneResult r)
+    {
+        RadioCountersReply out;
+        if (r.ok)
+        {
+            RadioCounters c;
+            if (parse_radio_counters(r.body_lines, &c))
+            {
+                out.counters = c;
+            }
+        }
+        out.result = std::move(r);
+        done_counters(std::move(out));
+    };
     request("tx_info",
             [this, done = std::move(done)](MplaneResult tx)
             {
@@ -451,7 +493,8 @@ void RadioMplaneClient::query_radio_counters(DoneFn done)
             });
 }
 
-void RadioMplaneClient::send_radio_tx(const std::string& kv_args, DoneFn done)
+void RadioMplaneClient::send_radio_tx(const std::string& kv_args,
+                                      PhyDoneFn done)
 {
     if (kv_args.empty())
     {
@@ -459,11 +502,18 @@ void RadioMplaneClient::send_radio_tx(const std::string& kv_args, DoneFn done)
         r.error = "empty radio_tx";
         if (done)
         {
-            done(std::move(r));
+            done(make_phy_reply(std::move(r)));
         }
         return;
     }
-    request("radio_tx " + kv_args, std::move(done));
+    request("radio_tx " + kv_args,
+            [done = std::move(done)](MplaneResult r)
+            {
+                if (done)
+                {
+                    done(make_phy_reply(std::move(r)));
+                }
+            });
 }
 
 void RadioMplaneClient::send_radio_reset(DoneFn done)
@@ -483,8 +533,7 @@ void RadioMplaneClient::apply_radio(const RadioConfig& cfg, uint8_t save_slot,
         {
             if (!ver_r.ok)
             {
-                const std::string& e = ver_r.error;
-                if (e == "ENOSYS" || e.find("ENOSYS") != std::string::npos)
+                if (ver_r.is_enosys())
                 {
                     MplaneResult fail;
                     fail.error = "EPROTO";
@@ -520,17 +569,12 @@ void RadioMplaneClient::apply_radio(const RadioConfig& cfg, uint8_t save_slot,
                 {
                     if (on_caps)
                     {
-                        on_caps(caps_r);
+                        on_caps(make_caps_reply(caps_r));
                     }
-                    if (!caps_r.ok)
+                    if (!caps_r.ok && !caps_r.is_enosys())
                     {
-                        const std::string& e = caps_r.error;
-                        if (e != "ENOSYS" &&
-                            e.find("ENOSYS") == std::string::npos)
-                        {
-                            done(std::move(caps_r));
-                            return;
-                        }
+                        done(std::move(caps_r));
+                        return;
                     }
                     request(
                         format_radio_tx_cmd(cfg),

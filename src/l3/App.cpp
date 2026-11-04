@@ -841,44 +841,20 @@ bool App::console_get_metrics(const std::vector<std::string>& keys,
     return true;
 }
 
-namespace
-{
 
-std::string mplane_join_body(const MplaneResult& r)
-{
-    std::string body;
-    for (const auto& line : r.body_lines)
-    {
-        if (!body.empty())
-        {
-            body += '\n';
-        }
-        body += line;
-    }
-    if (body.empty() && !r.payload.empty())
-    {
-        body = r.payload;
-    }
-    return body;
-}
-
-}  // namespace
-
-void App::apply_radio_caps_mplane(const MplaneResult& r)
+void App::apply_radio_caps_mplane(const RadioCapsReply& caps)
 {
     if (radio == nullptr)
     {
         return;
     }
-    RadioFcsMode mode = RadioFcsMode::unknown;
-    bool legacy = false;
-    std::string err;
-    if (!resolve_radio_caps_mplane(r, &mode, &legacy, &err))
+    if (!caps.resolved)
     {
-        LOG_WRN("radio_caps_info: %s", err.c_str());
+        LOG_WRN("radio_caps_info: %s", caps.error.c_str());
         return;
     }
-    if (legacy)
+    const RadioFcsMode mode = caps.fcs;
+    if (caps.legacy)
     {
         LOG_WRN("radio has no radio_caps_info; assuming fcs=ACTUAL");
     }
@@ -1009,7 +985,7 @@ bool App::console_radio_device(const RadioDeviceUpdate& patch,
         if (console_ok && cfg.radio_device.fcs == RadioFcsConfig::auto_detect)
         {
             console.query_radio_caps(
-                [this](MplaneResult r)
+                [this](RadioCapsReply r)
                 {
                     apply_radio_caps_mplane(r);
                 });
@@ -1035,20 +1011,18 @@ void App::console_radio_info(ControlReply reply)
         return;
     }
     console.query_radio_info(
-        [this, reply](MplaneResult r)
+        [this, reply](RadioPhyReply r)
         {
-            if (!r.ok)
+            if (!r.result.ok)
             {
-                reply.send_nok(mplane_err_string(r.error).c_str());
+                reply.send_nok(mplane_err_string(r.result.error).c_str());
                 return;
             }
-            const std::string body = mplane_join_body(r);
-            RadioPhyView view;
-            if (parse_radio_info_body(body, &view))
+            if (r.phy)
             {
-                radio_supervisor.set_actual_phy(view);
+                radio_supervisor.set_actual_phy(*r.phy);
             }
-            reply.send_text(body);
+            reply.send_text(r.result.text());
         });
 }
 
@@ -1057,16 +1031,12 @@ void App::console_radio_caps_info(ControlReply reply)
     if (console_ok)
     {
         console.query_radio_caps(
-            [this, reply](MplaneResult r)
+            [this, reply](RadioCapsReply r)
             {
-                if (!r.ok)
+                if (!r.result.ok && !r.result.is_enosys())
                 {
-                    const std::string& e = r.error;
-                    if (e != "ENOSYS" && e.find("ENOSYS") == std::string::npos)
-                    {
-                        reply.send_nok(mplane_err_string(r.error).c_str());
-                        return;
-                    }
+                    reply.send_nok(mplane_err_string(r.result.error).c_str());
+                    return;
                 }
                 apply_radio_caps_mplane(r);
                 if (radio == nullptr ||
@@ -1100,14 +1070,14 @@ void App::console_radio_stats(ControlReply reply)
         return;
     }
     console.query_radio_counters(
-        [reply](MplaneResult r)
+        [reply](RadioCountersReply r)
         {
-            if (!r.ok)
+            if (!r.result.ok)
             {
-                reply.send_nok(mplane_err_string(r.error).c_str());
+                reply.send_nok(mplane_err_string(r.result.error).c_str());
                 return;
             }
-            reply.send_text(mplane_join_body(r));
+            reply.send_text(r.result.text());
         });
 }
 
@@ -1158,11 +1128,11 @@ void App::console_radio_tx(const RadioUpdate& patch, ControlReply reply)
     }
     console.send_radio_tx(
         kv,
-        [this, patch, reply](MplaneResult r1)
+        [this, patch, reply](RadioPhyReply r1)
         {
-            if (!r1.ok)
+            if (!r1.result.ok)
             {
-                reply.send_nok(mplane_err_string(r1.error).c_str());
+                reply.send_nok(mplane_err_string(r1.result.error).c_str());
                 return;
             }
             if (patch.have_channel)
@@ -1183,10 +1153,9 @@ void App::console_radio_tx(const RadioUpdate& patch, ControlReply reply)
                 cfg.cca = patch.cca;
                 cfg.cca_explicit = true;
             }
-            RadioPhyView view;
-            if (parse_radio_info_body(mplane_join_body(r1), &view))
+            if (r1.phy)
             {
-                radio_supervisor.set_actual_phy(view);
+                radio_supervisor.set_actual_phy(*r1.phy);
             }
             console.send_save_slot(
                 cfg.config_slot,
@@ -1197,7 +1166,7 @@ void App::console_radio_tx(const RadioUpdate& patch, ControlReply reply)
                         reply.send_nok(mplane_err_string(r2.error).c_str());
                         return;
                     }
-                    reply.send_text(mplane_join_body(r1));
+                    reply.send_text(r1.result.text());
                 });
         });
 }
@@ -1219,7 +1188,7 @@ void App::console_radio_mplane(const std::string& line, ControlReply reply)
                             reply.send_nok(mplane_err_string(r.error).c_str());
                             return;
                         }
-                        reply.send_text(mplane_join_body(r));
+                        reply.send_text(r.text());
                     });
 }
 
@@ -1385,7 +1354,7 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
         {
             if (!r.ok)
             {
-                if (r.error == "EPROTO")
+                if (r.is_eproto())
                 {
                     radio_proto_ok = false;
                 }
@@ -1401,7 +1370,7 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
                 done(true);
             }
         },
-        [this](const MplaneResult& caps)
+        [this](const RadioCapsReply& caps)
         {
             apply_radio_caps_mplane(caps);
         },
@@ -1643,22 +1612,15 @@ int App::run()
                 return;
             }
             console.query_radio_info(
-                [this, done](MplaneResult r)
+                [this, done](RadioPhyReply r)
                 {
-                    RadioPhyView view;
-                    if (!r.ok)
+                    if (!r.phy)
                     {
-                        done(false, view);
+                        done(false, RadioPhyView{});
                         return;
                     }
-                    const std::string body = mplane_join_body(r);
-                    if (!parse_radio_info_body(body, &view))
-                    {
-                        done(false, view);
-                        return;
-                    }
-                    radio_supervisor.set_actual_phy(view);
-                    done(true, view);
+                    radio_supervisor.set_actual_phy(*r.phy);
+                    done(true, *r.phy);
                 });
         },
         [this](std::function<void(bool ok)> done)

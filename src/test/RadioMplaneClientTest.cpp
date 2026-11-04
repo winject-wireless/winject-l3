@@ -20,6 +20,10 @@ namespace
 using winject::Config;
 using winject::RadioMplaneClient;
 using winject::MplaneResult;
+using winject::RadioCapsReply;
+using winject::RadioCountersReply;
+using winject::RadioPhyReply;
+using winject::RadioPhyView;
 int open_udp_server(uint16_t* port_out)
 {
     const int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -246,10 +250,11 @@ TEST(RadioMplaneClientTest, ApplyRadioQueriesCapsFirst)
             EXPECT_TRUE(r.ok);
             done = true;
         },
-        [&](const MplaneResult& caps)
+        [&](const RadioCapsReply& caps)
         {
             caps_cb = true;
-            EXPECT_TRUE(caps.ok);
+            EXPECT_TRUE(caps.result.ok);
+            EXPECT_TRUE(caps.resolved);
         });
 
     uint8_t id = 0;
@@ -369,32 +374,44 @@ TEST(RadioMplaneClientTest, QueryRadioCountersJoinsTxAndRx)
     ASSERT_TRUE(client_connect(client, port, &err));
 
     bool done = false;
-    MplaneResult result;
+    RadioCountersReply reply;
     client.query_radio_counters(
-        [&](MplaneResult r)
+        [&](RadioCountersReply r)
         {
-            result = std::move(r);
+            reply = std::move(r);
             done = true;
         });
+    const std::string tx_line =
+        "tx_info tx_queue_sz=1 in_flight=2 dropped_invalid_frame=3 "
+        "dropped_tx_queue=4 dropped_wifi=5 ether_pkt=10 air_pkt=9 ts=11";
+    const std::string rx_line =
+        "rx_info rx_queue_sz=6 dropped_filter_mismatched=7 dropped_rx_queue=8 "
+        "dropped_no_peer=12 dropped_send_failed=13 ether_pkt=8 air_pkt=9 "
+        "ts=22";
 
     uint8_t id = 0;
     std::string line;
     ASSERT_TRUE(recv_cmd(srv, &id, &line));
     EXPECT_EQ(line, "tx_info");
-    client.on_line("OK:" + std::to_string(id) +
-                   " tx_info ether_pkt=10 air_pkt=9 ts=1");
+    client.on_line("OK:" + std::to_string(id) + " " + tx_line);
     EXPECT_FALSE(done);
 
     ASSERT_TRUE(recv_cmd(srv, &id, &line));
     EXPECT_EQ(line, "rx_info");
-    client.on_line("OK:" + std::to_string(id) +
-                   " rx_info ether_pkt=8 air_pkt=9 ts=2");
+    client.on_line("OK:" + std::to_string(id) + " " + rx_line);
 
     ASSERT_TRUE(done);
+    const MplaneResult& result = reply.result;
     EXPECT_TRUE(result.ok);
     ASSERT_EQ(result.body_lines.size(), 2u);
-    EXPECT_EQ(result.body_lines[0], "tx_info ether_pkt=10 air_pkt=9 ts=1");
-    EXPECT_EQ(result.body_lines[1], "rx_info ether_pkt=8 air_pkt=9 ts=2");
+    EXPECT_EQ(result.body_lines[0], tx_line);
+    EXPECT_EQ(result.body_lines[1], rx_line);
+    ASSERT_TRUE(reply.counters.has_value());
+    EXPECT_EQ(reply.counters->tx.queue_size, 1u);
+    EXPECT_EQ(reply.counters->tx.dropped_wifi, 5u);
+    EXPECT_EQ(reply.counters->tx.timestamp_us, 11u);
+    EXPECT_EQ(reply.counters->rx.dropped_send_failed, 13u);
+    EXPECT_EQ(reply.counters->rx.ether_packets, 8u);
     close(srv);
 }
 
@@ -411,9 +428,9 @@ TEST(RadioMplaneClientTest, QueryRadioCountersStopsOnTxError)
     bool done = false;
     MplaneResult result;
     client.query_radio_counters(
-        [&](MplaneResult r)
+        [&](RadioCountersReply r)
         {
-            result = std::move(r);
+            result = std::move(r.result);
             done = true;
         });
 
@@ -440,10 +457,12 @@ TEST(RadioMplaneClientTest, MultiLineReplyCompletesOnLastLine)
 
     bool done = false;
     MplaneResult result;
+    std::optional<RadioPhyView> phy;
     client.query_radio_info(
-        [&](MplaneResult r)
+        [&](RadioPhyReply r)
         {
-            result = std::move(r);
+            result = std::move(r.result);
+            phy = r.phy;
             done = true;
         });
 
@@ -461,6 +480,10 @@ TEST(RadioMplaneClientTest, MultiLineReplyCompletesOnLastLine)
     EXPECT_TRUE(result.ok);
     ASSERT_EQ(result.body_lines.size(), 2u);
     EXPECT_EQ(result.body_lines[1], "radio_rx rssi=-30");
+    ASSERT_TRUE(phy.has_value());
+    EXPECT_EQ(phy->channel, 1u);
+    EXPECT_EQ(phy->modulation, "OFDM_24M");
+    EXPECT_EQ(phy->rssi, -30);
     close(srv);
 }
 

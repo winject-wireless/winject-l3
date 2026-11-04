@@ -1,7 +1,10 @@
 #ifndef WINJECT_MANAGER_RADIO_MPLANE_CLIENT_H_
 #define WINJECT_MANAGER_RADIO_MPLANE_CLIENT_H_
 
+#include "mplane/MplaneResult.h"
 #include "radio/RadioConfig.h"
+#include "radio/RadioMplaneParse.h"
+#include "radio/RadioPhyView.h"
 #include "utils/Version.h"
 
 #include <bfc/socket.hpp>
@@ -18,12 +21,30 @@
 namespace winject
 {
 
-struct MplaneResult
+// Typed replies: the parsed struct plus the radio's text (result.text()).
+// The node acts on the struct; the text is only relayed.
+struct RadioPhyReply  // radio_tx_info, radio_tx
 {
-    bool ok = false;
-    std::vector<std::string> body_lines;
-    std::string payload;
+    MplaneResult result;
+    // Set when result.ok and the body parses.
+    std::optional<RadioPhyView> phy;
+};
+struct RadioCapsReply  // radio_caps_info
+{
+    MplaneResult result;
+    // True when fcs is known: an OK reply that parses, or NOK ENOSYS from a
+    // radio that predates radio_caps_info (legacy, fcs actual).
+    bool resolved = false;
+    bool legacy = false;
+    RadioFcsMode fcs = RadioFcsMode::unknown;
+    // Why it did not resolve, for the log.
     std::string error;
+};
+struct RadioCountersReply  // tx_info + rx_info
+{
+    MplaneResult result;
+    // Set when result.ok and both lines parse.
+    std::optional<RadioCounters> counters;
 };
 
 class RadioMplaneClient
@@ -71,16 +92,19 @@ public:
     void cancel_pending();
 
     void program(const RadioConfig& cfg, DoneFn done);
-    using RadioCapsFn = std::function<void(const MplaneResult&)>;
+    using PhyDoneFn = std::function<void(RadioPhyReply)>;
+    using CapsDoneFn = std::function<void(RadioCapsReply)>;
+    using CountersDoneFn = std::function<void(RadioCountersReply)>;
+    using RadioCapsFn = std::function<void(const RadioCapsReply&)>;
     using RadioVersionFn =
         std::function<void(bool known, const WinjectVersion& v)>;
     void apply_radio(const RadioConfig& cfg, uint8_t save_slot, DoneFn done,
                      RadioCapsFn on_caps = {}, RadioVersionFn on_version = {});
-    void query_radio_caps(DoneFn done);
-    void query_radio_info(DoneFn done);
+    void query_radio_caps(CapsDoneFn done);
+    void query_radio_info(PhyDoneFn done);
     // Radio tx_info then rx_info; body_lines holds both reply lines.
-    void query_radio_counters(DoneFn done);
-    void send_radio_tx(const std::string& kv_args, DoneFn done);
+    void query_radio_counters(CountersDoneFn done);
+    void send_radio_tx(const std::string& kv_args, PhyDoneFn done);
     void send_radio_reset(DoneFn done);
     void send_ping(DoneFn done);
     void send_save_slot(uint8_t slot, DoneFn done);
