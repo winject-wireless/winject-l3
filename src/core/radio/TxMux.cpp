@@ -1,6 +1,6 @@
 #include "radio/TxMux.h"
 
-#include "endpoint/Upstream.h"
+#include "endpoint/UpstreamLink.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
 #include "mplane/MplaneText.h"

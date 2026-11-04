@@ -1,6 +1,6 @@
 #include "radio/RadioUpstreamTable.h"
 
-#include "endpoint/Upstream.h"
+#include "endpoint/UpstreamLink.h"
 #include "radio/RadioDplane.h"
 
 namespace winject
@@ -17,7 +17,7 @@ bool RadioUpstreamTable::remove(size_t index)
     return true;
 }
 
-void RadioUpstreamTable::add(const std::shared_ptr<Upstream>& up,
+void RadioUpstreamTable::add(const std::shared_ptr<UpstreamLink>& up,
                              const std::shared_ptr<BoundedLossyQueue>& tx_queue,
                              const std::shared_ptr<RadioDplane>& radio,
                              uint8_t bus_tx, uint8_t bus_rx, size_t budget)

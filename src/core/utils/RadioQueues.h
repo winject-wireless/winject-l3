@@ -13,7 +13,7 @@
 namespace winject
 {
 // Reactive BFC queue; packets retain the slot prefix (route + upstream air
-// header). Upstream interprets sequence/FEC; demux only reads the route bus
+// header). UpstreamLink interprets sequence/FEC; demux only reads the route bus
 // byte.
 using ReactiveLossyQueue =
     bfc::reactive_circular_lossy_queue<bfc::shared_sized_buffer>;

@@ -1,5 +1,5 @@
-#ifndef WINJECT_MANAGER_RADIO_RADIO_MANAGER_H_
-#define WINJECT_MANAGER_RADIO_RADIO_MANAGER_H_
+#ifndef WINJECT_MANAGER_RADIO_RADIO_SUPERVISOR_H_
+#define WINJECT_MANAGER_RADIO_RADIO_SUPERVISOR_H_
 
 #include "radio/RadioPhyView.h"
 #include "utils/IOReactor.h"
@@ -19,7 +19,7 @@ class RadioDplane;
 
 // Owns TxMux pacing vs modulation, heartbeat, and periodic radio_info
 // drift/reapply.
-class RadioManager
+class RadioSupervisor
 {
 public:
     using QueryRadioInfoFn = std::function<void(
@@ -86,4 +86,4 @@ private:
 
 }  // namespace winject
 
-#endif  // WINJECT_MANAGER_RADIO_RADIO_MANAGER_H_
+#endif  // WINJECT_MANAGER_RADIO_RADIO_SUPERVISOR_H_

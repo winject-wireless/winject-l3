@@ -25,7 +25,8 @@ struct RouteHeader
     }
 };
 
-// Upstream-owned air metadata before the SDU (bytes 1..2 of the slot prefix).
+// UpstreamLink-owned air metadata before the SDU (bytes 1..2 of the slot
+// prefix).
 struct UpstreamAirHeader
 {
     static constexpr size_t k_len = 2;

@@ -1,10 +1,10 @@
-#include "endpoint/Upstream.h"
+#include "endpoint/UpstreamLink.h"
 
 #include <stdexcept>
 
 namespace winject
 {
-Upstream::Upstream(std::shared_ptr<Reactor> reactor,
+UpstreamLink::UpstreamLink(std::shared_ptr<Reactor> reactor,
                    const UpstreamConfig& config,
                    std::shared_ptr<BoundedLossyQueue> radio_tx_queue,
                    std::shared_ptr<ReactiveLossyQueue> app_tx_queue)
@@ -43,7 +43,7 @@ Upstream::Upstream(std::shared_ptr<Reactor> reactor,
     }
 }
 
-void Upstream::bind_callbacks()
+void UpstreamLink::bind_callbacks()
 {
     if (bound)
     {
@@ -79,7 +79,7 @@ void Upstream::bind_callbacks()
     reactor->wake_up();  // discover input queued before construction
 }
 
-void Upstream::teardown()
+void UpstreamLink::teardown()
 {
     if (!bound)
     {
@@ -99,7 +99,7 @@ void Upstream::teardown()
     air.stop();
 }
 
-Upstream::TxSequences Upstream::tx_sequences() const
+UpstreamLink::TxSequences UpstreamLink::tx_sequences() const
 {
     if (bound)
     {
@@ -109,7 +109,7 @@ Upstream::TxSequences Upstream::tx_sequences() const
     return {upstream_stats.air_tx, air.fec_tx_sdu_seq()};
 }
 
-void Upstream::resume_tx_sequences(const TxSequences& sequences)
+void UpstreamLink::resume_tx_sequences(const TxSequences& sequences)
 {
     if (bound)
     {
@@ -120,13 +120,13 @@ void Upstream::resume_tx_sequences(const TxSequences& sequences)
     air.set_fec_tx_sdu_seq(sequences.fec_sdu);
 }
 
-Upstream::~Upstream()
+UpstreamLink::~UpstreamLink()
 {
     unbind_callbacks();
     air.stop();
 }
 
-void Upstream::unbind_callbacks()
+void UpstreamLink::unbind_callbacks()
 {
     if (!bound)
     {
@@ -145,11 +145,11 @@ void Upstream::unbind_callbacks()
     bound = false;
 }
 
-void Upstream::submit_datagram(const uint8_t* data, size_t len)
+void UpstreamLink::submit_datagram(const uint8_t* data, size_t len)
 {
     air.accept_app_datagram(data, len);
 }
-void Upstream::drain_app_tx_queue()
+void UpstreamLink::drain_app_tx_queue()
 {
     for (int n = 0; n < 32; ++n)
     {
@@ -169,7 +169,7 @@ void Upstream::drain_app_tx_queue()
         reactor->wake_up();
     }
 }
-void Upstream::drain_radio_rx()
+void UpstreamLink::drain_radio_rx()
 {
     for (int n = 0; n < 32; ++n)
     {
@@ -201,12 +201,12 @@ void Upstream::drain_radio_rx()
         reactor->wake_up();
     }
 }
-UpstreamStats Upstream::stats() const
+UpstreamStats UpstreamLink::stats() const
 {
     std::lock_guard<std::mutex> lock(stats_mu);
     return upstream_stats;
 }
-uint64_t Upstream::collect_air_seq_loss_delta()
+uint64_t UpstreamLink::collect_air_seq_loss_delta()
 {
     std::lock_guard<std::mutex> lock(stats_mu);
     const uint64_t delta =
@@ -214,18 +214,18 @@ uint64_t Upstream::collect_air_seq_loss_delta()
     upstream_stats.air_rx_gap_loss_seen = upstream_stats.air_rx_gap_loss;
     return delta;
 }
-Upstream::RxCounters Upstream::rx_counters() const
+UpstreamLink::RxCounters UpstreamLink::rx_counters() const
 {
     std::lock_guard<std::mutex> lock(rx_counters_mu);
     return stored_rx_counters;
 }
-Upstream::TxCounters Upstream::tx_counters() const
+UpstreamLink::TxCounters UpstreamLink::tx_counters() const
 {
     return {air.app_tx_packets(), air.app_tx_bytes(), air.app_rx_oversize_pkt(),
             air.tx_queue_drops(),
             app_tx_queue_evictions_acc.load(std::memory_order_relaxed)};
 }
-void Upstream::get_fec(FecType* type, int* k, int* n) const
+void UpstreamLink::get_fec(FecType* type, int* k, int* n) const
 {
     if (type)
     {
@@ -240,7 +240,7 @@ void Upstream::get_fec(FecType* type, int* k, int* n) const
         *n = upstream_config.fec_type == FecType::none ? 0 : upstream_config.fec_n;
     }
 }
-void Upstream::tx_pending_stats(uint64_t* packets, uint64_t* bytes) const
+void UpstreamLink::tx_pending_stats(uint64_t* packets, uint64_t* bytes) const
 {
     uint64_t p = 0, b = 0, qp = 0, qb = 0;
     air.tx_pending_stats(&p, &b);

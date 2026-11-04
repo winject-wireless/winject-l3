@@ -1,4 +1,4 @@
-#include "radio/RadioManager.h"
+#include "radio/RadioSupervisor.h"
 
 #include "radio/PhyAirtime.h"
 #include "radio/RadioConfig.h"
@@ -10,7 +10,7 @@
 namespace winject
 {
 
-void RadioManager::bind(RadioConfig* cfg, TxMux* tx_mux, RadioDplane* wifi,
+void RadioSupervisor::bind(RadioConfig* cfg, TxMux* tx_mux, RadioDplane* wifi,
                         IOReactor* reactor)
 {
     this->cfg = cfg;
@@ -22,7 +22,7 @@ void RadioManager::bind(RadioConfig* cfg, TxMux* tx_mux, RadioDplane* wifi,
     info_timer.bind(reactor);
 }
 
-void RadioManager::set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reapply,
+void RadioSupervisor::set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reapply,
                                    PingFn ping, DropConsoleFn drop_console)
 {
     query_info = std::move(query);
@@ -31,12 +31,12 @@ void RadioManager::set_console_ops(QueryRadioInfoFn query, ReapplyRadioFn reappl
     this->drop_console = std::move(drop_console);
 }
 
-void RadioManager::set_reconcile_filter(ReconcileFilterFn reconcile)
+void RadioSupervisor::set_reconcile_filter(ReconcileFilterFn reconcile)
 {
     reconcile_filter = std::move(reconcile);
 }
 
-void RadioManager::configure_tx_mux()
+void RadioSupervisor::configure_tx_mux()
 {
     if (cfg == nullptr || tx_mux == nullptr)
     {
@@ -46,7 +46,7 @@ void RadioManager::configure_tx_mux()
     sync_pacing_for_modulation(cfg->modulation);
 }
 
-void RadioManager::sync_pacing_for_modulation(const std::string& modulation)
+void RadioSupervisor::sync_pacing_for_modulation(const std::string& modulation)
 {
     if (cfg == nullptr || tx_mux == nullptr)
     {
@@ -67,7 +67,7 @@ void RadioManager::sync_pacing_for_modulation(const std::string& modulation)
             static_cast<unsigned>(cfg->channel));
 }
 
-void RadioManager::on_phy_programmed()
+void RadioSupervisor::on_phy_programmed()
 {
     if (cfg == nullptr)
     {
@@ -80,7 +80,7 @@ void RadioManager::on_phy_programmed()
     sync_pacing_for_modulation(cfg->modulation);
 }
 
-void RadioManager::on_console_up()
+void RadioSupervisor::on_console_up()
 {
     on_console_down();
     ping_timer.arm(k_ping_interval,
@@ -100,7 +100,7 @@ void RadioManager::on_console_up()
                     });
 }
 
-void RadioManager::on_console_down()
+void RadioSupervisor::on_console_down()
 {
     gen++;
     ping_timer.cancel();
@@ -109,7 +109,7 @@ void RadioManager::on_console_down()
     info_timer.cancel();
 }
 
-void RadioManager::on_ping_due()
+void RadioSupervisor::on_ping_due()
 {
     if (!ping || !drop_console)
     {
@@ -143,13 +143,13 @@ void RadioManager::on_ping_due()
         });
 }
 
-void RadioManager::on_pong_timeout()
+void RadioSupervisor::on_pong_timeout()
 {
     LOG_WRN("console ping timeout");
     drop_console();
 }
 
-void RadioManager::on_register_due()
+void RadioSupervisor::on_register_due()
 {
     if (wifi != nullptr)
     {
@@ -162,7 +162,7 @@ void RadioManager::on_register_due()
                         });
 }
 
-void RadioManager::on_info_due()
+void RadioSupervisor::on_info_due()
 {
     info_timer.arm(k_radio_info_interval,
                     [this]()

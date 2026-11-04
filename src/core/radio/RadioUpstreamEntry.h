@@ -11,13 +11,13 @@
 namespace winject
 {
 
-class Upstream;
+class UpstreamLink;
 class RadioDplane;
 
 // One configured host upstream on the shared radio (not an MPDU PduSlot).
 struct RadioUpstreamEntry
 {
-    std::weak_ptr<Upstream>
+    std::weak_ptr<UpstreamLink>
         up;  // statistics only; registration does not own endpoint
     std::shared_ptr<ReactiveLossyQueue> rx_queue;
     // Oldest packets the demux evicted from rx_queue.

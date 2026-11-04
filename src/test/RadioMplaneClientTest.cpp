@@ -1,6 +1,6 @@
 #include "Config.h"
 #include "WinjectBuildVersion.h"
-#include "mplane/ConsoleClient.h"
+#include "mplane/RadioMplaneClient.h"
 #include "mplane/MplaneCorrelation.h"
 
 #include <arpa/inet.h>
@@ -18,7 +18,7 @@
 namespace
 {
 using winject::Config;
-using winject::ConsoleClient;
+using winject::RadioMplaneClient;
 using winject::MplaneResult;
 int open_udp_server(uint16_t* port_out)
 {
@@ -85,7 +85,7 @@ std::string version_ok_payload()
     return std::string("version ver=") + WINJECT_VERSION_STRING + " proto=1.0";
 }
 
-bool client_connect(ConsoleClient& client, uint16_t port, std::string* err)
+bool client_connect(RadioMplaneClient& client, uint16_t port, std::string* err)
 {
     return client.start_connect(loopback_mplane(port), err) &&
            client.finish_connect(err);
@@ -93,13 +93,13 @@ bool client_connect(ConsoleClient& client, uint16_t port, std::string* err)
 
 }  // namespace
 
-TEST(ConsoleClientTest, OutOfOrderRepliesCompleteCorrectCallbacks)
+TEST(RadioMplaneClientTest, OutOfOrderRepliesCompleteCorrectCallbacks)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -144,20 +144,20 @@ TEST(ConsoleClientTest, OutOfOrderRepliesCompleteCorrectCallbacks)
     close(srv);
 }
 
-TEST(ConsoleClientTest, UnknownReplyIdIsIgnored)
+TEST(RadioMplaneClientTest, UnknownReplyIdIsIgnored)
 {
-    ConsoleClient client;
+    RadioMplaneClient client;
     client.on_line("OK:42 orphan");
     SUCCEED();
 }
 
-TEST(ConsoleClientTest, DeadlineCompletesWithTimeout)
+TEST(RadioMplaneClientTest, DeadlineCompletesWithTimeout)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -184,13 +184,13 @@ TEST(ConsoleClientTest, DeadlineCompletesWithTimeout)
     close(srv);
 }
 
-TEST(ConsoleClientTest, ReportsRequestDeadlines)
+TEST(RadioMplaneClientTest, ReportsRequestDeadlines)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -221,7 +221,7 @@ TEST(ConsoleClientTest, ReportsRequestDeadlines)
     close(srv);
 }
 
-TEST(ConsoleClientTest, ApplyRadioQueriesCapsFirst)
+TEST(RadioMplaneClientTest, ApplyRadioQueriesCapsFirst)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
@@ -233,7 +233,7 @@ TEST(ConsoleClientTest, ApplyRadioQueriesCapsFirst)
     cfg.modulation = "OFDM_24M";
     cfg.domain = 0x1234;
 
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -283,7 +283,7 @@ TEST(ConsoleClientTest, ApplyRadioQueriesCapsFirst)
     close(srv);
 }
 
-TEST(ConsoleClientTest, ApplyRejectsMissingVersion)
+TEST(RadioMplaneClientTest, ApplyRejectsMissingVersion)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
@@ -295,7 +295,7 @@ TEST(ConsoleClientTest, ApplyRejectsMissingVersion)
     cfg.modulation = "OFDM_24M";
     cfg.domain = 0x1234;
 
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -322,7 +322,7 @@ TEST(ConsoleClientTest, ApplyRejectsMissingVersion)
     close(srv);
 }
 
-TEST(ConsoleClientTest, ApplyRadioSendsCcaWhenConfigured)
+TEST(RadioMplaneClientTest, ApplyRadioSendsCcaWhenConfigured)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
@@ -336,7 +336,7 @@ TEST(ConsoleClientTest, ApplyRadioSendsCcaWhenConfigured)
     cfg.cca = false;
     cfg.cca_explicit = true;
 
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -358,13 +358,13 @@ TEST(ConsoleClientTest, ApplyRadioSendsCcaWhenConfigured)
     close(srv);
 }
 
-TEST(ConsoleClientTest, QueryRadioCountersJoinsTxAndRx)
+TEST(RadioMplaneClientTest, QueryRadioCountersJoinsTxAndRx)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -398,13 +398,13 @@ TEST(ConsoleClientTest, QueryRadioCountersJoinsTxAndRx)
     close(srv);
 }
 
-TEST(ConsoleClientTest, QueryRadioCountersStopsOnTxError)
+TEST(RadioMplaneClientTest, QueryRadioCountersStopsOnTxError)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -428,13 +428,13 @@ TEST(ConsoleClientTest, QueryRadioCountersStopsOnTxError)
     close(srv);
 }
 
-TEST(ConsoleClientTest, MultiLineReplyCompletesOnLastLine)
+TEST(RadioMplaneClientTest, MultiLineReplyCompletesOnLastLine)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
 
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -464,14 +464,14 @@ TEST(ConsoleClientTest, MultiLineReplyCompletesOnLastLine)
     close(srv);
 }
 
-// A failure callback that drops the console (as RadioManager's ping handler
+// A failure callback that drops the console (as RadioSupervisor's ping handler
 // does) re-enters cancel_pending(). Each callback must run exactly once.
-TEST(ConsoleClientTest, CancelFromCallbackRunsEachOnce)
+TEST(RadioMplaneClientTest, CancelFromCallbackRunsEachOnce)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 
@@ -499,12 +499,12 @@ TEST(ConsoleClientTest, CancelFromCallbackRunsEachOnce)
 
 // A timeout callback that drops the console must not leave poll_deadlines()
 // walking a cleared map; the other expired request still completes once.
-TEST(ConsoleClientTest, TimeoutCallbackMayCancelPending)
+TEST(RadioMplaneClientTest, TimeoutCallbackMayCancelPending)
 {
     uint16_t port = 0;
     const int srv = open_udp_server(&port);
     ASSERT_GE(srv, 0);
-    ConsoleClient client;
+    RadioMplaneClient client;
     std::string err;
     ASSERT_TRUE(client_connect(client, port, &err));
 

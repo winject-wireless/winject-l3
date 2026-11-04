@@ -7,9 +7,9 @@
 #include "console/ConsoleService.h"
 #include "endpoint/QueueUpstream.h"
 #include "endpoint/UDPUpstream.h"
-#include "mplane/ConsoleClient.h"
+#include "mplane/RadioMplaneClient.h"
 #include "radio/RadioDplane.h"
-#include "radio/RadioManager.h"
+#include "radio/RadioSupervisor.h"
 #include "radio/RadioUpstreamTable.h"
 #include "radio/RxDemux.h"
 #include "radio/TxMux.h"
@@ -73,10 +73,10 @@ private:
     void refresh_host_metrics();
 
     // resume continues a predecessor's TX sequences (hot-swap).
-    std::shared_ptr<Upstream> construct_upstream(
+    std::shared_ptr<UpstreamLink> construct_upstream(
         const UpstreamConfig& config,
         const std::shared_ptr<BoundedLossyQueue>& tx_queue,
-        const Upstream::TxSequences* resume = nullptr);
+        const UpstreamLink::TxSequences* resume = nullptr);
     bool replace_upstream(size_t index, const UpstreamConfig& config,
                           std::string* error);
     bool set_upstream_scheduler_budget(size_t index, size_t budget,
@@ -118,22 +118,23 @@ private:
 
     Config cfg;
     std::shared_ptr<IOReactor> reactor = std::make_shared<IOReactor>();
-    ConsoleClient console;
+    RadioMplaneClient console;
     ConsoleService mgr_console;
     RadioUpstreamTable radio_upstream_table;
     TxMux tx_mux{radio_upstream_table};
-    RadioManager radio_manager;
+    RadioSupervisor radio_supervisor;
     RxDemux rx_demux{radio_upstream_table};
     std::shared_ptr<RadioDplane> radio;
     // Queue radio TX shares the host's blocking data-plane reactor. In
     // particular, ESP-IDF poll() must not spin on sub-ms pacing deadlines.
-    std::shared_ptr<Upstream::Reactor> radio_queue_reactor;
-    std::vector<std::shared_ptr<Upstream>> upstreams;
-    std::shared_ptr<Upstream::Reactor> upstream_reactor =
-        std::make_shared<Upstream::Reactor>();
+    std::shared_ptr<UpstreamLink::Reactor> radio_queue_reactor;
+    std::vector<std::shared_ptr<UpstreamLink>> upstreams;
+    std::shared_ptr<UpstreamLink::Reactor> upstream_reactor =
+        std::make_shared<UpstreamLink::Reactor>();
     std::thread upstream_reactor_thread;
     OneShotTimer reconnect_timer;
-    // Runs ConsoleClient::poll_deadlines() at the earliest request deadline.
+    // Runs RadioMplaneClient::poll_deadlines() at the earliest request
+    // deadline.
     OneShotTimer console_deadline_timer;
     std::chrono::steady_clock::time_point console_deadline_at{};
     OneShotTimer stats_timer;

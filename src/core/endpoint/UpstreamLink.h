@@ -17,7 +17,7 @@ namespace winject
 // After make_shared, call bind_callbacks before publishing the instance.
 // Hot-swap calls teardown() on the IO thread before dropping the last ref;
 // once it returns no handler or FEC timer of this instance runs.
-class Upstream : public std::enable_shared_from_this<Upstream>
+class UpstreamLink : public std::enable_shared_from_this<UpstreamLink>
 {
 public:
     using Reactor = bfc::cv_reactor<>;
@@ -55,7 +55,7 @@ public:
     virtual void bind_callbacks();
     // Any thread but the CV reactor's; returns without waiting for the reactor.
     virtual void teardown();
-    virtual ~Upstream();
+    virtual ~UpstreamLink();
     // Only while unbound: after teardown(), and before bind_callbacks().
     TxSequences tx_sequences() const;
     void resume_tx_sequences(const TxSequences& sequences);
@@ -154,9 +154,9 @@ public:
     }
 
 protected:
-    Upstream(std::shared_ptr<Reactor> reactor, const UpstreamConfig& config,
-             std::shared_ptr<BoundedLossyQueue> radio_tx_queue,
-             std::shared_ptr<ReactiveLossyQueue> app_tx_queue = {});
+    UpstreamLink(std::shared_ptr<Reactor> reactor, const UpstreamConfig& config,
+                 std::shared_ptr<BoundedLossyQueue> radio_tx_queue,
+                 std::shared_ptr<ReactiveLossyQueue> app_tx_queue = {});
     // Executed only by the supplied CV reactor, including FEC timer delivery.
     virtual void deliver_datagram(const uint8_t* data, size_t len) = 0;
     virtual void deliver_owned_datagram(bfc::shared_sized_buffer packet)

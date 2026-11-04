@@ -12,14 +12,14 @@
 namespace winject
 {
 
-class Upstream;
+class UpstreamLink;
 class RadioDplane;
 
 // Per-upstream registration shared by TxMux (host→air) and RxDemux (air→host).
 class RadioUpstreamTable
 {
 public:
-    void add(const std::shared_ptr<Upstream>& up,
+    void add(const std::shared_ptr<UpstreamLink>& up,
              const std::shared_ptr<BoundedLossyQueue>& tx_queue,
              const std::shared_ptr<RadioDplane>& radio, uint8_t bus_tx,
              uint8_t bus_rx, size_t budget);

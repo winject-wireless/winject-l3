@@ -1,4 +1,4 @@
-#include "endpoint/Upstream.h"
+#include "endpoint/UpstreamLink.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
 #include "radio/RadioDefs.h"
@@ -15,7 +15,7 @@ using winject::LCHeader;
 using winject::Mpdu;
 using winject::RadioUpstreamTable;
 using winject::RxDemux;
-using winject::Upstream;
+using winject::UpstreamLink;
 
 bool assign_tx_sequence(Mpdu& mpdu)
 {

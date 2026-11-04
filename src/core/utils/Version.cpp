@@ -1,6 +1,6 @@
 #include "utils/Version.h"
 
-#include "mplane/ConsoleClient.h"
+#include "mplane/RadioMplaneClient.h"
 #include "WinjectBuildVersion.h"
 
 #include <cctype>

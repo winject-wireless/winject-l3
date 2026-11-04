@@ -27,7 +27,7 @@ QueueUpstream::QueueUpstream(std::shared_ptr<Reactor> reactor,
                              std::shared_ptr<BoundedLossyQueue> radio_tx_queue,
                              std::shared_ptr<ReactiveLossyQueue> app_tx_queue,
                              std::shared_ptr<ReactiveLossyQueue> app_rx_queue)
-    : Upstream(std::move(reactor), config, std::move(radio_tx_queue),
+    : UpstreamLink(std::move(reactor), config, std::move(radio_tx_queue),
                validate_app_queues(app_tx_queue, app_rx_queue)),
       app_rx_queue(std::move(app_rx_queue))
 {
@@ -54,7 +54,7 @@ QueueUpstream::~QueueUpstream()
 void QueueUpstream::teardown()
 {
     app_transport_->disconnect();
-    Upstream::teardown();
+    UpstreamLink::teardown();
     release_claim();
 }
 void QueueUpstream::release_claim()

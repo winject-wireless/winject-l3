@@ -39,8 +39,8 @@ std::vector<uint8_t> bytes(const Packet& p)
 class UpstreamTest : public ::testing::Test
 {
 protected:
-    std::shared_ptr<Upstream::Reactor> cv =
-        std::make_shared<Upstream::Reactor>();
+    std::shared_ptr<UpstreamLink::Reactor> cv =
+        std::make_shared<UpstreamLink::Reactor>();
     std::shared_ptr<ReactiveLossyQueue> app_tx_queue =
         std::make_shared<ReactiveLossyQueue>();
     std::shared_ptr<ReactiveLossyQueue> app_rx_queue =
@@ -48,7 +48,7 @@ protected:
     std::shared_ptr<BoundedLossyQueue> tx = std::make_shared<BoundedLossyQueue>();
     UpstreamConfig cfg;
     std::shared_ptr<IOReactor> io = std::make_shared<IOReactor>();
-    std::shared_ptr<Upstream> up;
+    std::shared_ptr<UpstreamLink> up;
     void SetUp() override
     {
         app_tx_queue->set_capacity(64);
@@ -381,7 +381,7 @@ TEST_F(UpstreamTest, DestructorDropsPartialFecAndPendingRx)
     pump_cv(1);
     auto inbox = up->rx_queue();
     inbox->push(lc_packet(packet({7})));
-    std::weak_ptr<Upstream> weak = up;
+    std::weak_ptr<UpstreamLink> weak = up;
     up.reset();
     EXPECT_TRUE(weak.expired());
     pump_cv(20);
@@ -406,7 +406,7 @@ TEST_F(UpstreamTest, ExtractedFecTimerCannotUseDestroyedEndpoint)
                             });
     app_tx_queue->push(packet({1}));
     pump_cv(1);
-    cv->get_timer().schedule(Upstream::Reactor::timer_t::current_time_us() +
+    cv->get_timer().schedule(UpstreamLink::Reactor::timer_t::current_time_us() +
                              1000000);
     EXPECT_FALSE(up);
     EXPECT_FALSE(tx->has_data());
@@ -439,9 +439,9 @@ TEST_F(UpstreamTest, TeardownReleasesInputClaim)
 // Runs the reactor on a worker thread for one test.
 struct CvWorker
 {
-    std::shared_ptr<Upstream::Reactor> cv;
+    std::shared_ptr<UpstreamLink::Reactor> cv;
     std::thread thread;
-    explicit CvWorker(std::shared_ptr<Upstream::Reactor> reactor)
+    explicit CvWorker(std::shared_ptr<UpstreamLink::Reactor> reactor)
         : cv(std::move(reactor)),
           thread(
               [cv = cv]

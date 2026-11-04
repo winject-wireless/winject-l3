@@ -1,13 +1,13 @@
 #ifndef WINJECT_MANAGER_UDP_UPSTREAM_H_
 #define WINJECT_MANAGER_UDP_UPSTREAM_H_
-#include "endpoint/Upstream.h"
+#include "endpoint/UpstreamLink.h"
 #include "utils/IOReactor.h"
 
 #include <bfc/socket.hpp>
 #include <memory>
 namespace winject
 {
-class UDPUpstream final : public Upstream
+class UDPUpstream final : public UpstreamLink
 {
 public:
     UDPUpstream(std::shared_ptr<Reactor> reactor, std::shared_ptr<IOReactor> io,

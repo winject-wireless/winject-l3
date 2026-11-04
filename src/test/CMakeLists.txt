@@ -43,7 +43,7 @@ add_executable(winject-tests
     LCHeaderTest.cpp
     PhyAirtimeTest.cpp
     RxDemuxTest.cpp
-    ConsoleClientTest.cpp
+    RadioMplaneClientTest.cpp
     ConsoleServiceTest.cpp
     ConsoleServiceSocketTest.cpp
     MplaneCorrelationTest.cpp

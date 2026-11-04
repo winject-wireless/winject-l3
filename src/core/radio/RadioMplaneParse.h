@@ -1,7 +1,7 @@
 #ifndef WINJECT_MANAGER_RADIO_RADIO_MPLANE_PARSE_H_
 #define WINJECT_MANAGER_RADIO_RADIO_MPLANE_PARSE_H_
 
-#include "mplane/ConsoleClient.h"
+#include "mplane/RadioMplaneClient.h"
 #include "radio/RadioDefs.h"
 #include "radio/RadioPhyView.h"
 

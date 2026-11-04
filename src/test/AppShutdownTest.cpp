@@ -178,7 +178,7 @@ TEST_P(AppUpstreamReplacementTest,
         bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>;
     auto input = std::make_shared<Queue>();
     auto output = std::make_shared<Queue>();
-    auto cv = std::make_shared<Upstream::Reactor>();
+    auto cv = std::make_shared<UpstreamLink::Reactor>();
     input->set_capacity(16);
     output->set_capacity(16);
     ASSERT_TRUE(Registry::get_instance().add("replace-in", input));
@@ -186,7 +186,7 @@ TEST_P(AppUpstreamReplacementTest,
     ASSERT_TRUE(bfc::cv_reactor_registry::get_instance().add("replace-cv", cv));
     struct Cleanup
     {
-        std::shared_ptr<Upstream::Reactor> cv;
+        std::shared_ptr<UpstreamLink::Reactor> cv;
         std::thread thread;
         ~Cleanup()
         {
@@ -393,7 +393,7 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
     auto app_out = std::make_shared<Queue>();
     auto inject = std::make_shared<Queue>();
     auto forward = std::make_shared<Queue>();
-    auto cv = std::make_shared<Upstream::Reactor>();
+    auto cv = std::make_shared<UpstreamLink::Reactor>();
     for (auto* q : {&app_in, &app_out, &inject, &forward})
     {
         (*q)->set_capacity(64);
@@ -407,7 +407,7 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
     {
         std::shared_ptr<Queue> inject;
         std::shared_ptr<Queue> forward;
-        std::shared_ptr<Upstream::Reactor> reactor;
+        std::shared_ptr<UpstreamLink::Reactor> reactor;
         std::atomic<int> registrations{0};
         std::atomic<int> injected{0};
         std::atomic<bool> saw_tx_deadline{false};
@@ -444,7 +444,7 @@ TEST(AppQueueDplaneTest, UpstreamDataCrossesQueueDplaneBothWays)
                      });
     struct Cleanup
     {
-        std::shared_ptr<Upstream::Reactor> cv;
+        std::shared_ptr<UpstreamLink::Reactor> cv;
         std::shared_ptr<Queue> inject;
         std::thread thread;
         ~Cleanup()

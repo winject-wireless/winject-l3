@@ -1,10 +1,10 @@
 #ifndef WINJECT_MANAGER_QUEUE_UPSTREAM_H_
 #define WINJECT_MANAGER_QUEUE_UPSTREAM_H_
-#include "endpoint/Upstream.h"
+#include "endpoint/UpstreamLink.h"
 #include "endpoint/UpstreamQueue.h"
 namespace winject
 {
-class QueueUpstream final : public Upstream
+class QueueUpstream final : public UpstreamLink
 {
 public:
     QueueUpstream(std::shared_ptr<Reactor> reactor,

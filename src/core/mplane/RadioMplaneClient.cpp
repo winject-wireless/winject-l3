@@ -1,4 +1,4 @@
-#include "mplane/ConsoleClient.h"
+#include "mplane/RadioMplaneClient.h"
 
 #include "mplane/MplaneCorrelation.h"
 #include "mplane/MplaneText.h"
@@ -31,19 +31,19 @@ std::string format_radio_tx_cmd(const RadioConfig& cfg)
 
 }  // namespace
 
-ConsoleClient::~ConsoleClient()
+RadioMplaneClient::~RadioMplaneClient()
 {
     close();
 }
 
-void ConsoleClient::close()
+void RadioMplaneClient::close()
 {
     cancel_pending();
     bfc::socket(std::move(sock));
     pending.clear();
 }
 
-bool ConsoleClient::start_connect(const sockaddr_in& radio_mplane,
+bool RadioMplaneClient::start_connect(const sockaddr_in& radio_mplane,
                                   std::string* error)
 {
     close();
@@ -64,7 +64,7 @@ bool ConsoleClient::start_connect(const sockaddr_in& radio_mplane,
     return true;
 }
 
-bool ConsoleClient::finish_connect(std::string* error)
+bool RadioMplaneClient::finish_connect(std::string* error)
 {
     if (sock.fd() < 0)
     {
@@ -88,7 +88,7 @@ bool ConsoleClient::finish_connect(std::string* error)
     return true;
 }
 
-bool ConsoleClient::send_wire(const std::string& wire, std::string* error)
+bool RadioMplaneClient::send_wire(const std::string& wire, std::string* error)
 {
     size_t off = 0;
     while (off < wire.size())
@@ -122,7 +122,7 @@ bool ConsoleClient::send_wire(const std::string& wire, std::string* error)
 // Callbacks may drop the console, which calls back into cancel_pending(), or
 // issue new requests. Take the pending set out first so each callback runs once
 // and no iterator into pending_reqs is live while they run.
-void ConsoleClient::cancel_pending()
+void RadioMplaneClient::cancel_pending()
 {
     std::map<uint8_t, Pending> reqs;
     reqs.swap(pending_reqs);
@@ -138,7 +138,7 @@ void ConsoleClient::cancel_pending()
     }
 }
 
-void ConsoleClient::complete(uint8_t id, MplaneResult result)
+void RadioMplaneClient::complete(uint8_t id, MplaneResult result)
 {
     auto it = pending_reqs.find(id);
     if (it == pending_reqs.end())
@@ -153,12 +153,12 @@ void ConsoleClient::complete(uint8_t id, MplaneResult result)
     }
 }
 
-bool ConsoleClient::request(const std::string& mplane_line, DoneFn done)
+bool RadioMplaneClient::request(const std::string& mplane_line, DoneFn done)
 {
     return request(mplane_line, default_timeout, std::move(done));
 }
 
-bool ConsoleClient::request(const std::string& mplane_line,
+bool RadioMplaneClient::request(const std::string& mplane_line,
                             std::chrono::milliseconds timeout, DoneFn done)
 {
     if (!done)
@@ -200,12 +200,12 @@ bool ConsoleClient::request(const std::string& mplane_line,
     return true;
 }
 
-void ConsoleClient::on_line(const std::string& line)
+void RadioMplaneClient::on_line(const std::string& line)
 {
     handle_line(line, true);
 }
 
-void ConsoleClient::on_lines(const std::vector<std::string>& lines)
+void RadioMplaneClient::on_lines(const std::vector<std::string>& lines)
 {
     std::vector<int> ids(lines.size(), -1);
     for (size_t i = 0; i < lines.size(); ++i)
@@ -232,7 +232,7 @@ void ConsoleClient::on_lines(const std::vector<std::string>& lines)
     }
 }
 
-void ConsoleClient::handle_line(const std::string& line, bool last_for_id)
+void RadioMplaneClient::handle_line(const std::string& line, bool last_for_id)
 {
     uint8_t id = 0;
     bool ok = false;
@@ -280,7 +280,7 @@ void ConsoleClient::handle_line(const std::string& line, bool last_for_id)
     complete(id, std::move(r));
 }
 
-void ConsoleClient::poll_deadlines(std::chrono::steady_clock::time_point now)
+void RadioMplaneClient::poll_deadlines(std::chrono::steady_clock::time_point now)
 {
     // Collect first: a timeout callback may drop the console and clear
     // pending_reqs (see cancel_pending).
@@ -308,7 +308,7 @@ void ConsoleClient::poll_deadlines(std::chrono::steady_clock::time_point now)
 }
 
 std::optional<std::chrono::steady_clock::time_point>
-ConsoleClient::next_deadline() const
+RadioMplaneClient::next_deadline() const
 {
     std::optional<std::chrono::steady_clock::time_point> next;
     for (const auto& entry : pending_reqs)
@@ -321,7 +321,7 @@ ConsoleClient::next_deadline() const
     return next;
 }
 
-void ConsoleClient::append_recv(const char* data, size_t n)
+void RadioMplaneClient::append_recv(const char* data, size_t n)
 {
     if (data == nullptr || n == 0)
     {
@@ -330,7 +330,7 @@ void ConsoleClient::append_recv(const char* data, size_t n)
     pending.append(data, n);
 }
 
-bool ConsoleClient::pop_line(std::string* line)
+bool RadioMplaneClient::pop_line(std::string* line)
 {
     const auto nl = pending.find('\n');
     if (nl == std::string::npos)
@@ -346,17 +346,17 @@ bool ConsoleClient::pop_line(std::string* line)
     return true;
 }
 
-void ConsoleClient::clear_pending()
+void RadioMplaneClient::clear_pending()
 {
     pending.clear();
 }
 
-void ConsoleClient::send_ping(DoneFn done)
+void RadioMplaneClient::send_ping(DoneFn done)
 {
     request("ping", std::move(done));
 }
 
-void ConsoleClient::send_rx_filter(uint16_t domain, DoneFn done)
+void RadioMplaneClient::send_rx_filter(uint16_t domain, DoneFn done)
 {
     if (domain == 0)
     {
@@ -382,22 +382,22 @@ void ConsoleClient::send_rx_filter(uint16_t domain, DoneFn done)
     request("rx_filter_addr3 addr=" + mac, std::move(done));
 }
 
-void ConsoleClient::send_save_slot(uint8_t slot, DoneFn done)
+void RadioMplaneClient::send_save_slot(uint8_t slot, DoneFn done)
 {
     request("save " + std::to_string(slot), std::move(done));
 }
 
-void ConsoleClient::send_load_slot(uint8_t slot, DoneFn done)
+void RadioMplaneClient::send_load_slot(uint8_t slot, DoneFn done)
 {
     request("load " + std::to_string(slot), std::move(done));
 }
 
-void ConsoleClient::query_radio_caps(DoneFn done)
+void RadioMplaneClient::query_radio_caps(DoneFn done)
 {
     request("radio_caps_info", std::move(done));
 }
 
-void ConsoleClient::query_radio_info(DoneFn done)
+void RadioMplaneClient::query_radio_info(DoneFn done)
 {
     request("radio_tx_info",
             [done = std::move(done)](MplaneResult r)
@@ -415,7 +415,7 @@ void ConsoleClient::query_radio_info(DoneFn done)
             });
 }
 
-void ConsoleClient::query_radio_counters(DoneFn done)
+void RadioMplaneClient::query_radio_counters(DoneFn done)
 {
     request("tx_info",
             [this, done = std::move(done)](MplaneResult tx)
@@ -451,7 +451,7 @@ void ConsoleClient::query_radio_counters(DoneFn done)
             });
 }
 
-void ConsoleClient::send_radio_tx(const std::string& kv_args, DoneFn done)
+void RadioMplaneClient::send_radio_tx(const std::string& kv_args, DoneFn done)
 {
     if (kv_args.empty())
     {
@@ -466,12 +466,12 @@ void ConsoleClient::send_radio_tx(const std::string& kv_args, DoneFn done)
     request("radio_tx " + kv_args, std::move(done));
 }
 
-void ConsoleClient::send_radio_reset(DoneFn done)
+void RadioMplaneClient::send_radio_reset(DoneFn done)
 {
     request("reset", std::move(done));
 }
 
-void ConsoleClient::apply_radio(const RadioConfig& cfg, uint8_t save_slot,
+void RadioMplaneClient::apply_radio(const RadioConfig& cfg, uint8_t save_slot,
                                 DoneFn done, RadioCapsFn on_caps,
                                 RadioVersionFn on_version)
 {
@@ -583,7 +583,7 @@ void ConsoleClient::apply_radio(const RadioConfig& cfg, uint8_t save_slot,
         });
 }
 
-void ConsoleClient::program(const RadioConfig& cfg, DoneFn done)
+void RadioMplaneClient::program(const RadioConfig& cfg, DoneFn done)
 {
     std::string err;
     if (!start_connect(cfg.radio_device.mplane, &err) || !finish_connect(&err))

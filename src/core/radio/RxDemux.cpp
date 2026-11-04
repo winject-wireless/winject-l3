@@ -1,6 +1,6 @@
 #include "radio/RxDemux.h"
 
-#include "endpoint/Upstream.h"
+#include "endpoint/UpstreamLink.h"
 #include "frames/LCHeader.h"
 #include "frames/Mpdu.h"
 #include "radio/RadioDefs.h"

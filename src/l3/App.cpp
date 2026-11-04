@@ -70,7 +70,7 @@ bool App::add_upstream(const UpstreamConfig& uc)
         return false;
     }
     auto tx_queue = tx_mux.make_tx_queue();
-    std::shared_ptr<Upstream> up;
+    std::shared_ptr<UpstreamLink> up;
     try
     {
         up = construct_upstream(uc, tx_queue);
@@ -174,8 +174,8 @@ bool App::setup_upstreams()
     {
         return false;
     }
-    radio_manager.bind(&cfg, &tx_mux, radio.get(), reactor.get());
-    radio_manager.configure_tx_mux();
+    radio_supervisor.bind(&cfg, &tx_mux, radio.get(), reactor.get());
+    radio_supervisor.configure_tx_mux();
     rx_demux.set_domain(cfg.domain);
     for (const auto& uc : cfg.upstreams)
     {
@@ -187,9 +187,9 @@ bool App::setup_upstreams()
     return true;
 }
 
-std::shared_ptr<Upstream> App::construct_upstream(
+std::shared_ptr<UpstreamLink> App::construct_upstream(
     const UpstreamConfig& uc, const std::shared_ptr<BoundedLossyQueue>& tx_queue,
-    const Upstream::TxSequences* resume)
+    const UpstreamLink::TxSequences* resume)
 {
     if (uc.mode != UpstreamMode::queue)
     {
@@ -241,7 +241,7 @@ bool App::replace_upstream(size_t index, const UpstreamConfig& uc,
         radio_upstream_table.entries()[index] = {};
     }
     // The peer's sequencers see one unbroken stream across the swap.
-    std::optional<Upstream::TxSequences> sequences;
+    std::optional<UpstreamLink::TxSequences> sequences;
     if (upstreams[index])
     {
         upstreams[index]->teardown();
@@ -579,7 +579,7 @@ std::vector<uint8_t> console_upstream_ids(const std::vector<uint8_t>& ids,
     return want;
 }
 
-void fill_upstream_fec_fields(const Upstream* endpoint, FecType* fec, int* k,
+void fill_upstream_fec_fields(const UpstreamLink* endpoint, FecType* fec, int* k,
                               int* n)
 {
     if (fec == nullptr || k == nullptr || n == nullptr)
@@ -732,7 +732,7 @@ void App::refresh_host_metrics()
         ->store(radio_proto_ok ? 1u : 0u);
     for (size_t i = 0; i < upstreams.size(); ++i)
     {
-        const Upstream* up = upstreams[i].get();
+        const UpstreamLink* up = upstreams[i].get();
         if (up == nullptr)
         {
             continue;
@@ -1046,7 +1046,7 @@ void App::console_radio_info(ControlReply reply)
             RadioPhyView view;
             if (parse_radio_info_body(body, &view))
             {
-                radio_manager.set_actual_phy(view);
+                radio_supervisor.set_actual_phy(view);
             }
             reply.send_text(body);
         });
@@ -1176,7 +1176,7 @@ void App::console_radio_tx(const RadioUpdate& patch, ControlReply reply)
             if (patch.have_modulation)
             {
                 cfg.modulation = Config::canonical_modulation(patch.modulation);
-                radio_manager.sync_pacing_for_modulation(cfg.modulation);
+                radio_supervisor.sync_pacing_for_modulation(cfg.modulation);
             }
             if (patch.have_cca)
             {
@@ -1186,7 +1186,7 @@ void App::console_radio_tx(const RadioUpdate& patch, ControlReply reply)
             RadioPhyView view;
             if (parse_radio_info_body(mplane_join_body(r1), &view))
             {
-                radio_manager.set_actual_phy(view);
+                radio_supervisor.set_actual_phy(view);
             }
             console.send_save_slot(
                 cfg.config_slot,
@@ -1395,7 +1395,7 @@ void App::reapply_radio_console(std::function<void(bool ok)> done)
                 }
                 return;
             }
-            radio_manager.on_phy_programmed();
+            radio_supervisor.on_phy_programmed();
             if (done)
             {
                 done(true);
@@ -1426,7 +1426,7 @@ bool App::apply_console()
                 drop_console();
                 return;
             }
-            radio_manager.on_phy_programmed();
+            radio_supervisor.on_phy_programmed();
         });
     return true;
 }
@@ -1445,7 +1445,7 @@ bool App::hold_console()
         return false;
     }
     reconnect_timer.cancel();
-    radio_manager.on_console_up();
+    radio_supervisor.on_console_up();
     return true;
 }
 
@@ -1457,7 +1457,7 @@ void App::drop_console()
         reactor->rem_read_rdy(fd);
         reactor->rem_write_rdy(fd);
     }
-    radio_manager.on_console_down();
+    radio_supervisor.on_console_down();
     console.cancel_pending();
     console.close();
     console_deadline_timer.cancel();
@@ -1634,7 +1634,7 @@ int App::run()
         {
             on_console_request_deadline(deadline);
         });
-    radio_manager.set_console_ops(
+    radio_supervisor.set_console_ops(
         [this](std::function<void(bool, const RadioPhyView&)> done)
         {
             if (!console_ok)
@@ -1657,7 +1657,7 @@ int App::run()
                         done(false, view);
                         return;
                     }
-                    radio_manager.set_actual_phy(view);
+                    radio_supervisor.set_actual_phy(view);
                     done(true, view);
                 });
         },
@@ -1680,7 +1680,7 @@ int App::run()
         {
             drop_console();
         });
-    radio_manager.set_reconcile_filter(
+    radio_supervisor.set_reconcile_filter(
         [this](std::function<void(bool ok)> done)
         {
             if (!console_ok)

@@ -11,7 +11,7 @@ UDPUpstream::UDPUpstream(std::shared_ptr<Reactor> reactor,
                          std::shared_ptr<IOReactor> io,
                          const UpstreamConfig& config,
                          std::shared_ptr<BoundedLossyQueue> radio_tx_queue)
-    : Upstream(std::move(reactor), config, std::move(radio_tx_queue)),
+    : UpstreamLink(std::move(reactor), config, std::move(radio_tx_queue)),
       io(std::move(io)),
       socket(std::make_shared<bfc::socket>(bfc::create_udp4()))
 {
@@ -53,7 +53,7 @@ void UDPUpstream::bind_callbacks()
     {
         return;
     }
-    Upstream::bind_callbacks();
+    UpstreamLink::bind_callbacks();
     const auto weak = weak_from_this();
     registered = io->add_read_rdy(
         socket->fd(),
@@ -77,7 +77,7 @@ void UDPUpstream::teardown()
         throw std::logic_error("upstream teardown on cv reactor thread");
     }
     unregister_socket();
-    Upstream::teardown();
+    UpstreamLink::teardown();
 }
 
 UDPUpstream::~UDPUpstream()

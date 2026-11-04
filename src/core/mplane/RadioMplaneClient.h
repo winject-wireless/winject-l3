@@ -1,5 +1,5 @@
-#ifndef WINJECT_MANAGER_CONSOLE_CLIENT_H_
-#define WINJECT_MANAGER_CONSOLE_CLIENT_H_
+#ifndef WINJECT_MANAGER_RADIO_MPLANE_CLIENT_H_
+#define WINJECT_MANAGER_RADIO_MPLANE_CLIENT_H_
 
 #include "radio/RadioConfig.h"
 #include "utils/Version.h"
@@ -26,12 +26,12 @@ struct MplaneResult
     std::string error;
 };
 
-class ConsoleClient
+class RadioMplaneClient
 {
 public:
     using DoneFn = std::function<void(MplaneResult)>;
 
-    ~ConsoleClient();
+    ~RadioMplaneClient();
 
     bool start_connect(const sockaddr_in& radio_mplane, std::string* error);
     bool finish_connect(std::string* error);
@@ -116,4 +116,4 @@ private:
 
 }  // namespace winject
 
-#endif  // WINJECT_MANAGER_CONSOLE_CLIENT_H_
+#endif  // WINJECT_MANAGER_RADIO_MPLANE_CLIENT_H_

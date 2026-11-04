@@ -6,7 +6,7 @@ set(WINJECT_CORE_SOURCES
     utils/MetricsRegistry.cpp
     utils/NetUtil.cpp
     utils/Version.cpp
-    mplane/ConsoleClient.cpp
+    mplane/RadioMplaneClient.cpp
     mplane/MplaneCorrelation.cpp
     mplane/MplaneText.cpp
     frames/Frame.cpp
@@ -21,11 +21,11 @@ set(WINJECT_CORE_SOURCES
     radio/WifiFcs.cpp
     radio/RadioUpstreamTable.cpp
     radio/RadioMplaneParse.cpp
-    radio/RadioManager.cpp
+    radio/RadioSupervisor.cpp
     radio/PhyAirtime.cpp
     radio/TxMux.cpp
     radio/RxDemux.cpp
-    endpoint/Upstream.cpp
+    endpoint/UpstreamLink.cpp
     endpoint/UpstreamStats.cpp
     endpoint/DatagramAir.cpp
     endpoint/UDPUpstream.cpp
