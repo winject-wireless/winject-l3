@@ -873,6 +873,31 @@ TEST_F(UpstreamTest, UdpInputEvictionIsCounted)
     ASSERT_EQ(tx->size(), 1u);
     EXPECT_EQ(bytes(*tx->pop()), bytes(lc_packet(packet({2}), false, 0)));
 }
+// Static mode forwards only its tx peer's datagrams to the air; anything else
+// arriving on rx is dropped and counted.
+TEST_F(UpstreamTest, UdpStaticDropsDatagramsNotFromTxPeer)
+{
+    uint16_t port = test::reserve_free_udp_port();
+    ASSERT_NE(port, 0);
+    bfc::socket peer(bfc::create_udp4());
+    auto peer_address = bind_peer(peer);
+    create_udp("127.0.0.1:" + std::to_string(port),
+               "127.0.0.1:" + std::to_string(ntohs(peer_address.sin_port)));
+    bfc::socket stranger(bfc::create_udp4());
+    bind_peer(stranger);
+    send_to(stranger, port, packet({1}));
+    send_to(peer, port, packet({2}));
+    pump_io();
+    pump_cv();
+    EXPECT_EQ(up->tx_counters().foreign_source_drops, 1u);
+    ASSERT_EQ(tx->size(), 1u);
+    EXPECT_EQ(bytes(*tx->pop()), bytes(lc_packet(packet({2}), false, 0)));
+    // Delivery from the air still goes to the tx peer, not the stranger.
+    rx(packet({3}));
+    pump_cv();
+    EXPECT_EQ(receive(peer), (std::vector<uint8_t>{3}));
+    EXPECT_TRUE(receive(stranger).empty());
+}
 TEST_F(UpstreamTest, RadioTableSharesInboxEvictionCounter)
 {
     create_queue();
