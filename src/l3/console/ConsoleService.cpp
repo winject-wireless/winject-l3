@@ -224,6 +224,21 @@ void ConsoleService::on_datagram()
         send_to(peer, buf);
         return;
     }
+    // execute() does not answer a line with no command, so a tagged comment
+    // ("cmd:5 #x") is answered here, as an unknown command, before it takes a
+    // route that nothing would close.
+    const char* command = body + strspn(body, " \t");
+    if (tagged && (*command == '\0' || *command == '#'))
+    {
+        std::string nok = format_correlated_reply(
+            client_id, std::string("NOK ") + k_enosys);
+        if (nok.back() != '\n')
+        {
+            nok += '\n';
+        }
+        send_to(peer, nok.c_str());
+        return;
+    }
     if (tagged)
     {
         const PeerKey pk = peer_key(peer);

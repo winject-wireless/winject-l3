@@ -1223,7 +1223,9 @@ void L3Impl::set_radio_phy(const api::RadioPhyPatch& patch,
         reply(value_result(info));
         return;
     }
-    if (!console_ok)
+    // Connecting includes "m-plane up, not programmed yet": the startup
+    // programming copied cfg and would send the old PHY after this one.
+    if (!console_ok || !radio_programmed)
     {
         reply(error_result<api::RadioInfo>(radio_unavailable_error()));
         return;

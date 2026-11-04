@@ -159,9 +159,12 @@ int l3::detail::run_l3(const std::shared_ptr<L3Core>& core, const Config& cfg,
     }
     int rc = 0;
     {
-        winject::l3::detail::L3Impl impl(cfg.stats_sec);
+        // On the heap: run's caller is a host thread (16 KB on the P4) that
+        // also runs apply, every Done and the console commands.
+        auto impl =
+            std::make_unique<winject::l3::detail::L3Impl>(cfg.stats_sec);
         core->callbacks.open();
-        impl.start(core.get(), thread_setup);
+        impl->start(core.get(), thread_setup);
         const L3 l3 = HandleAccess::l3(core);
         if (!core->stop_requested)
         {
@@ -182,7 +185,7 @@ int l3::detail::run_l3(const std::shared_ptr<L3Core>& core, const Config& cfg,
         // Every Done and L3::post until l3's thread closes the queue,
         // after it cancelled what was still pending.
         core->callbacks.run();
-        impl.join();
+        impl->join();
     }
     core->stop_requested = false;
     core->busy = false;

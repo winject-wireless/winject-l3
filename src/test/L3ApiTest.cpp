@@ -364,6 +364,26 @@ TEST(L3ApiTest, PendingRequestsAreCanceledWhenL3Stops)
               std::chrono::seconds(2));
 }
 
+TEST(L3ApiTest, SetPhyWhileProgrammingIsEnodev)
+{
+    FakeRadio radio;
+    radio.hold("radio_tx ");  // the startup programming's PHY
+    TestL3 t;
+    ASSERT_TRUE(t.start(config_for(radio)));
+    ASSERT_TRUE(radio.wait_held("radio_tx ", 1));
+    api::Radio rad = t.l3.radios().get().value;
+    EXPECT_EQ(rad.state().value, api::RadioState::connecting);
+    // The m-plane is up but the radio is not programmed: nothing is sent or
+    // stored, or the startup radio_tx would undo it.
+    EXPECT_EQ(rad.set_channel(6).status.error, "ENODEV");
+    EXPECT_EQ(rad.phy().value.channel, 1);
+    EXPECT_EQ(radio.seen("radio_tx channel=6"), 0u);
+
+    radio.answer("radio_tx ", 0, true,
+                 "radio_tx channel=1 tx_power=20 modulation=OFDM_24M cca=false");
+    ASSERT_TRUE(t.radio_up());
+}
+
 TEST(L3ApiTest, RadioLifecycle)
 {
     FakeRadio radio;
@@ -402,6 +422,10 @@ TEST(L3ApiTest, RadioLifecycle)
     ASSERT_TRUE(stored.ok()) << stored.status.error;
     EXPECT_TRUE(stored.value.text.empty());
     EXPECT_EQ(created.value.phy().value.power_dbm, 10);
+    // Normalized dBm: negative is valid, outside -30..30 is not.
+    EXPECT_TRUE(created.value.set_power(-10).ok());
+    EXPECT_EQ(created.value.set_power(31).status.error, "EINVAL");
+    ASSERT_TRUE(created.value.set_power(10).ok());
     EXPECT_EQ(created.value.info().status.error, "ENODEV");
     ASSERT_TRUE(t.l3.upstreams().add(up).ok());
     ASSERT_TRUE(radios.add(created.value).ok());

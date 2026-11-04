@@ -436,3 +436,20 @@ TEST(ConsoleServiceSocketTest, RadioTxNegativePower)
     ASSERT_TRUE(harness.exchange(client, "rt tx_power=-200", &reply));
     EXPECT_EQ(reply, "NOK EINVAL\n");
 }
+
+TEST(ConsoleServiceSocketTest, TaggedCommentIsAnsweredAndFreesItsId)
+{
+    ConsoleServiceHarness harness;
+    std::string err;
+    ASSERT_TRUE(harness.start(&err)) << err;
+
+    bfc::socket client(bfc::create_udp4());
+    std::string reply;
+    ASSERT_TRUE(harness.exchange(client, "cmd:5 #note", &reply));
+    EXPECT_EQ(reply, "NOK:5 ENOSYS\n");
+    ASSERT_TRUE(harness.exchange(client, "cmd:6  # spaced", &reply));
+    EXPECT_EQ(reply, "NOK:6 ENOSYS\n");
+    // cmd:5 is not stuck as a retransmit.
+    ASSERT_TRUE(harness.exchange(client, "cmd:5 ping", &reply));
+    EXPECT_EQ(reply.rfind("OK:5", 0), 0u) << reply;
+}
