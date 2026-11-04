@@ -1,9 +1,12 @@
-// Runs winject_l3::main with a Config filled here. The manager blocks in
-// its reactor, so it gets its own pthread (larger stack than app_main's).
+// Runs winject_l3::run with a Config filled here. run() blocks, so it gets
+// its own pthread: that thread becomes l3's callback thread. The node's
+// reactor and the upstream reactor are threads run() starts; ThreadSetup sets
+// their stack and name before each one.
 
 #include "Config.h"
 #include "WinjectL3.h"
 #include "esp_event.h"
+#include "esp_pthread.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
 
@@ -59,11 +62,28 @@ winject::Config make_config()
     return cfg;
 }
 
+void set_thread_cfg(winject_l3::Thread thread)
+{
+    esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
+    if (thread == winject_l3::Thread::node)
+    {
+        // The node's reactor: radio m-plane, TX timers, handle calls.
+        cfg.stack_size = 16 * 1024;
+        cfg.thread_name = "l3_node";
+    }
+    else
+    {
+        cfg.thread_name = "l3_upstream";
+    }
+    esp_pthread_set_cfg(&cfg);
+}
+
 void* run(void*)
 {
     const winject::Config cfg = make_config();
-    const int rc = winject_l3::main(cfg);
-    printf("winject_l3::main returned %d\n", rc);
+    // No UDP console here: started is empty.
+    const int rc = winject_l3::run(cfg, {}, set_thread_cfg);
+    printf("winject_l3::run returned %d\n", rc);
     return nullptr;
 }
 

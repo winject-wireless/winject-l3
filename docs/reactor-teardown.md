@@ -69,7 +69,7 @@ can clobber a **new** `add_read_rdy` on the same queue (remove-then-re-add durin
 hot-swap).
 
 Example (queue upstream CV path in
-[`Upstream::unbind_callbacks`](../src/manager/endpoint/Upstream.cpp) when
+[`UpstreamLink::unbind_callbacks`](../src/core/endpoint/UpstreamLink.cpp) when
 present):
 
 ```cpp
@@ -96,17 +96,17 @@ immediately afterward on embedded `poll()` stacks.
 
 ### Main `IOReactor` (Linux epoll)
 
-Most manager code runs on one reactor thread ([`IOReactor`](../src/manager/utils/IOReactor.h)):
+Most manager code runs on one reactor thread ([`IOReactor`](../src/core/utils/IOReactor.h)):
 
 | Component | Register | Teardown today |
 |-----------|----------|----------------|
-| [`UDPUpstream`](../src/manager/endpoint/UDPUpstream.cpp) | `add_read_rdy` on app UDP socket | `teardown()` / `rem_read_rdy(fd, done_cb)`; `done_cb` holds the socket, so it closes after removal |
-| [`WifiUdp`](../src/manager/radio/WifiUdp.cpp) | d-plane forward socket | `rem_read_rdy` then close in `close()` |
-| [`ConsoleService`](../src/manager/console/ConsoleService.cpp) | manager m-plane socket | `rem_read_rdy` on shutdown |
-| [`App`](../src/manager/App.cpp) | console client fd | `rem_read_rdy` when dropping console |
+| [`UDPUpstream`](../src/core/endpoint/UDPUpstream.cpp) | `add_read_rdy` on app UDP socket | `teardown()` / `rem_read_rdy(fd, done_cb)`; `done_cb` holds the socket, so it closes after removal |
+| [`WifiUdp`](../src/core/radio/WifiUdp.cpp) | d-plane forward socket | `rem_read_rdy` then close in `close()` |
+| [`ConsoleService`](../src/l3/console/ConsoleService.cpp) | manager m-plane socket | `rem_read_rdy` on shutdown |
+| [`NodeImpl`](../src/l3/NodeImpl.cpp) | radio m-plane client fd | `rem_read_rdy` when dropping the m-plane |
 
 Cross-thread control that must run on the reactor thread should use
-`reactor.wake_up(...)`, as [`WifiUdp::post_rx_event`](../src/manager/radio/WifiUdp.cpp)
+`reactor.wake_up(...)`, as [`WifiUdp::post_rx_event`](../src/core/radio/WifiUdp.cpp)
 does for d-plane address changes.
 
 **Rules for new epoll/poll registrations:**
@@ -122,10 +122,10 @@ does for d-plane address changes.
 
 ### CV upstream reactor (queue upstream path)
 
-When queue upstreams are enabled, `App` runs a dedicated `cv_reactor` thread for
+When queue upstreams are enabled, the node runs a dedicated `cv_reactor` thread for
 UDP/CV processing while queue upstreams may use a host-registered CV reactor from
 BFC's registry. That reactor may be stopped or stuck in a long app handler, so
-`Upstream::teardown()` never waits for a reactor fence. It uses the sync remove
+`UpstreamLink::teardown()` never waits for a reactor fence. It uses the sync remove
 plus lease `wake_up` above for queue storage. It then calls `DatagramAir::stop()`
 on the calling thread, which is safe from any thread except the CV reactor's:
 a data-path mutex waits out an in-flight call, and `DeadlineTimer::unbind`
@@ -137,10 +137,10 @@ destructor does the same for paths that never call `teardown()`.
 it without `cb_mtx`, so a sync `remove_read_rdy` does **not** wait for a running
 handler; the data-path mutex is what fences it.
 
-Instance replacement (`replace_upstream`) calls `Upstream::teardown()` on the IO
+Instance replacement (`replace_upstream`) calls `UpstreamLink::teardown()` on the IO
 thread before `reset()`; `QueueUpstream::teardown()` releases the queue claim.
 
-[`WifiQueue`](../src/manager/radio/WifiQueue.cpp) follows the same rule for its
+[`WifiQueue`](../src/core/radio/WifiQueue.cpp) follows the same rule for its
 `wifi_rx` handler and posted RX events: callbacks capture a shared gate, not
 `this`. The gate's mutex is held while one runs, so `close()` waits out a
 running callback on another thread without a reactor fence, and the destructor

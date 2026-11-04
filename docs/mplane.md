@@ -1,6 +1,6 @@
 # Manager m-plane and configuration
 
-winject-manager is controlled two ways: a **configuration file** read at startup, and the **manager m-plane**, a text console over UDP for changing upstreams and reading stats at runtime. A host that links the library reaches the same m-plane through function calls ([Function-call API](#function-call-api)). How the manager, radios and air framing fit together is in [winject.md](winject.md).
+winject-manager is controlled two ways: a **configuration file** read at startup, and the **manager m-plane**, a text console over UDP for changing upstreams and reading stats at runtime. A host that links the library reaches the same m-plane through C++ calls ([Function-call API](#function-call-api)). How the manager, radios and air framing fit together is in [winject.md](winject.md).
 
 ## Message exchange
 
@@ -104,6 +104,7 @@ Procedure for a new connection:
 | Request | Description | Response |
 |---|---|---|
 | `radio_device\|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] [fcs=AUTO\|SIGNAL\|ACTUAL]` | Set or read the radio the manager drives. Only `id=0`. Keys left out keep their value; `id=0` alone reads. Addresses cannot be cleared | `OK radio_device id=0 mplane=<ip:port> dplane=<ip:port> fcs=<mode>` |
+| `radio_domain [id=<u8>]` | The radio's air domain (`winject.domain`, hex). Only `id=0`. It cannot be changed on a live radio | `OK radio_domain id=0 domain=<hex>` |
 
 `mplane` and `dplane` are each a `host:port` (the radio m-plane console and the UDP d-plane for inject, registration, and forward). Config always sets `mplane`, and sets `dplane` unless the d-plane runs over in-process queues (`radio.dplane_tx` / `radio.dplane_rx` / `radio.reactor`); a queue d-plane is fixed at startup, so `dplane=` then fails with `EINVAL`. A `radio_device` command may omit either key to keep the current address; neither can be cleared. `fcs` is the trailer mode (`AUTO` learns from the radio when the m-plane is up). The reply is sent once manager state is updated; it does not wait for the radio.
 
@@ -113,7 +114,7 @@ These are forwarded to the radio's m-plane when the console is up and the protoc
 |---|---|---|
 | `radio_info\|ri` | Current PHY and last RSSI (radio `radio_tx_info`) | The radio's reply, for example `radio_tx channel=1 tx_power=20 modulation=OFDM_24M cca=false` and `radio_rx rssi=-10` |
 | `radio_stats\|rs` | Radio d-plane counters (radio `tx_info` and `rx_info`) | Two lines, for example `tx_info tx_queue_sz=0 in_flight=0 dropped_invalid_frame=0 dropped_tx_queue=0 dropped_wifi=0 ether_pkt=100 air_pkt=100 ts=<µs>` and `rx_info rx_queue_sz=0 dropped_filter_mismatched=0 dropped_rx_queue=0 dropped_no_peer=0 dropped_send_failed=0 ether_pkt=100 air_pkt=100 ts=<µs>` |
-| `radio_tx\|rt [channel=<1-14>] [tx_power=<dBm>] [modulation=<name>] [cca=<0\|1>]` | Change one or more PHY fields (radio `radio_tx`); the manager keeps them for its PHY reconcile | `OK radio_tx channel=... tx_power=... modulation=... cca=...` |
+| `radio_tx\|rt [channel=<1-14>] [tx_power=<dBm>] [modulation=<name>] [cca=<0\|1>]` | Change one or more PHY fields (radio `radio_tx`); the manager keeps them for its PHY reconcile. The radio checks the ranges; the manager answers `EINVAL` itself for `channel` > 255, `tx_power` outside -128..127 and an unknown modulation, or one the channel does not allow | `OK radio_tx channel=... tx_power=... modulation=... cca=...` |
 | `radio_mplane\|rmp <radio command line>` | Transparent radio m-plane: the rest of the line is sent to the radio unchanged, for radio-specific commands the manager does not model (for example the C6's `radio_tx_cal`). The manager does not track what it changes: a PHY field changed this way can be overwritten by the manager's PHY reconcile, so use `radio_tx` for those | The radio's reply, for example `radio_tx_cal group=dsss default=true points=...` |
 | `radio_caps_info\|rci` | FCS trailer mode the manager applies to forwarded frames. Asks the radio when its console is up (and updates the manager); otherwise answers from the configured or last-learned mode | `OK radio_caps_info fcs=SIGNAL\|ACTUAL`, or `NOK ENODATA` if the mode is not known yet |
 | `reset\|r` | Restart the radio (not idempotent) | `OK` |
@@ -161,31 +162,44 @@ get_metrics keys=radio_tx_pkt,radio_rx_pkt,radio_proto_ok,radio_version
 
 ## Function-call API
 
-[`src/l3/Control.h`](../src/l3/Control.h) is the m-plane as C++ calls, for a host that runs the node in-process (`winject_l3::main`) and serves its own console, such as the rover and ground ESP32-P4 apps. `winject_l3::control()` returns a handle to the node `main()` runs; it can be taken before `main()` starts.
+[`include/winject_l3`](../include/winject_l3) is the m-plane as C++ objects, for a host that runs the node in-process, such as the rover and ground ESP32-P4 apps. The text console is a client of it. The design and its decisions are in the l3 public API plan (aidocs/public-api.md, outside this repo).
+
+```cpp
+#include "WinjectL3.h"            // winject_l3::run / stop, Node and the handles
+#include "winject_l3/Console.h"   // console::execute / format / Service
+
+int rc = winject_l3::run(cfg, [&](const winject_l3::Node& node) {
+    console.start(node, cfg.console_in, "my-console-reactor");  // optional
+});
+```
 
 | Command | Call | Result |
 |---|---|---|
-| `add_upstream` | `add_upstream(UpstreamView)` | `Status` |
-| `remove_upstream` | `remove_upstream(id)` | `Status` |
-| `list_upstream` | `list_upstreams(ids)` | `Result<vector<UpstreamView>>` |
-| `update_upstream` | `update_upstream(UpstreamUpdate)` | `Result<UpstreamView>` |
-| `list_upstream_rx_stat` / `_tx_stat` | `upstream_rx_stats(ids)` / `upstream_tx_stats(ids)` | `Result<vector<Upstream{Rx,Tx}StatView>>` |
-| `get_metrics` | `metrics(keys)` | `Result<vector<MetricView>>` |
-| `radio_device` | `radio_device(RadioDeviceUpdate)` (empty update reads) | `Result<RadioDeviceView>` |
-| `radio_info`, `radio_caps_info`, `radio_stats`, `radio_tx`, `reset`, `config` | same names (`radio_reset`, `config_slot`) | `RadioReply` (radio's reply body) |
-| any line | `command(line)` | the console's reply text |
+| `add_upstream` / `remove_upstream` | `node.upstreams().add(UpstreamSpec)` / `remove(id)` | `Result<Upstream>` / `Status` |
+| `list_upstream` | `upstreams().list()` or `get(id)`, then `Upstream::spec()` | `Result<UpstreamSpec>` |
+| `update_upstream` | `Upstream::update(UpstreamPatch)`, or `set_fec` / `set_quanta` | `Result<UpstreamSpec>` |
+| `list_upstream_rx_stat` / `_tx_stat` | `Upstream::rx_stats()` / `tx_stats()` | `Result<Upstream{Rx,Tx}Stats>` |
+| `get_metrics` | `node.metrics(keys)` | `Result<vector<Metric>>` |
+| `radio_device` | `node.radios().get()`, then `Radio::device()` / `set_device(RadioDevice)` | `Result<RadioDevice>` / `Status` |
+| `radio_domain` | `Radio::domain()` | `Result<uint16_t>` |
+| `radio_tx` | `Radio::set_phy(RadioPhyPatch)`, or `set_channel` / `set_modulation` / `set_power` / `set_cca` | `Result<RadioInfo>` |
+| `radio_info` / `radio_caps_info` / `radio_stats` | `Radio::info()` / `caps()` / `stats()` | `Result<RadioInfo>` / `Result<RadioCaps>` / `Result<RadioStats>` |
+| `reset` / `config slot=` | `Radio::reset()` / `set_config_slot(slot)` | `Status` |
+| `radio_mplane` | `Radio::mplane(line)` | `Result<std::string>`: the radio's reply body |
+| `version` | `winject_l3::version()` | `Version` |
+| any line | `console::execute(node, line)` | the console's reply text |
 
-- An empty id or key list means all, as on the console.
-- `Status::error` is empty on success, else the console's `NOK` code (`EINVAL`, `ENOENT`, `ENODEV`, ... or a radio code). Control adds `ESRCH` (no node running), `EDEADLK` (a blocking call made on the node's own thread) and `ETIMEDOUT` (no answer within the call's timeout, default 5 s).
-- Calls are safe from any thread. They run on the node's reactor thread and the caller blocks until the result. Synchronous calls made on the reactor thread run inline.
-- Radio forwards also take a callback (`radio_info(RadioDone)`), called exactly once: with the radio's reply, or `ECANCELED` if the node stops first.
-- `command(line)` takes one line without the `cmd:<u8>` tag and replies as the UDP console would. A blank or `#` line gets an empty reply.
-
-The UDP console ([`ConsoleService`](../src/l3/console/ConsoleService.h)) and `command()` share the parser ([`ConsoleCommands`](../src/l3/console/ConsoleCommands.h)); both call the node through the same ops as the typed calls.
+- The node has one radio. `RadioManager::create(RadioSpec)` checks it and builds the d-plane off air; `add` connects and programs it. `apply(node, cfg)` does create, then the upstreams, then add, which is what `run` does with its `Config`.
+- `Status::error` is empty on success, else the console's `NOK` code (`EINVAL`, `ENOENT`, `ENODEV`, ... or a radio code). The API adds `ESRCH` (no node), `ETIMEDOUT` (no answer within the call's timeout, default 5 s: the outcome is unknown, so read the state back before retrying a change), `ECANCELED` (the node stopped first) and `EDEADLK` (a blocking call from inside `UpstreamSpec::on_queue`).
+- Any thread may call the node. `run`'s calling thread is l3's callback thread: it runs `apply`, then `started`, then every `Done` and every `Node::post`. Blocking calls, radio ones included, also work from there. The node's own thread runs no user code except `on_queue`.
+- Radio calls also have a callback form (`Radio::info(Done<RadioInfo>)`), called exactly once.
+- `RadioInfo::text` and `RadioCaps::text` are the radio's reply as sent; the console relays them. `radio_stats` is rebuilt from `RadioStats` by `console::format`, which prints the same lines the radio firmwares do.
+- `console::Service` runs the UDP console on a reactor the host creates, registers in `console::ReactorRegistry` (vstreamer's registry type) and runs. It never waits on the node, so that reactor can be shared.
+- `run(cfg, started, thread_setup)`: `thread_setup` runs before each thread `run` starts (`Thread::upstream`, `Thread::node`), so an ESP-IDF host can set `esp_pthread_set_cfg` per thread.
 
 ## Configuration file
 
-Run the Linux manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`). That process parses the file in its `main` and calls `winject_l3::main(const Config&)`. An ESP-IDF host fills the same `Config` in code (`idf/example/main/main.cpp`) and does not pass argv.
+Run the Linux manager with `winject-manager <config file>`. The file holds `key = value` lines; `#` starts a comment. Examples are in `configuration/` (`host_x86/`, `host_arm/`, and the bench pairs in `winject-tests/esp32/` and `winject-tests/realtek/`). That process parses the file in its `main`, calls `winject_l3::run(const Config&, started)` and starts the UDP console from `started`. An ESP-IDF host fills the same `Config` in code (`idf/example/main/main.cpp`) and does not pass argv.
 
 ### Format overview
 

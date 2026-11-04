@@ -29,11 +29,12 @@ idf_component_register(
          ${WINJECT_L3_SOURCES}
          ${isa-l_SOURCE_DIR}/erasure_code/ec_base.c
          port/pipe.c
+    # compat: <poll.h> for BFC's reactor, which the public Console.h uses.
     INCLUDE_DIRS ${WINJECT_L3_ROOT}/include
                  ${WINJECT_CORE_DIR}
                  ${WINJECT_L3_DIR}
-    PRIV_INCLUDE_DIRS compat
-                      ${WINJECT_L3_ROOT}/src
+                 compat
+    PRIV_INCLUDE_DIRS ${WINJECT_L3_ROOT}/src
                       ${bfc_SOURCE_DIR}/src
                       ${isa-l_SOURCE_DIR}/include
                       ${isa-l_SOURCE_DIR}/erasure_code

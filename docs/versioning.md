@@ -9,7 +9,7 @@ Every winject component uses `vX.Y.Z`:
 
 Two components are compatible exactly when their `X.Y` are equal. `Z` is never compared.
 
-**winject-l3:** `cmake/WinjectVersion.cmake` and generated `WinjectBuildVersion.h` from `src/manager/WinjectBuildVersion.h.in`. The manager answers `version|ver` with `OK version ver=<vX.Y.Z> proto=X.Y`.
+**winject-l3:** `cmake/WinjectVersion.cmake` and generated `WinjectBuildVersion.h` from `src/core/WinjectBuildVersion.h.in`. The manager answers `version|ver` with `OK version ver=<vX.Y.Z> proto=X.Y`.
 
 **Version discovery (frozen):** transport UDP/IPv4; request `version` (alias `ver`) with no arguments; reply `OK version ver=... proto=...`; tagged `cmd:<u8>` / `OK:<u8>` / `NOK:<u8>`; unknown command `NOK ENOSYS`. See `docs/mplane.md`.
 

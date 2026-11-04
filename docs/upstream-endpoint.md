@@ -1,6 +1,6 @@
 # Upstream endpoints
 
-`Upstream` owns radio RX buffering, FEC state, timer registrations and common
+`UpstreamLink` owns radio RX buffering, FEC state, timer registrations and common
 metrics. `UDPUpstream` and `QueueUpstream` implement application delivery.
 Instances have immutable transport/FEC configuration and no worker thread.
 Air framing is unchanged.
@@ -10,7 +10,7 @@ Air framing is unchanged.
 Construct with `std::make_shared<UDPUpstream>(cv, io, config, radio_tx_queue)` or
 `std::make_shared<QueueUpstream>(cv, config, radio_tx_queue, app_tx_queue,
 app_rx_queue)`,
-then call `bind_callbacks()` before publishing the instance. `Upstream` inherits
+then call `bind_callbacks()` before publishing the instance. `UpstreamLink` inherits
 `enable_shared_from_this`; binding requires shared ownership so callbacks can
 retain weak references. Repeated binding is harmless.
 
@@ -26,7 +26,7 @@ Scheduler-budget updates alone do not require replacement.
 ### Teardown and destruction
 
 Call `teardown()` from the **IO reactor thread** (manager console path) before
-dropping the last `shared_ptr` on hot-swap (`App::replace_upstream`). It never
+dropping the last `shared_ptr` on hot-swap (`NodeImpl::replace_upstream`). It never
 waits for the CV reactor, which may be stopped or busy in another handler:
 
 - It marks the instance inactive and synchronously deregisters the CV queue
@@ -52,7 +52,7 @@ See [reactor-teardown.md](reactor-teardown.md) for BFC ordering rules.
 The caller supplies shared pointers to the CV reactor and radio TX queue. UDP
 additionally retains a shared pointer to its I/O reactor. `DatagramAir` retains
 the CV reactor and uses its timer and wake method directly. The caller runs the
-reactors. `App`
+reactors. The node
 runs one shared CV reactor for UDP upstream processing, while queue upstreams use
 the externally registered host CV reactor.
 
