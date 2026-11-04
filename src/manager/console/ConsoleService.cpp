@@ -39,8 +39,7 @@ constexpr const char k_help_text[] =
     "radio_caps_info|rci\n"
     "radio_stats|rs\n"
     "radio_tx|rt [channel= tx_power=<dBm> modulation= cca=<0|1>]\n"
-    "radio_tx_cal|rtc [group=<name> points=<drv:dBm,...> | group=<name> "
-    "scale=<dB/dB> offset=<dBm> | [group=<name>] reset=true]\n"
+    "radio_mplane|rmp <radio command line>\n"
     "reset|r\n"
     "config slot=<u8>\n"
     "radio_device|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] "
@@ -1017,25 +1016,18 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         return;
     }
 
-    if (console_cmd_is(cmd, "radio_tx_cal", "rtc"))
+    if (console_cmd_is(cmd, "radio_mplane", "rmp"))
     {
-        // Radio-specific calibration: forwarded as is; the radio validates.
-        std::string args;
-        for (char* a = strtok_r(nullptr, " \t", &save); a != nullptr;
-             a = strtok_r(nullptr, " \t", &save))
+        // Transparent radio m-plane: the rest of the line goes to the radio
+        // unchanged, for radio-specific commands the manager does not model.
+        const char* rest = save != nullptr ? save : "";
+        rest += strspn(rest, " \t");
+        if (*rest == '\0')
         {
-            if (strchr(a, '=') == nullptr)
-            {
-                respond_nok(l3_id, k_einval);
-                return;
-            }
-            if (!args.empty())
-            {
-                args += ' ';
-            }
-            args += a;
+            respond_nok(l3_id, k_einval);
+            return;
         }
-        if (!handlers.radio_tx_cal)
+        if (!handlers.radio_mplane)
         {
             respond_nok(l3_id, k_enosys);
             return;
@@ -1049,7 +1041,7 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
         {
             respond_nok(l3_id, msg);
         };
-        handlers.radio_tx_cal(args, cr);
+        handlers.radio_mplane(std::string(rest), cr);
         return;
     }
 

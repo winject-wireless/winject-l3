@@ -303,41 +303,44 @@ TEST(ConsoleServiceSocketTest, VersionDiscoveryFrozen)
     EXPECT_STREQ(reply.c_str(), "NOK:7 ENOSYS\n");
 }
 
-TEST(ConsoleServiceSocketTest, RadioTxCalForwardsArgs)
+TEST(ConsoleServiceSocketTest, RadioMplaneForwardsLine)
 {
     ConsoleServiceHarness harness;
     std::string err;
     ManagerConsoleHandlers h = stub_console_handlers();
     std::string seen;
-    h.radio_tx_cal = [&seen](const std::string& args, ManagerConsoleReply reply)
+    h.radio_mplane = [&seen](const std::string& line, ManagerConsoleReply reply)
     {
-        seen = args;
+        seen = line;
         reply.send_text("radio_tx_cal group=dsss default=false points=8:-28.00,84:15.60");
     };
     ASSERT_TRUE(harness.start(std::move(h), &err)) << err;
 
     bfc::socket client(bfc::create_udp4());
     std::string reply;
-    ASSERT_TRUE(harness.exchange(client, "cmd:3 rtc group=dsss points=8:-28,84:15.6", &reply));
+    ASSERT_TRUE(harness.exchange(client, "cmd:3 rmp rtc group=dsss  points=8:-28,84:15.6",
+                                 &reply));
     EXPECT_STREQ(reply.c_str(),
                  "OK:3 radio_tx_cal group=dsss default=false points=8:-28.00,84:15.60\n");
-    EXPECT_EQ(seen, "group=dsss points=8:-28,84:15.6");
+    EXPECT_EQ(seen, "rtc group=dsss  points=8:-28,84:15.6");
 
-    ASSERT_TRUE(harness.exchange(client, "radio_tx_cal", &reply));
-    EXPECT_EQ(seen, "");
+    ASSERT_TRUE(harness.exchange(client, "radio_mplane \tradio_tx_cal", &reply));
+    EXPECT_EQ(seen, "radio_tx_cal");
 
-    ASSERT_TRUE(harness.exchange(client, "radio_tx_cal dsss", &reply));
+    ASSERT_TRUE(harness.exchange(client, "radio_mplane", &reply));
+    EXPECT_STREQ(reply.c_str(), "NOK EINVAL\n");
+    ASSERT_TRUE(harness.exchange(client, "rmp   ", &reply));
     EXPECT_STREQ(reply.c_str(), "NOK EINVAL\n");
 }
 
-TEST(ConsoleServiceSocketTest, RadioTxCalWithoutHandlerIsEnosys)
+TEST(ConsoleServiceSocketTest, RadioMplaneWithoutHandlerIsEnosys)
 {
     ConsoleServiceHarness harness;
     std::string err;
     ASSERT_TRUE(harness.start(stub_console_handlers(), &err)) << err;
     bfc::socket client(bfc::create_udp4());
     std::string reply;
-    ASSERT_TRUE(harness.exchange(client, "radio_tx_cal", &reply));
+    ASSERT_TRUE(harness.exchange(client, "rmp radio_tx_cal", &reply));
     EXPECT_STREQ(reply.c_str(), "NOK ENOSYS\n");
 }
 

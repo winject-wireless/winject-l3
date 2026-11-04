@@ -1204,16 +1204,16 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
         });
 }
 
-// The radio's own per-board TX power calibration: forwarded unchanged (the
-// radio stores it; it is not part of the config slot).
-void App::console_radio_tx_cal(const std::string& args, ManagerConsoleReply reply)
+// Transparent radio m-plane: a radio-specific command line, forwarded
+// unchanged. The manager does not track what it changes.
+void App::console_radio_mplane(const std::string& line, ManagerConsoleReply reply)
 {
     if (!console_ok)
     {
         send_radio_unavailable_nok(reply);
         return;
     }
-    console.request(args.empty() ? std::string("radio_tx_cal") : "radio_tx_cal " + args,
+    console.request(line,
                     [reply](MplaneResult r)
                     {
                         if (!r.ok)
@@ -1348,9 +1348,9 @@ bool App::start_manager_console()
     {
         console_radio_tx(patch, reply);
     };
-    handlers.radio_tx_cal = [this](const std::string& args, ManagerConsoleReply reply)
+    handlers.radio_mplane = [this](const std::string& line, ManagerConsoleReply reply)
     {
-        console_radio_tx_cal(args, reply);
+        console_radio_mplane(line, reply);
     };
     handlers.config_slot = [this](uint8_t slot, ManagerConsoleReply reply)
     {

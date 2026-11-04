@@ -161,9 +161,10 @@ struct ManagerConsoleHandlers
     std::function<void(ManagerConsoleReply reply)> radio_info;
     std::function<void(ManagerConsoleReply reply)> radio_caps_info;
     std::function<void(ManagerConsoleReply reply)> radio_stats;
-    // Optional (ENOSYS when unset): radio_tx_cal arguments, forwarded as is.
-    std::function<void(const std::string& args, ManagerConsoleReply reply)>
-        radio_tx_cal;
+    // Optional (ENOSYS when unset): a radio m-plane command line, forwarded
+    // unchanged (radio_mplane).
+    std::function<void(const std::string& line, ManagerConsoleReply reply)>
+        radio_mplane;
     std::function<void(const ManagerRadioUpdate& patch,
                        ManagerConsoleReply reply)>
         radio_tx;
