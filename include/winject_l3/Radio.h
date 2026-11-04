@@ -114,8 +114,9 @@ struct RadioStats
 };
 
 // A handle to the node's radio. Cheap to copy, safe from any thread. After
-// remove its calls return ENOENT. A default handle is attached to nothing:
-// calls return ESRCH.
+// remove its calls return ENOENT; once a radio is created again, the handle
+// reaches the new one (as an Upstream handle does its id). A default handle
+// is attached to nothing: calls return ESRCH.
 class Radio
 {
 public:

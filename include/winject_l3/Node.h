@@ -52,7 +52,10 @@ enum class Thread
     node,      // the node's reactor: handle calls, radio m-plane, TX timers
 };
 // Called on run()'s calling thread just before each thread starts. On
-// ESP-IDF a host sets esp_pthread_set_cfg here (stack, priority, core).
+// ESP-IDF a host sets esp_pthread_set_cfg here (stack, priority, core). That
+// setting stays on the calling thread: threads the host starts from started,
+// a Done or a post inherit the last one (Thread::node) unless they set their
+// own.
 using ThreadSetup = std::function<void(Thread)>;
 
 Version version();  // this build (console `version`)
@@ -69,7 +72,9 @@ Status apply(const Node& node, const Config& cfg);
 // stop. The node's reactor and the upstream reactor get threads of their own.
 int run(const Config& cfg, std::function<void(const Node&)> started = {},
         ThreadSetup thread_setup = {});
-// Asks run() to return. Any thread, also before run() starts.
+// Asks run() to return. Any thread, also before run() starts: a stop() while
+// no run() is active makes the next run() return at once, without applying
+// the config.
 void stop();
 // stop() for a signal handler: writes atomics and the wake fd only.
 void stop_from_signal();
