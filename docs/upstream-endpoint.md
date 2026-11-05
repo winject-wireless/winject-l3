@@ -105,14 +105,19 @@ consumer binds that output queue to its own reactor if it needs notification.
 
 FEC processing is independent of UDP peer readiness. A UDP server learns its
 peer from incoming application datagrams; received radio output before discovery
-is dropped and counted. No output backlog waits for a peer.
+is dropped and counted. No output backlog waits for a peer. A UDP static
+upstream has a fixed peer: only datagrams whose source is exactly the `tx`
+address and port go to the air, and the rest are dropped.
 
 `rx_counters()` tracks application delivery attempts, accepted packets/bytes, missing-peer
 drops, send errors and output-queue evictions. Local acceptance does not prove
 peer consumption. `tx_counters()` tracks application input packets/bytes,
-oversize rejection, radio TX queue evictions and (UDP) app TX queue evictions
-separately; a queue upstream's app pushes the app TX queue itself and must count
-its own evictions. Radio RX inbox evictions are counted by the radio demux
+oversize rejection, radio TX queue evictions, (UDP) app TX queue evictions and
+(UDP static) foreign-source drops separately; a queue upstream's app pushes the
+app TX queue itself and must count its own evictions. Foreign-source drops are
+in-process only (no metric, no m-plane field): a static upstream that forwards
+nothing while its rx port receives traffic usually has a peer sending from a
+socket other than `tx`. Radio RX inbox evictions are counted by the radio demux
 (`rx_queue_evictions()`). Metrics: `upstream_<id>_tx_queue_drops`,
 `_rx_queue_evictions`, `_app_tx_queue_evictions`, `_app_delivery_evictions`. FEC TX counters
 count shards submitted to the supplied TX
