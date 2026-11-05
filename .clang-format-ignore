@@ -2,4 +2,4 @@ build_manager_*/
 build_test_*/
 src/manager/build/
 src/test/build/
-src/manager/fec/IsalEcNeon.c
+src/core/fec/IsalEcNeon.c

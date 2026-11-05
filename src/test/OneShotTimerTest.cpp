@@ -7,9 +7,9 @@
 
 namespace
 {
-using winject::IOReactor;
-using winject::OneShotTimer;
-using winject::test::run_reactor_with_watchdog;
+using winject::core::IOReactor;
+using winject::core::OneShotTimer;
+using winject::core::test::run_reactor_with_watchdog;
 
 TEST(OneShotTimerTest, FiresOnce)
 {

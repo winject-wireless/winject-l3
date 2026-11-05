@@ -10,7 +10,7 @@
 #include <thread>
 #include <vector>
 
-using namespace winject;
+using namespace winject::core;
 namespace
 {
 bfc::shared_sized_buffer pull_air_sdu(const std::shared_ptr<BoundedLossyQueue>& queue,

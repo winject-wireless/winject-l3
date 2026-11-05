@@ -3,7 +3,7 @@ project(winject-tests CXX)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/WinjectVersion.cmake)
 configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/WinjectBuildVersion.h.in
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/WinjectBuildVersion.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/WinjectBuildVersion.h
     @ONLY)
 
@@ -21,8 +21,13 @@ FetchContent_Declare(googletest
 )
 FetchContent_MakeAvailable(googletest)
 
-include(${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/IsalEc.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../core/fec/IsalEc.cmake)
 winject_add_isal_ec()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/../core/CoreSources.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../l3/L3Sources.cmake)
+list(TRANSFORM WINJECT_CORE_SOURCES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/../core/)
+list(TRANSFORM WINJECT_L3_SOURCES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/../l3/)
 
 add_executable(winject-tests
     ReactorDrainTest.cpp
@@ -38,7 +43,7 @@ add_executable(winject-tests
     LCHeaderTest.cpp
     PhyAirtimeTest.cpp
     RxDemuxTest.cpp
-    ConsoleClientTest.cpp
+    RadioMplaneClientTest.cpp
     ConsoleServiceTest.cpp
     ConsoleServiceSocketTest.cpp
     MplaneCorrelationTest.cpp
@@ -53,45 +58,19 @@ add_executable(winject-tests
     TxMuxTest.cpp
     OneShotTimerTest.cpp
     BwtestTest.cpp
+    L3ApiTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/bwtest/Bwtest.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/Config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/App.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioManager.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Frame.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/frames/Mpdu.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_block_erasure.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_block_erasure_rx.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/vendor/rs_encode_scalar.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/FecTx.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/fec/FecRx.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UpstreamStats.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/Upstream.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/DatagramAir.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/UDPUpstream.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/endpoint/QueueUpstream.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleParse.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleClient.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/MplaneCorrelation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/console/ConsoleService.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/PhyAirtime.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RxDemux.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioUpstreamTable.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/TxMux.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiUdp.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiQueue.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/RadioMplaneParse.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/Log.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/NetUtil.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/radio/WifiFcs.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/MetricsRegistry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager/utils/Version.cpp
+    ${WINJECT_CORE_SOURCES}
+    ${WINJECT_L3_SOURCES}
 )
 
 target_include_directories(winject-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
-    ${CMAKE_CURRENT_SOURCE_DIR}/../manager
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core
+    ${CMAKE_CURRENT_SOURCE_DIR}/../l3
     ${bfc_SOURCE_DIR}/src
 )
 target_compile_options(winject-tests PRIVATE

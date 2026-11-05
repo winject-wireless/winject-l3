@@ -1,0 +1,34 @@
+#ifndef WINJECT_MANAGER_RADIO_RX_DEMUX_H_
+#define WINJECT_MANAGER_RADIO_RX_DEMUX_H_
+
+#include "radio/RadioUpstreamTable.h"
+
+#include <atomic>
+#include <bfc/shared_sized_buffer.hpp>
+#include <stdint.h>
+#include <vector>
+
+namespace winject::core
+{
+
+class RxDemux
+{
+public:
+    explicit RxDemux(RadioUpstreamTable& table);
+
+    void set_domain(uint16_t domain);
+    uint64_t rx_drop_domain() const;
+    uint64_t rx_drop_bus() const;
+
+    void on_mpdu(bfc::shared_sized_buffer mpdu);
+
+private:
+    RadioUpstreamTable& table;
+    uint16_t domain = 0;
+    std::atomic<uint64_t> rx_drop_domain_total{0};
+    std::atomic<uint64_t> rx_drop_bus_total{0};
+};
+
+}  // namespace winject::core
+
+#endif  // WINJECT_MANAGER_RADIO_RX_DEMUX_H_

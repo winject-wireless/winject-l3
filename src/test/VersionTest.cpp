@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-using namespace winject;
+using namespace winject::core;
 
 TEST(VersionTest, ParseOk)
 {

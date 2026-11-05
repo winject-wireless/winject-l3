@@ -1,0 +1,63 @@
+#ifndef WINJECT_MANAGER_RADIO_RADIO_UPSTREAM_TABLE_H_
+#define WINJECT_MANAGER_RADIO_RADIO_UPSTREAM_TABLE_H_
+
+#include "radio/RadioUpstreamEntry.h"
+
+#include <memory>
+#include <mutex>
+#include <stddef.h>
+#include <stdint.h>
+#include <vector>
+
+namespace winject::core
+{
+
+class UpstreamLink;
+class RadioDplane;
+
+// Per-upstream registration shared by TxMux (host→air) and RxDemux (air→host).
+class RadioUpstreamTable
+{
+public:
+    void add(const std::shared_ptr<UpstreamLink>& up,
+             const std::shared_ptr<BoundedLossyQueue>& tx_queue,
+             const std::shared_ptr<RadioDplane>& radio, uint8_t bus_tx,
+             uint8_t bus_rx, size_t budget);
+    void add(std::shared_ptr<ReactiveLossyQueue> rx_queue,
+             std::shared_ptr<BoundedLossyQueue> tx_queue,
+             const std::shared_ptr<RadioDplane>& radio, uint8_t bus_tx,
+             uint8_t bus_rx, size_t budget);
+    void clear();
+    bool remove(size_t index);
+    bool set_budget(size_t index, size_t budget);
+    bool get_budget(size_t index, size_t* budget) const;
+    bool peek_seq_lost(size_t index, uint64_t* lost) const;
+    uint64_t collect_seq_loss_delta();
+
+    std::mutex& mutex()
+    {
+        return mu;
+    }
+    const std::mutex& mutex() const
+    {
+        return mu;
+    }
+    // Caller must hold mutex().
+    std::vector<RadioUpstreamEntry>& entries()
+    {
+        return upstream_entries;
+    }
+    // Caller must hold mutex().
+    const std::vector<RadioUpstreamEntry>& entries() const
+    {
+        return upstream_entries;
+    }
+
+private:
+    mutable std::mutex mu;
+    std::vector<RadioUpstreamEntry> upstream_entries;
+};
+
+}  // namespace winject::core
+
+#endif  // WINJECT_MANAGER_RADIO_RADIO_UPSTREAM_TABLE_H_

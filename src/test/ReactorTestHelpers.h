@@ -11,7 +11,7 @@
 #include <sys/socket.h>
 #include <thread>
 
-namespace winject
+namespace winject::core
 {
 namespace test
 {
@@ -62,6 +62,6 @@ inline bool run_reactor_with_watchdog(IOReactor& reactor,
 }
 
 }  // namespace test
-}  // namespace winject
+}  // namespace winject::core
 
 #endif  // WINJECT_TEST_REACTOR_TEST_HELPERS_H_

@@ -2,7 +2,7 @@
 
 Winject uses a local vendor copy of vstreamer's RS codec from commit
 `5cd91b7e8dfb5190ca08852b6e066147be780921`. Provenance, source hashes and local
-adaptations are recorded in [the vendor README](../src/manager/fec/vendor/README.md).
+adaptations are recorded in [the vendor README](../src/core/fec/vendor/README.md).
 A shared library extraction is deferred to a separate task; this build does not
 depend on a vstreamer checkout.
 

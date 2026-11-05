@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 #include <variant>
 
-using namespace winject;
+using namespace winject::core;
 
 TEST(MetricsRegistryTest, GetMetricsCreatesAndReturnsSameHandle)
 {

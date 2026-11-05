@@ -1,8 +1,8 @@
-#include "console/MplaneCorrelation.h"
+#include "mplane/MplaneCorrelation.h"
 
 #include <gtest/gtest.h>
 
-using namespace winject;
+using namespace winject::core;
 
 TEST(MplaneCorrelationTest, FormatCorrelatedReply)
 {

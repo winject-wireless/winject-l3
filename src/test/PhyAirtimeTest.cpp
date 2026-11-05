@@ -2,9 +2,9 @@
 
 #include <gtest/gtest.h>
 
-using winject::phy_mode_from_name;
-using winject::phy_txtime_us;
-using winject::PhyMode;
+using winject::core::phy_mode_from_name;
+using winject::core::phy_txtime_us;
+using winject::core::PhyMode;
 
 namespace
 {

@@ -1,0 +1,863 @@
+#include "Config.h"
+
+#include "fec/RsBlockErasure.h"
+#include "radio/PhyAirtime.h"
+#include "utils/NetUtil.h"
+
+#include <bfc/configuration_parser.hpp>
+#include <cctype>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <unordered_set>
+
+namespace winject::core
+{
+
+static std::string trim(const std::string& s)
+{
+    const auto start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos)
+    {
+        return "";
+    }
+    const auto end = s.find_last_not_of(" \t\r\n");
+    return s.substr(start, end - start + 1);
+}
+
+static bool parse_mode(const std::string& text, UpstreamMode* mode)
+{
+    if (text == "UDP_STATIC_FORWARDING")
+    {
+        *mode = UpstreamMode::udp_static;
+        return true;
+    }
+    if (text == "UDP_CLIENT_FORWARDING")
+    {
+        *mode = UpstreamMode::udp_client;
+        return true;
+    }
+    if (text == "UDP_SERVER_FORWARDING")
+    {
+        *mode = UpstreamMode::udp_server;
+        return true;
+    }
+    if (text == "QUEUE_FORWARDING")
+    {
+        *mode = UpstreamMode::queue;
+        return true;
+    }
+    return false;
+}
+
+static std::string key_of(size_t i, const char* field)
+{
+    std::ostringstream os;
+    os << "upstream-" << i << "." << field;
+    return os.str();
+}
+
+static bool reject_moved_key(const bfc::configuration_parser& parser,
+                             const char* from, const char* to,
+                             std::string* error)
+{
+    if (!parser.arg(from).has_value())
+    {
+        return true;
+    }
+    *error = std::string(from) + " moved to " + to;
+    return false;
+}
+
+static bool reject_removed_key(const bfc::configuration_parser& parser,
+                               const char* key, std::string* error)
+{
+    if (!parser.arg(key).has_value())
+    {
+        return true;
+    }
+    *error = std::string(key) + " is removed";
+    return false;
+}
+
+static bool require_arg(const bfc::configuration_parser& p,
+                        const std::string& key, std::string* out,
+                        std::string* error)
+{
+    auto v = p.arg(key);
+    if (!v || v->empty())
+    {
+        *error = "missing " + key;
+        return false;
+    }
+    *out = *v;
+    return true;
+}
+
+uint32_t Config::phy_rate_kbps(const std::string& modulation)
+{
+    return phy_nominal_kbps(modulation);
+}
+
+std::string Config::canonical_modulation(const std::string& modulation)
+{
+    return phy_canonical_name(modulation);
+}
+
+bool Config::modulation_ok_for_channel(const std::string& modulation,
+                                       uint8_t channel)
+{
+    const std::string name = canonical_modulation(modulation);
+    if (name.empty())
+    {
+        return false;
+    }
+    if (channel != 14)
+    {
+        return true;
+    }
+    return name.rfind("DSS_", 0) == 0 || name.rfind("CCK_", 0) == 0;
+}
+
+bool Config::load(const std::string& path, std::string* error)
+{
+    std::ifstream in(path);
+    if (!in.is_open())
+    {
+        *error = "cannot open " + path;
+        return false;
+    }
+
+    bfc::configuration_parser parser;
+    std::string line;
+    while (std::getline(in, line))
+    {
+        const std::string t = trim(line);
+        if (t.empty() || t[0] == '#')
+        {
+            continue;
+        }
+        parser.load_line(t);
+    }
+
+    const char* moved[][2] = {
+        {"manager.console_in", "winject.console_in"},
+        {"winject.device", "radio.dplane"},
+        {"winject.console", "radio.mplane"},
+        {"radio.console", "radio.mplane"},
+        {"winject.dplane_port", "radio.dplane"},
+        {"radio.dplane_port", "radio.dplane"},
+        {"winject.inject_port", "radio.dplane"},
+        {"radio.inject_port", "radio.dplane"},
+        {"winject.forward_port", "radio.dplane"},
+        {"winject.forward_base", "radio.dplane"},
+        {"winject.channel", "radio.channel"},
+        {"winject.modulation", "radio.modulation"},
+        {"winject.power", "radio.power"},
+        {"winject.cca", "radio.cca"},
+        {"winject.radio_fcs", "radio.fcs"},
+    };
+    for (const auto& pair : moved)
+    {
+        if (!reject_moved_key(parser, pair[0], pair[1], error))
+        {
+            return false;
+        }
+    }
+    const char* removed[] = {
+        "winject.max_rate_kbps",
+        "winject.tx_gap_us",
+        "winject.max_data_per_tick",
+        "winject.tx_burst_size",
+        "winject.tx_burst_interval_us",
+        "winject.local_ip",
+        "winject.skip_console",
+        "radio.skip_console",
+        "radio.device",
+    };
+    for (const char* key : removed)
+    {
+        if (!reject_removed_key(parser, key, error))
+        {
+            return false;
+        }
+    }
+
+    auto ch = parser.as<unsigned>("radio.channel");
+    if (!ch || *ch < 1 || *ch > 14)
+    {
+        *error = "invalid radio.channel";
+        return false;
+    }
+    channel = static_cast<uint8_t>(*ch);
+
+    if (!require_arg(parser, "radio.modulation", &modulation, error))
+    {
+        return false;
+    }
+    const std::string canon = canonical_modulation(modulation);
+    if (canon.empty())
+    {
+        *error = "invalid radio.modulation";
+        return false;
+    }
+    modulation = canon;
+    if (!modulation_ok_for_channel(modulation, channel))
+    {
+        *error = "radio.modulation not valid for radio.channel";
+        return false;
+    }
+    auto pwr = parser.as<int>("radio.power");
+    if (!pwr || *pwr < k_power_min_dbm || *pwr > k_power_max_dbm)
+    {
+        *error = "invalid radio.power";
+        return false;
+    }
+    power_dbm = static_cast<int8_t>(*pwr);
+
+    std::string domain_s;
+    if (!require_arg(parser, "winject.domain", &domain_s, error))
+    {
+        return false;
+    }
+    if (!parse_domain(domain_s, &domain))
+    {
+        *error = "invalid winject.domain";
+        return false;
+    }
+    if (domain == 0)
+    {
+        *error = "winject.domain must be non-zero";
+        return false;
+    }
+
+    if (auto c = parser.arg("radio.cca"))
+    {
+        if (*c == "1" || *c == "true")
+        {
+            cca = true;
+        }
+        else if (*c == "0" || *c == "false")
+        {
+            cca = false;
+        }
+        else
+        {
+            *error = "invalid radio.cca";
+            return false;
+        }
+        cca_explicit = true;
+    }
+    if (auto fcs = parser.arg("radio.fcs"))
+    {
+        std::string v;
+        for (char c : *fcs)
+        {
+            v.push_back(
+                static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        if (v == "auto")
+        {
+            radio_device.fcs = RadioFcsConfig::auto_detect;
+        }
+        else if (v == "signal")
+        {
+            radio_device.fcs = RadioFcsConfig::signal;
+        }
+        else if (v == "actual")
+        {
+            radio_device.fcs = RadioFcsConfig::actual;
+        }
+        else
+        {
+            *error = "invalid radio.fcs";
+            return false;
+        }
+    }
+    console_in = parser.arg("winject.console_in").value_or("");
+    if (!console_in.empty())
+    {
+        sockaddr_in tmp = {};
+        if (!parse_host_port(console_in, &tmp))
+        {
+            *error = "invalid winject.console_in";
+            return false;
+        }
+    }
+    std::string mplane_s;
+    if (!require_arg(parser, "radio.mplane", &mplane_s, error))
+    {
+        return false;
+    }
+    if (!parse_host_port(mplane_s, &radio_device.mplane))
+    {
+        *error = "invalid radio.mplane";
+        return false;
+    }
+    radio_device.dplane_tx = parser.arg("radio.dplane_tx").value_or("");
+    radio_device.dplane_rx = parser.arg("radio.dplane_rx").value_or("");
+    radio_device.reactor = parser.arg("radio.reactor").value_or("");
+    const bool dplane_queue = !radio_device.dplane_tx.empty() ||
+                              !radio_device.dplane_rx.empty() ||
+                              !radio_device.reactor.empty();
+    if (dplane_queue)
+    {
+        if (radio_device.dplane_tx.empty() || radio_device.dplane_rx.empty() ||
+            radio_device.reactor.empty())
+        {
+            *error =
+                "radio.dplane_tx, radio.dplane_rx and radio.reactor go "
+                "together";
+            return false;
+        }
+        if (parser.arg("radio.dplane"))
+        {
+            *error = "radio.dplane and radio.dplane_tx are exclusive";
+            return false;
+        }
+    }
+    else
+    {
+        std::string dplane_s;
+        if (!require_arg(parser, "radio.dplane", &dplane_s, error))
+        {
+            return false;
+        }
+        if (!parse_host_port(dplane_s, &radio_device.dplane))
+        {
+            *error = "invalid radio.dplane";
+            return false;
+        }
+    }
+    stats_sec = parser.as<unsigned>("winject.stats_sec").value_or(0);
+    if (const char* env = std::getenv("WINJECT_STATS_SEC"))
+    {
+        const unsigned v =
+            static_cast<unsigned>(std::strtoul(env, nullptr, 10));
+        if (v > 0)
+        {
+            stats_sec = v;
+        }
+    }
+
+    auto size = parser.as<unsigned>("upstream.size");
+    if (!size || *size == 0)
+    {
+        *error = "invalid upstream.size";
+        return false;
+    }
+    upstreams.clear();
+    for (size_t i = 0; i < *size; i++)
+    {
+        UpstreamConfig u;
+        u.index = i;
+        std::string umode;
+        if (!require_arg(parser, key_of(i, "mode"), &umode, error))
+        {
+            return false;
+        }
+        UpstreamMode mode = UpstreamMode::udp_static;
+        if (umode == "UDP_GENERIC_FORWARDING")
+        {
+            *error = "UDP_GENERIC_FORWARDING moved to UDP_STATIC_FORWARDING";
+            return false;
+        }
+        if (!parse_mode(umode, &mode))
+        {
+            *error = "invalid " + key_of(i, "mode");
+            return false;
+        }
+        // Firmware TX/RX are independent and optional.
+        const std::string idx = std::to_string(i);
+        const std::string tx_bus_key = key_of(i, "tx_bus");
+        const std::string rx_bus_key = key_of(i, "rx_bus");
+        const std::string legacy_tx = "upstream_tx-" + idx + ".bus";
+        const std::string legacy_rx = "upstream_rx-" + idx + ".bus";
+        const std::string legacy_bus_tx = key_of(i, "bus_tx");
+        const std::string legacy_bus_rx = key_of(i, "bus_rx");
+        if (!reject_moved_key(parser, legacy_tx.c_str(), tx_bus_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_rx.c_str(), rx_bus_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_bus_tx.c_str(), tx_bus_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_bus_rx.c_str(), rx_bus_key.c_str(),
+                              error))
+        {
+            return false;
+        }
+        const std::string bus_tx_s = parser.arg(tx_bus_key).value_or("");
+        const std::string bus_rx_s = parser.arg(rx_bus_key).value_or("");
+        if (!bus_tx_s.empty())
+        {
+            if (!parse_bus(bus_tx_s, &u.bus_tx) || u.bus_tx == 0)
+            {
+                *error = "invalid " + key_of(i, "tx_bus");
+                return false;
+            }
+        }
+        if (!bus_rx_s.empty())
+        {
+            if (!parse_bus(bus_rx_s, &u.bus_rx) || u.bus_rx == 0)
+            {
+                *error = "invalid " + key_of(i, "rx_bus");
+                return false;
+            }
+        }
+        if (u.bus_tx == 0 && u.bus_rx == 0)
+        {
+            *error =
+                "upstream-" + std::to_string(i) + " needs tx_bus and/or rx_bus";
+            return false;
+        }
+        auto budget = parser.as<unsigned>(key_of(i, "scheduler_budget"));
+        if (!budget || *budget == 0)
+        {
+            *error = "invalid " + key_of(i, "scheduler_budget");
+            return false;
+        }
+        u.scheduler_budget = *budget;
+        const auto capacity_key = key_of(i, "rx_queue_capacity");
+        if (parser.arg(capacity_key))
+        {
+            const auto capacity = parser.as<unsigned>(capacity_key);
+            if (!capacity || *capacity == 0)
+            {
+                *error = "invalid " + capacity_key;
+                return false;
+            }
+            u.rx_queue_capacity = *capacity;
+        }
+        const std::string rx_key = key_of(i, "rx");
+        const std::string tx_key = key_of(i, "tx");
+        const std::string legacy_bind = key_of(i, "bind_address");
+        const std::string legacy_connect = key_of(i, "connect_address");
+        const std::string legacy_queue_in = key_of(i, "queue_in");
+        const std::string legacy_queue_out = key_of(i, "queue_out");
+        if (!reject_moved_key(parser, legacy_bind.c_str(), rx_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_connect.c_str(), tx_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_queue_in.c_str(), rx_key.c_str(),
+                              error) ||
+            !reject_moved_key(parser, legacy_queue_out.c_str(), tx_key.c_str(),
+                              error))
+        {
+            return false;
+        }
+        std::string rx = parser.arg(rx_key).value_or("");
+        std::string tx = parser.arg(tx_key).value_or("");
+
+        const std::string fec_type =
+            parser.arg(key_of(i, "fec.type")).value_or("");
+        if (!fec_type.empty() && fec_type != "NONE")
+        {
+            if (fec_type != "RS_BLOCK_ERASURE")
+            {
+                *error = "invalid " + key_of(i, "fec.type");
+                return false;
+            }
+            auto fk = parser.as<unsigned>(key_of(i, "fec.k"));
+            auto fn = parser.as<unsigned>(key_of(i, "fec.n"));
+            if (!fk || !fn || *fk < 1 || *fn <= *fk ||
+                *fn > RsBlockErasure::k_max_n)
+            {
+                *error = "invalid " + key_of(i, "fec.k") + "/" +
+                         key_of(i, "fec.n") + " (need 1 <= k < n <= 31)";
+                return false;
+            }
+            u.fec_type = FecType::RsBlockErasure;
+            u.fec_k = static_cast<int>(*fk);
+            u.fec_n = static_cast<int>(*fn);
+            auto fto = parser.as<int>(key_of(i, "fec.timeout_ms"));
+            if (fto)
+            {
+                if (*fto < 0)
+                {
+                    *error = "invalid " + key_of(i, "fec.timeout_ms");
+                    return false;
+                }
+                u.fec_timeout_ms = *fto;
+            }
+        }
+
+        const std::string queue_reactor =
+            parser.arg(key_of(i, "reactor")).value_or("");
+        if (mode == UpstreamMode::queue)
+        {
+            // None of the three: an L3-owned queue, which validate() accepts
+            // only with on_upstream_queue set.
+            const bool owned =
+                rx.empty() && tx.empty() && queue_reactor.empty();
+            if (!owned && (rx.empty() || tx.empty() || queue_reactor.empty()))
+            {
+                *error = "upstream-" + std::to_string(i) +
+                         " needs rx, tx, and reactor, or none (L3-owned)";
+                return false;
+            }
+            if (!owned && rx == tx)
+            {
+                *error =
+                    "upstream-" + std::to_string(i) + " rx and tx must differ";
+                return false;
+            }
+            u.mode = UpstreamMode::queue;
+            u.endpoint = EndpointAddress{std::move(rx), std::move(tx)};
+            u.reactor = queue_reactor;
+            upstreams.push_back(std::move(u));
+            continue;
+        }
+        if (!queue_reactor.empty())
+        {
+            *error = key_of(i, "mode") + " does not use reactor";
+            return false;
+        }
+        if (rx.empty() && tx.empty())
+        {
+            *error = "upstream-" + std::to_string(i) +
+                     " needs rx and tx (static), rx only (server), or tx only "
+                     "(client)";
+            return false;
+        }
+        const UpstreamMode inferred = upstream_mode(EndpointAddress{rx, tx});
+        if (mode != inferred)
+        {
+            *error = key_of(i, "mode") + " does not match rx/tx";
+            return false;
+        }
+        u.mode = inferred;
+        u.endpoint = EndpointAddress{std::move(rx), std::move(tx)};
+        upstreams.push_back(std::move(u));
+    }
+    if (!validate_upstreams(upstreams, error))
+    {
+        return false;
+    }
+    return validate(error);
+}
+
+bool Config::validate(std::string* error) const
+{
+    auto fail = [&](const std::string& msg) -> bool
+    {
+        if (error != nullptr)
+        {
+            *error = msg;
+        }
+        return false;
+    };
+
+    if (channel < 1 || channel > 14)
+    {
+        return fail("invalid radio.channel");
+    }
+    // load() stores the canonical name. A filled struct must already use it
+    // so the radio sees the same string a parsed file would.
+    if (canonical_modulation(modulation) != modulation)
+    {
+        return fail("invalid radio.modulation");
+    }
+    if (!modulation_ok_for_channel(modulation, channel))
+    {
+        return fail("radio.modulation not valid for radio.channel");
+    }
+    if (power_dbm < k_power_min_dbm || power_dbm > k_power_max_dbm)
+    {
+        return fail("invalid radio.power");
+    }
+    if (domain == 0)
+    {
+        return fail("winject.domain must be non-zero");
+    }
+    if (!console_in.empty())
+    {
+        sockaddr_in tmp = {};
+        if (!parse_host_port(console_in, &tmp))
+        {
+            return fail("invalid winject.console_in");
+        }
+    }
+    auto ipv4_set = [](const sockaddr_in& addr) -> bool
+    {
+        return addr.sin_family == AF_INET && addr.sin_port != 0;
+    };
+    if (!ipv4_set(radio_device.mplane))
+    {
+        return fail("radio mplane address is required");
+    }
+    if (radio_device.dplane_is_queue())
+    {
+        if (radio_device.dplane_rx.empty() || radio_device.reactor.empty())
+        {
+            return fail("radio queue dplane needs tx, rx and reactor");
+        }
+        if (radio_device.dplane_tx == radio_device.dplane_rx)
+        {
+            return fail("radio dplane_tx and dplane_rx must differ");
+        }
+    }
+    else if (!ipv4_set(radio_device.dplane))
+    {
+        return fail("radio dplane address is required");
+    }
+    if (upstreams.empty())
+    {
+        return fail("invalid upstream.size");
+    }
+
+    for (size_t i = 0; i < upstreams.size(); ++i)
+    {
+        const UpstreamConfig& u = upstreams[i];
+        if (u.rx_queue_capacity == 0)
+        {
+            return fail("invalid upstream-" + std::to_string(i) +
+                        ".rx_queue_capacity");
+        }
+        if (u.scheduler_budget == 0)
+        {
+            return fail("invalid upstream-" + std::to_string(i) +
+                        ".scheduler_budget");
+        }
+        for (size_t j = 0; j < i; ++j)
+        {
+            if (upstreams[j].index == u.index)
+            {
+                return fail("duplicate upstream index");
+            }
+        }
+        if (u.mode == UpstreamMode::queue)
+        {
+            const bool owned_queue = on_upstream_queue &&
+                                     u.endpoint.rx.empty() &&
+                                     u.endpoint.tx.empty() && u.reactor.empty();
+            if (!owned_queue && (u.endpoint.rx.empty() ||
+                                 u.endpoint.tx.empty() || u.reactor.empty()))
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            " needs rx, tx, and reactor");
+            }
+            if (!owned_queue && u.endpoint.rx == u.endpoint.tx)
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            " rx and tx must differ");
+            }
+        }
+        else
+        {
+            if (!u.reactor.empty())
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            " does not use reactor");
+            }
+            if (u.endpoint.rx.empty() && u.endpoint.tx.empty())
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            " needs rx and tx (static), rx only (server), or "
+                            "tx only (client)");
+            }
+            if (u.mode != upstream_mode(u.endpoint))
+            {
+                return fail("upstream-" + std::to_string(i) +
+                            ".mode does not match rx/tx");
+            }
+            sockaddr_in tmp = {};
+            if (!u.endpoint.rx.empty() && !parse_host_port(u.endpoint.rx, &tmp))
+            {
+                return fail("invalid upstream-" + std::to_string(i) + ".rx");
+            }
+            if (!u.endpoint.tx.empty() && !parse_host_port(u.endpoint.tx, &tmp))
+            {
+                return fail("invalid upstream-" + std::to_string(i) + ".tx");
+            }
+        }
+        if (u.fec_type == FecType::RsBlockErasure)
+        {
+            RsBlockErasure codec;
+            if (!codec.init(u.fec_k, u.fec_n, u.fec_timeout_ms))
+            {
+                return fail("invalid upstream-" + std::to_string(i) +
+                            " fec k/n");
+            }
+        }
+        else if (u.fec_type != FecType::none)
+        {
+            return fail("invalid upstream-" + std::to_string(i) + ".fec.type");
+        }
+    }
+    if (!validate_upstreams(upstreams, error))
+    {
+        return false;
+    }
+    return true;
+}
+
+bool Config::validate_upstreams(const std::vector<UpstreamConfig>& upstreams,
+                                std::string* error)
+{
+    for (size_t i = 0; i < upstreams.size(); ++i)
+    {
+        const UpstreamConfig& u = upstreams[i];
+        if (u.bus_tx == 0 && u.bus_rx == 0)
+        {
+            if (error != nullptr)
+            {
+                *error = "upstream needs tx_bus and/or rx_bus";
+            }
+            return false;
+        }
+    }
+    for (uint8_t bus = 1; bus != 0; ++bus)
+    {
+        size_t count = 0;
+        bool fec_on_bus = false;
+        for (const auto& u : upstreams)
+        {
+            if (u.bus_tx != bus)
+            {
+                continue;
+            }
+            ++count;
+            if (u.fec_type == FecType::RsBlockErasure)
+            {
+                fec_on_bus = true;
+            }
+        }
+        if (count > 1 && fec_on_bus)
+        {
+            if (error != nullptr)
+            {
+                *error = "shared tx_bus with FEC enabled";
+            }
+            return false;
+        }
+    }
+    std::unordered_set<std::string> queue_names;
+    for (const auto& u : upstreams)
+    {
+        if (u.mode != UpstreamMode::queue)
+        {
+            continue;
+        }
+        // Owned queues have no registry names. Config::validate requires the
+        // on_upstream_queue callback before this shared bus/queue validation.
+        if (u.endpoint.rx.empty() && u.endpoint.tx.empty() && u.reactor.empty())
+        {
+            continue;
+        }
+        if (u.endpoint.rx.empty() || u.endpoint.tx.empty() ||
+            u.reactor.empty() || u.endpoint.rx == u.endpoint.tx)
+        {
+            if (error != nullptr)
+            {
+                *error = "queue upstream needs distinct rx and tx";
+            }
+            return false;
+        }
+        if (!queue_names.insert(u.endpoint.rx).second ||
+            !queue_names.insert(u.endpoint.tx).second)
+        {
+            if (error != nullptr)
+            {
+                *error = "queue name used by more than one upstream";
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Config::validate_upstream_update(const UpstreamConfig& current,
+                                      FecType fec_type, int fec_k, int fec_n,
+                                      int fec_timeout_ms, size_t quanta,
+                                      bool have_fec, bool have_k, bool have_n,
+                                      bool have_fec_timeout, bool have_quanta,
+                                      const std::vector<UpstreamConfig>& all,
+                                      UpstreamConfig* out, std::string* error)
+{
+    if (out == nullptr)
+    {
+        if (error != nullptr)
+        {
+            *error = "invalid argument";
+        }
+        return false;
+    }
+    *out = current;
+    if (have_quanta)
+    {
+        if (quanta == 0)
+        {
+            if (error != nullptr)
+            {
+                *error = "invalid quanta";
+            }
+            return false;
+        }
+        out->scheduler_budget = quanta;
+    }
+    if (have_fec_timeout)
+    {
+        if (fec_timeout_ms < 1)
+        {
+            if (error != nullptr)
+            {
+                *error = "invalid fec_timeout";
+            }
+            return false;
+        }
+        out->fec_timeout_ms = fec_timeout_ms;
+    }
+    FecType type = current.fec_type;
+    int k = current.fec_k;
+    int n = current.fec_n;
+    if (have_fec)
+    {
+        type = fec_type;
+    }
+    if (have_k)
+    {
+        k = fec_k;
+    }
+    if (have_n)
+    {
+        n = fec_n;
+    }
+    if (type == FecType::none)
+    {
+        k = 0;
+        n = 0;
+    }
+    else
+    {
+        RsBlockErasure codec;
+        const int timeout =
+            have_fec_timeout ? fec_timeout_ms : out->fec_timeout_ms;
+        if (!codec.init(k, n, timeout))
+        {
+            if (error != nullptr)
+            {
+                *error = "invalid fec k/n";
+            }
+            return false;
+        }
+    }
+    out->fec_type = type;
+    out->fec_k = k;
+    out->fec_n = n;
+    std::vector<UpstreamConfig> candidate = all;
+    for (auto& u : candidate)
+    {
+        if (u.index == current.index)
+        {
+            u = *out;
+            break;
+        }
+    }
+    if (!validate_upstreams(candidate, error))
+    {
+        return false;
+    }
+    return true;
+}
+
+}  // namespace winject::core

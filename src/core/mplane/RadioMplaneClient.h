@@ -1,0 +1,143 @@
+#ifndef WINJECT_MANAGER_RADIO_MPLANE_CLIENT_H_
+#define WINJECT_MANAGER_RADIO_MPLANE_CLIENT_H_
+
+#include "mplane/MplaneResult.h"
+#include "radio/RadioConfig.h"
+#include "radio/RadioMplaneParse.h"
+#include "radio/RadioPhyView.h"
+#include "utils/Version.h"
+
+#include <bfc/socket.hpp>
+#include <chrono>
+#include <functional>
+#include <map>
+#include <netinet/in.h>
+#include <optional>
+#include <stdint.h>
+#include <string>
+#include <sys/socket.h>
+#include <vector>
+
+namespace winject::core
+{
+
+// Typed replies: the parsed struct plus the radio's text (result.text()).
+// The node acts on the struct; the text is only relayed.
+struct RadioPhyReply  // radio_tx_info, radio_tx
+{
+    MplaneResult result;
+    // Set when result.ok and the body parses.
+    std::optional<RadioPhyView> phy;
+};
+struct RadioCapsReply  // radio_caps_info
+{
+    MplaneResult result;
+    // True when fcs is known: an OK reply that parses, or NOK ENOSYS from a
+    // radio that predates radio_caps_info (legacy, fcs actual).
+    bool resolved = false;
+    bool legacy = false;
+    RadioFcsMode fcs = RadioFcsMode::unknown;
+    // Why it did not resolve, for the log.
+    std::string error;
+};
+struct RadioCountersReply  // tx_info + rx_info
+{
+    MplaneResult result;
+    // Set when result.ok and both lines parse.
+    std::optional<RadioCounters> counters;
+};
+
+class RadioMplaneClient
+{
+public:
+    using DoneFn = std::function<void(MplaneResult)>;
+
+    ~RadioMplaneClient();
+
+    bool start_connect(const sockaddr_in& radio_mplane, std::string* error);
+    bool finish_connect(std::string* error);
+    void close();
+    int fd() const
+    {
+        return sock.fd();
+    }
+    in_addr local_ip() const
+    {
+        return bound_local_ip;
+    }
+
+    void set_default_timeout(std::chrono::milliseconds timeout)
+    {
+        default_timeout = timeout;
+    }
+
+    bool request(const std::string& mplane_line, DoneFn done);
+    bool request(const std::string& mplane_line,
+                 std::chrono::milliseconds timeout, DoneFn done);
+
+    void on_line(const std::string& line);
+    // Lines from one datagram: a request completes on the last line carrying
+    // its id, so multi-line replies (radio_tx_info) arrive whole.
+    void on_lines(const std::vector<std::string>& lines);
+    void poll_deadlines(std::chrono::steady_clock::time_point now);
+    std::optional<std::chrono::steady_clock::time_point> next_deadline() const;
+    // Called with each new request's deadline, so the owner can arm a timer
+    // that runs poll_deadlines().
+    using DeadlineFn =
+        std::function<void(std::chrono::steady_clock::time_point deadline)>;
+    void set_on_deadline(DeadlineFn fn)
+    {
+        on_deadline = std::move(fn);
+    }
+    void cancel_pending();
+
+    void program(const RadioConfig& cfg, DoneFn done);
+    using PhyDoneFn = std::function<void(RadioPhyReply)>;
+    using CapsDoneFn = std::function<void(RadioCapsReply)>;
+    using CountersDoneFn = std::function<void(RadioCountersReply)>;
+    using RadioCapsFn = std::function<void(const RadioCapsReply&)>;
+    using RadioVersionFn =
+        std::function<void(bool known, const WinjectVersion& v)>;
+    void apply_radio(const RadioConfig& cfg, uint8_t save_slot, DoneFn done,
+                     RadioCapsFn on_caps = {}, RadioVersionFn on_version = {});
+    void query_radio_caps(CapsDoneFn done);
+    void query_radio_info(PhyDoneFn done);
+    // Radio tx_info then rx_info; body_lines holds both reply lines.
+    void query_radio_counters(CountersDoneFn done);
+    void send_radio_tx(const std::string& kv_args, PhyDoneFn done);
+    void send_radio_reset(DoneFn done);
+    void send_ping(DoneFn done);
+    void send_save_slot(uint8_t slot, DoneFn done);
+    void send_load_slot(uint8_t slot, DoneFn done);
+    void send_rx_filter(uint16_t domain, DoneFn done);
+
+    void append_recv(const char* data, size_t n);
+    bool pop_line(std::string* line);
+    void clear_pending();
+
+private:
+    struct Pending
+    {
+        std::string cmd;
+        std::chrono::steady_clock::time_point deadline;
+        DoneFn done;
+        std::vector<std::string> body_lines;
+    };
+
+    bool send_wire(const std::string& wire, std::string* error);
+    void handle_line(const std::string& line, bool last_for_id);
+    void complete(uint8_t id, MplaneResult result);
+    void chain_after(bool ok, const std::string& err, DoneFn next);
+
+    bfc::socket sock;
+    in_addr bound_local_ip{};
+    std::string pending;
+    uint8_t next_req_id = 1;
+    std::map<uint8_t, Pending> pending_reqs;
+    std::chrono::milliseconds default_timeout{3000};
+    DeadlineFn on_deadline;
+};
+
+}  // namespace winject::core
+
+#endif  // WINJECT_MANAGER_RADIO_MPLANE_CLIENT_H_

@@ -11,7 +11,7 @@
 #include <thread>
 #include <vector>
 
-using winject::fec_vendor::rs_block_erasure;
+using winject::core::fec_vendor::rs_block_erasure;
 
 namespace
 {
@@ -50,7 +50,7 @@ int fec_shard_index(const std::vector<uint8_t> &shard)
     return idx;
 }
 
-bool out_has_app_tag(const winject::fec_vendor::fec_rx_payload_list &rows, uint8_t tag)
+bool out_has_app_tag(const winject::core::fec_vendor::fec_rx_payload_list &rows, uint8_t tag)
 {
     for (const auto &row : rows)
     {
@@ -86,9 +86,9 @@ constexpr int k_past_deadline_ms =
     rs_block_erasure::k_spread_cap_ms + rs_block_erasure::k_deadline_margin_min_ms + 10;
 
 void feed_append(rs_block_erasure &dec, const std::vector<uint8_t> &shard,
-                 winject::fec_vendor::fec_rx_payload_list *accum)
+                 winject::core::fec_vendor::fec_rx_payload_list *accum)
 {
-    winject::fec_vendor::fec_rx_payload_list step;
+    winject::core::fec_vendor::fec_rx_payload_list step;
     dec.push_air(shard.data(), shard.size(), &step);
     accum->insert(accum->end(), std::make_move_iterator(step.begin()),
                   std::make_move_iterator(step.end()));
@@ -101,7 +101,7 @@ TEST(RsBlockErasureEmitTest, SplitCountersHdrAndKnMismatch)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     const uint8_t                     short_buf[2] = {0, 0};
     dec.push_air(short_buf, sizeof(short_buf), &out);
     EXPECT_EQ(dec.hdr_errors(), 1u);
@@ -133,7 +133,7 @@ TEST(RsBlockErasureEmitTest, MissingShardsOnRingEvict)
      * counts it as given_up instead. */
     ASSERT_TRUE(dec.init(4, 6, 60000));
     const auto partial = encode_block_apps(enc, 5, {55, 56, 57, 58})[0];
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_append(dec, partial, &out);
     for (int i = 0; i < 2200; i++)
     {
@@ -168,7 +168,7 @@ TEST(RsBlockErasureEmitTest, WrapLateHeadReleasesQueue)
     fake_clock       clk;
     clk.attach(dec);
 
-    winject::fec_vendor::fec_rx_payload_list all;
+    winject::core::fec_vendor::fec_rx_payload_list all;
     for (uint16_t id = 65530; id <= 65533; ++id)
     {
         feed_append(dec, encode_one(enc, id, static_cast<uint8_t>(id)), &all);
@@ -178,7 +178,7 @@ TEST(RsBlockErasureEmitTest, WrapLateHeadReleasesQueue)
         feed_append(dec, encode_one(enc, id, static_cast<uint8_t>(id)), &all);
     }
     EXPECT_EQ(4u, all.size());
-    winject::fec_vendor::fec_rx_payload_list late_step;
+    winject::core::fec_vendor::fec_rx_payload_list late_step;
     const std::vector<uint8_t>     late_shard = encode_one(enc, 65534, 0xfe);
     dec.push_air(late_shard.data(), late_shard.size(), &late_step);
     ASSERT_EQ(4u, late_step.size());
@@ -214,12 +214,12 @@ TEST(RsBlockErasureEmitTest, WrapInOrderNoLoss)
             std::swap(order[i], order[j]);
         }
     }
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (int idx : order)
     {
         feed_append(dec, shards[static_cast<size_t>(idx)], &out);
     }
-    winject::fec_vendor::fec_rx_payload_list flush;
+    winject::core::fec_vendor::fec_rx_payload_list flush;
     dec.poll_rx(&flush);
     out.insert(out.end(), flush.begin(), flush.end());
     ASSERT_EQ(out.size(), 1000u);
@@ -237,7 +237,7 @@ TEST(RsBlockErasureEmitTest, HeadOfLineStreaming)
     fake_clock       clk;
     clk.attach(dec);
     const auto       air = encode_block_apps(enc, 10, {10, 11, 12, 13});
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (size_t i = 0; i < air.size(); i++)
     {
         if (i == 2)
@@ -262,7 +262,7 @@ TEST(RsBlockErasureEmitTest, HeadOfLineStreaming)
     EXPECT_FALSE(out_has_app_tag(out, 14));
 
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list tick;
+    winject::core::fec_vendor::fec_rx_payload_list tick;
     dec.poll_rx(&tick);
     out.insert(out.end(), tick.begin(), tick.end());
     EXPECT_TRUE(out_has_app_tag(out, 13));
@@ -277,7 +277,7 @@ TEST(RsBlockErasureEmitTest, RecoveredStillInOrder)
     fake_clock       clk;
     clk.attach(dec);
     const auto       air = encode_block_apps(enc, 20, {20, 21, 22, 23});
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (size_t i = 0; i < air.size(); i++)
     {
         const int idx = fec_shard_index(air[i]);
@@ -287,7 +287,7 @@ TEST(RsBlockErasureEmitTest, RecoveredStillInOrder)
         }
         feed_append(dec, air[i], &out);
     }
-    winject::fec_vendor::fec_rx_payload_list flush;
+    winject::core::fec_vendor::fec_rx_payload_list flush;
     dec.poll_rx(&flush);
     out.insert(out.end(), flush.begin(), flush.end());
     ASSERT_EQ(out.size(), 4u);
@@ -309,7 +309,7 @@ TEST(RsBlockErasureEmitTest, PeerRestartResync)
     ASSERT_TRUE(enc_a.init(1, 1, 20));
     ASSERT_TRUE(enc_b.init(1, 1, 20));
 
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (int i = 0; i < 300; i++)
     {
         feed_append(dec, encode_one(enc_a, static_cast<uint16_t>(i), static_cast<uint8_t>(i & 0xFF)),
@@ -322,7 +322,7 @@ TEST(RsBlockErasureEmitTest, PeerRestartResync)
                                     static_cast<uint8_t>((100 + i) & 0xFF)),
                     &out);
     }
-    winject::fec_vendor::fec_rx_payload_list flush;
+    winject::core::fec_vendor::fec_rx_payload_list flush;
     dec.poll_rx(&flush);
     out.insert(out.end(), flush.begin(), flush.end());
     EXPECT_GE(out.size(), 310u);
@@ -336,7 +336,7 @@ TEST(RsBlockErasureEmitTest, RestartBehindWithinLoIgnoredAsLate)
     rs_block_erasure dec;
     rs_block_erasure enc;
     ASSERT_TRUE(enc.init(1, 1, 20));
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (int i = 0; i < 300; i++)
     {
         feed_append(dec, encode_one(enc, static_cast<uint16_t>(i), 1), &out);
@@ -367,7 +367,7 @@ TEST(RsBlockErasureEmitTest, PeerRestartResyncForwardJump)
         ASSERT_TRUE(enc_a.init(6, 8, 20));
         ASSERT_TRUE(enc_b.init(6, 8, 20));
 
-        winject::fec_vendor::fec_rx_payload_list out;
+        winject::core::fec_vendor::fec_rx_payload_list out;
         uint16_t                       tx_base = 0;
         for (int i = 0; i < 67; i++)
         {
@@ -392,7 +392,7 @@ TEST(RsBlockErasureEmitTest, PeerRestartResyncForwardJump)
             }
         }
         clk.advance(k_past_deadline_ms);
-        winject::fec_vendor::fec_rx_payload_list tick;
+        winject::core::fec_vendor::fec_rx_payload_list tick;
         dec.poll_rx(&tick);
         out.insert(out.end(), tick.begin(), tick.end());
         ASSERT_EQ(out.size(), 67u * 6u + 20u * 6u) << "offset " << offset;
@@ -415,7 +415,7 @@ TEST(RsBlockErasureEmitTest, RingEvictsStalePartial)
     clk.attach(dec);
     const auto air = encode_block_apps(enc, 5, {55, 56, 57, 58});
     const std::vector<uint8_t> partial = air[0];
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_append(dec, partial, &out);
     for (int i = 0; i < 2200; i++)
     {
@@ -423,7 +423,7 @@ TEST(RsBlockErasureEmitTest, RingEvictsStalePartial)
                                     static_cast<uint8_t>(i & 0xFF)),
                     &out);
     }
-    winject::fec_vendor::fec_rx_payload_list flush;
+    winject::core::fec_vendor::fec_rx_payload_list flush;
     dec.poll_rx(&flush);
     out.insert(out.end(), flush.begin(), flush.end());
     for (const auto &shard : encode_block_apps(enc, 5, {77}))
@@ -466,7 +466,7 @@ TEST(RsBlockErasureEmitTest, NextRxDeadlineMatchesPollRelease)
     std::chrono::steady_clock::time_point dl;
     EXPECT_FALSE(dec.next_rx_deadline(&dl));
 
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_append(dec, b0[1], &out);  // head shard 0 missing
     EXPECT_TRUE(out.empty());
     ASSERT_TRUE(dec.next_rx_deadline(&dl));
@@ -509,7 +509,7 @@ TEST(RsBlockErasureEmitTest, LateParityOfReadyBlockNotCountedLost)
     clk.attach(dec);
     const auto b0 = encode_block_apps(enc, 0, {1, 2, 3, 4});
     const auto b1 = encode_block_apps(enc, 4, {5, 6, 7, 8});
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_append(dec, b0[0], &out); /* block 0: 1 of 6 shards, 3 apps truly lost */
     for (size_t i = 0; i < 4; i++)
     {
@@ -522,7 +522,7 @@ TEST(RsBlockErasureEmitTest, LateParityOfReadyBlockNotCountedLost)
     for (int round = 0; round < 2; round++)
     {
         clk.advance(400);
-        winject::fec_vendor::fec_rx_payload_list flush;
+        winject::core::fec_vendor::fec_rx_payload_list flush;
         dec.poll_rx(&flush);
         out.insert(out.end(), flush.begin(), flush.end());
     }
@@ -546,12 +546,12 @@ TEST(RsBlockErasureEmitTest, Kn31RoundTripMaxErasures)
     }
     const auto air = encode_block_apps(enc, 1000, tags);
     ASSERT_EQ(air.size(), 31u);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (const auto &shard : air)
     {
         feed_append(dec, shard, &out);
     }
-    winject::fec_vendor::fec_rx_payload_list flush;
+    winject::core::fec_vendor::fec_rx_payload_list flush;
     dec.poll_rx(&flush);
     out.insert(out.end(), flush.begin(), flush.end());
     ASSERT_EQ(out.size(), 31u);
@@ -570,7 +570,7 @@ TEST(RsBlockErasureEmitTest, Kn20N31MaxErasuresRoundTrip)
         tags[static_cast<size_t>(i)] = static_cast<uint8_t>(i);
     }
     const auto air = encode_block_apps(enc, 200, tags);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (size_t i = 0; i < air.size(); i++)
     {
         if (i < 11)
@@ -579,7 +579,7 @@ TEST(RsBlockErasureEmitTest, Kn20N31MaxErasuresRoundTrip)
         }
         feed_append(dec, air[i], &out);
     }
-    winject::fec_vendor::fec_rx_payload_list flush;
+    winject::core::fec_vendor::fec_rx_payload_list flush;
     dec.poll_rx(&flush);
     out.insert(out.end(), flush.begin(), flush.end());
     ASSERT_EQ(out.size(), 20u);
@@ -596,7 +596,7 @@ TEST(RsBlockErasureEmitTest, Kn20N31PartialThenFullNoFalseGap)
     const auto           partial_air = encode_block_apps(enc, 50, partial_tags);
     std::vector<uint8_t> full_tags(20, 8);
     const auto           full_air = encode_block_apps(enc, 53, full_tags);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (const auto &s : partial_air)
     {
         feed_append(dec, s, &out);
@@ -605,7 +605,7 @@ TEST(RsBlockErasureEmitTest, Kn20N31PartialThenFullNoFalseGap)
     {
         feed_append(dec, s, &out);
     }
-    winject::fec_vendor::fec_rx_payload_list flush;
+    winject::core::fec_vendor::fec_rx_payload_list flush;
     dec.poll_rx(&flush);
     out.insert(out.end(), flush.begin(), flush.end());
     EXPECT_EQ(dec.take_fail_lost_app_pkts(), 0u);
@@ -621,7 +621,7 @@ TEST(RsBlockErasureEmitTest, WholeBlockLostCountsSduN)
     clk.attach(dec);
     const auto a = encode_block_apps(enc, 0, {1, 2, 3, 4});
     const auto c = encode_block_apps(enc, 8, {9, 10, 11, 12});
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (const auto &s : a)
     {
         feed_append(dec, s, &out);
@@ -631,7 +631,7 @@ TEST(RsBlockErasureEmitTest, WholeBlockLostCountsSduN)
         feed_append(dec, s, &out);
     }
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list tick;
+    winject::core::fec_vendor::fec_rx_payload_list tick;
     dec.poll_rx(&tick);
     out.insert(out.end(), tick.begin(), tick.end());
     EXPECT_EQ(dec.take_fail_lost_app_pkts(), 4u);
@@ -647,7 +647,7 @@ TEST(RsBlockErasureEmitTest, ConsecutiveBlocksLostCountsSumSduN)
     clk.attach(dec);
     const auto a = encode_block_apps(enc, 0, {1, 2});
     const auto d = encode_block_apps(enc, 8, {9, 10});
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (const auto &s : a)
     {
         feed_append(dec, s, &out);
@@ -657,7 +657,7 @@ TEST(RsBlockErasureEmitTest, ConsecutiveBlocksLostCountsSumSduN)
         feed_append(dec, s, &out);
     }
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list tick;
+    winject::core::fec_vendor::fec_rx_payload_list tick;
     dec.poll_rx(&tick);
     EXPECT_EQ(dec.take_fail_lost_app_pkts(), 6u);
 }
@@ -695,7 +695,7 @@ TEST(RsBlockErasureEmitTest, PeerRestartSilenceNoGapCounted)
     clk.attach(dec);
     ASSERT_TRUE(enc_a.init(2, 4, 20));
     ASSERT_TRUE(enc_b.init(2, 4, 20));
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_append(dec, encode_block_apps(enc_a, 0, {1, 2})[0], &out);
     feed_append(dec, encode_block_apps(enc_a, 2, {3, 4})[0], &out);
     clk.advance(300);
@@ -712,12 +712,12 @@ TEST(RsBlockErasureEmitTest, QuickForwardRestartNoPhantomLoss)
     clk.attach(dec);
     const auto block0 = encode_block_apps(enc, 0, {1, 2, 3, 4});
     const auto block_far = encode_block_apps(enc, 20000, {9, 10, 11, 12});
-    winject::fec_vendor::fec_rx_payload_list discard;
+    winject::core::fec_vendor::fec_rx_payload_list discard;
     for (const auto &s : block0)
     {
         feed_append(dec, s, &discard);
     }
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (const auto &s : block_far)
     {
         feed_append(dec, s, &out);
@@ -741,7 +741,7 @@ TEST(RsBlockErasureEmitTest, LargeButRealHoleStillCounted)
     /* Within k_max_hi_block_id_deviation: a real hole in the same session. */
     const uint16_t far_base = static_cast<uint16_t>(6U + 1000U);
     const auto block_far = encode_block_apps(enc, far_base, {9, 10, 11, 12, 13, 14});
-    winject::fec_vendor::fec_rx_payload_list discard;
+    winject::core::fec_vendor::fec_rx_payload_list discard;
     for (const auto &s : block0)
     {
         feed_append(dec, s, &discard);
@@ -751,7 +751,7 @@ TEST(RsBlockErasureEmitTest, LargeButRealHoleStillCounted)
         feed_append(dec, s, &discard);
     }
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     dec.poll_rx(&out);
     EXPECT_EQ(dec.take_fail_lost_app_pkts(), 1000u);
     EXPECT_EQ(0u, dec.new_references());
@@ -764,14 +764,14 @@ TEST(RsBlockErasureEmitTest, SduSeqWrapNoLoss)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (int i = 0; i < 8; i++)
     {
         feed_append(dec, encode_one(enc, static_cast<uint16_t>(65530 + i),
                                     static_cast<uint8_t>(i & 0xFF)),
                     &out);
     }
-    winject::fec_vendor::fec_rx_payload_list flush;
+    winject::core::fec_vendor::fec_rx_payload_list flush;
     dec.poll_rx(&flush);
     out.insert(out.end(), flush.begin(), flush.end());
     ASSERT_EQ(out.size(), 8u);
@@ -786,7 +786,7 @@ TEST(RsBlockErasureEmitTest, LateBlockAfterJumpNotUndone)
     clk.attach(dec);
     const auto a = encode_block_apps(enc, 0, {1, 2});
     const auto c = encode_block_apps(enc, 4, {5, 6});
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (const auto &s : a)
     {
         feed_append(dec, s, &out);
@@ -796,7 +796,7 @@ TEST(RsBlockErasureEmitTest, LateBlockAfterJumpNotUndone)
         feed_append(dec, s, &out);
     }
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list tick;
+    winject::core::fec_vendor::fec_rx_payload_list tick;
     dec.poll_rx(&tick);
     out.insert(out.end(), tick.begin(), tick.end());
     const uint64_t lost_before = dec.take_fail_lost_app_pkts();
@@ -820,8 +820,8 @@ TEST(RsBlockErasureEmitTest, HeadHoleJumpCountsPartialBlockOnce)
     const auto block_a = encode_block_apps(enc, 0, {1, 2, 3, 4});
     const auto block_b = encode_block_apps(enc, 4, {11, 12, 13, 14});
     const auto block_c = encode_block_apps(enc, 8, {21, 22, 23, 24});
-    winject::fec_vendor::fec_rx_payload_list out;
-    winject::fec_vendor::fec_rx_payload_list discard;
+    winject::core::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list discard;
     feed_append(dec, block_a[4], &discard);
     feed_append(dec, block_b[0], &discard);
     feed_append(dec, block_b[1], &discard);
@@ -830,7 +830,7 @@ TEST(RsBlockErasureEmitTest, HeadHoleJumpCountsPartialBlockOnce)
         feed_append(dec, s, &discard);
     }
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list step;
+    winject::core::fec_vendor::fec_rx_payload_list step;
     dec.poll_rx(&step);
     out.insert(out.end(), step.begin(), step.end());
     clk.advance(k_past_deadline_ms);
@@ -853,7 +853,7 @@ namespace
 
 /* Feeds one full block of a new sender session at `base`, tagged with `tag`. */
 void feed_tagged_block(rs_block_erasure &enc, rs_block_erasure &dec, uint16_t base, uint8_t tag,
-                       winject::fec_vendor::fec_rx_payload_list *out)
+                       winject::core::fec_vendor::fec_rx_payload_list *out)
 {
     for (const auto &s : encode_block_apps(enc, base, {tag, tag, tag, tag}))
     {
@@ -861,7 +861,7 @@ void feed_tagged_block(rs_block_erasure &enc, rs_block_erasure &dec, uint16_t ba
     }
 }
 
-std::vector<uint8_t> app_tags(const winject::fec_vendor::fec_rx_payload_list &rows)
+std::vector<uint8_t> app_tags(const winject::core::fec_vendor::fec_rx_payload_list &rows)
 {
     std::vector<uint8_t> tags;
     for (const auto &row : rows)
@@ -880,7 +880,7 @@ void expect_quick_restart_clean(uint16_t old_base, uint16_t new_base, int new_bl
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_tagged_block(enc, dec, old_base, 1, &out);
     feed_tagged_block(enc, dec, static_cast<uint16_t>(old_base + 4), 2, &out);
     std::vector<uint8_t> want = {1, 1, 1, 1, 2, 2, 2, 2};
@@ -890,12 +890,12 @@ void expect_quick_restart_clean(uint16_t old_base, uint16_t new_base, int new_bl
         feed_tagged_block(enc, dec, static_cast<uint16_t>(new_base + 4 * b), tag, &out);
         want.insert(want.end(), 4, tag);
         clk.advance(5);
-        winject::fec_vendor::fec_rx_payload_list step;
+        winject::core::fec_vendor::fec_rx_payload_list step;
         dec.poll_rx(&step);
         out.insert(out.end(), step.begin(), step.end());
     }
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list step;
+    winject::core::fec_vendor::fec_rx_payload_list step;
     dec.poll_rx(&step);
     out.insert(out.end(), step.begin(), step.end());
     EXPECT_EQ(app_tags(out), want) << "old " << old_base << " new " << new_base;
@@ -940,7 +940,7 @@ TEST(RsBlockErasureEmitTest, StrayOldShardAfterResyncTakesReference)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_tagged_block(enc, dec, 0, 1, &out);
     const auto stray = encode_block_apps(enc, 4, {2, 2, 2, 2});
     std::vector<uint8_t> want = {1, 1, 1, 1};
@@ -970,7 +970,7 @@ TEST(RsBlockErasureEmitTest, HeadGiveUpWithMissingSduCountsAsFailure)
     fake_clock       clk;
     clk.attach(dec);
     const auto       air = encode_block_apps(enc, 10, {10, 11, 12, 13});
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (size_t i = 0; i < air.size(); i++)
     {
         /* Lose data shard 2 and all parity: the block cannot be rebuilt. */
@@ -986,7 +986,7 @@ TEST(RsBlockErasureEmitTest, HeadGiveUpWithMissingSduCountsAsFailure)
     }
 
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list tick;
+    winject::core::fec_vendor::fec_rx_payload_list tick;
     dec.poll_rx(&tick);
     out.insert(out.end(), tick.begin(), tick.end());
     ASSERT_TRUE(out_has_app_tag(out, 13));
@@ -1004,7 +1004,7 @@ TEST(RsBlockErasureEmitTest, LosslessStreamHasNoFailures)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (uint16_t b = 0; b < 8; b++)
     {
         const uint16_t base = static_cast<uint16_t>(b * 4);
@@ -1018,7 +1018,7 @@ TEST(RsBlockErasureEmitTest, LosslessStreamHasNoFailures)
         }
     }
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list tick;
+    winject::core::fec_vendor::fec_rx_payload_list tick;
     dec.poll_rx(&tick);
     EXPECT_EQ(32u, out.size() + tick.size());
     EXPECT_EQ(0u, dec.decode_fail());
@@ -1030,7 +1030,7 @@ namespace
 /* Blocks 0..blocks-1 of k=10/n=11 at sdu_base 10*b, tags 10*b + i + 1; each loses data shard 0
  * and its parity, so none can decode. Then one complete block after them. */
 void feed_undecodable_run(rs_block_erasure &enc, rs_block_erasure &dec, int blocks,
-                          winject::fec_vendor::fec_rx_payload_list *out)
+                          winject::core::fec_vendor::fec_rx_payload_list *out)
 {
     for (int b = 0; b <= blocks; b++)
     {
@@ -1052,7 +1052,7 @@ void feed_undecodable_run(rs_block_erasure &enc, rs_block_erasure &dec, int bloc
     }
 }
 
-void expect_ascending(const winject::fec_vendor::fec_rx_payload_list &out)
+void expect_ascending(const winject::core::fec_vendor::fec_rx_payload_list &out)
 {
     for (size_t i = 1; i < out.size(); i++)
     {
@@ -1071,10 +1071,10 @@ TEST(RsBlockErasureEmitTest, UndecodableRunFlushedAtDeadlines)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_undecodable_run(enc, dec, 4, &out);
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list tick;
+    winject::core::fec_vendor::fec_rx_payload_list tick;
     dec.poll_rx(&tick);
     out.insert(out.end(), tick.begin(), tick.end());
     EXPECT_EQ(4U, dec.given_up_blocks());
@@ -1092,10 +1092,10 @@ TEST(RsBlockErasureEmitTest, ExpiredBlocksEmitInOrder)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_undecodable_run(enc, dec, 6, &out);
     clk.advance(k_past_deadline_ms);
-    winject::fec_vendor::fec_rx_payload_list flush;
+    winject::core::fec_vendor::fec_rx_payload_list flush;
     dec.poll_rx(&flush);
     out.insert(out.end(), flush.begin(), flush.end());
     EXPECT_EQ(6U * 9U + 10U, out.size());
@@ -1109,7 +1109,7 @@ namespace
  * `skip` lists shard indices lost on the way; `late_ms` delays shard index `late_idx`. */
 void feed_spread_block(rs_block_erasure &enc, rs_block_erasure &dec, fake_clock &clk,
                        uint16_t base, int sdus, int spread_ms,
-                       winject::fec_vendor::fec_rx_payload_list *out, std::vector<int> skip = {},
+                       winject::core::fec_vendor::fec_rx_payload_list *out, std::vector<int> skip = {},
                        int late_idx = -1, int late_ms = 0)
 {
     std::vector<uint8_t> tags;
@@ -1159,7 +1159,7 @@ TEST(RsBlockErasureEmitTest, SpreadEstimatedFromArrivals)
         rs_block_erasure dec;
         fake_clock       clk;
         clk.attach(dec);
-        winject::fec_vendor::fec_rx_payload_list out;
+        winject::core::fec_vendor::fec_rx_payload_list out;
         EXPECT_FALSE(dec.have_spread_estimate());
         EXPECT_DOUBLE_EQ(dec.spread_estimate_ms(), rs_block_erasure::k_spread_cap_ms);
         feed_spread_block(enc, dec, clk, 0, 10, spread, &out, {3, 11});
@@ -1179,7 +1179,7 @@ TEST(RsBlockErasureEmitTest, SpreadEstimateRobustToOneLateShard)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_spread_block(enc, dec, clk, 0, 10, 70, &out, {}, 4, 40);
     feed_spread_block(enc, dec, clk, 10, 10, 70, &out, {}, 2, 40);
     ASSERT_TRUE(dec.have_spread_estimate());
@@ -1194,7 +1194,7 @@ TEST(RsBlockErasureEmitTest, SpreadEstimateTracksChanges)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     uint16_t base = 0;
     for (int b = 0; b < 4; b++, base = static_cast<uint16_t>(base + 10))
     {
@@ -1218,7 +1218,7 @@ TEST(RsBlockErasureEmitTest, DeadlineFollowsEstimate)
         rs_block_erasure dec;
         fake_clock       clk;
         clk.attach(dec);
-        winject::fec_vendor::fec_rx_payload_list out;
+        winject::core::fec_vendor::fec_rx_payload_list out;
         const auto air = encode_block_apps(enc, 0, {1, 2, 3, 4});
         feed_append(dec, air[0], &out); /* only the first data shard */
         /* Last of 6 air positions due at 5/6 of the assumed spread, plus the margin. */
@@ -1235,7 +1235,7 @@ TEST(RsBlockErasureEmitTest, DeadlineFollowsEstimate)
         rs_block_erasure dec;
         fake_clock       clk;
         clk.attach(dec);
-        winject::fec_vendor::fec_rx_payload_list out;
+        winject::core::fec_vendor::fec_rx_payload_list out;
         feed_spread_block(enc, dec, clk, 0, 4, 40, &out);
         feed_spread_block(enc, dec, clk, 4, 4, 40, &out);
         ASSERT_TRUE(dec.have_spread_estimate());
@@ -1258,14 +1258,14 @@ TEST(RsBlockErasureEmitTest, MissingBlockSkippedAfterNextBlockSpread)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     feed_spread_block(enc, dec, clk, 0, 4, 40, &out);
     feed_spread_block(enc, dec, clk, 4, 4, 40, &out);
     encode_block_apps(enc, 8, {0, 0, 0, 0}); /* block 8 lost entirely */
     feed_spread_block(enc, dec, clk, 12, 4, 40, &out);
     EXPECT_EQ(8u, out.size());
     clk.advance(50);
-    winject::fec_vendor::fec_rx_payload_list tick;
+    winject::core::fec_vendor::fec_rx_payload_list tick;
     dec.poll_rx(&tick);
     EXPECT_EQ(4u, tick.size());
     EXPECT_EQ(4u, dec.take_fail_lost_app_pkts());
@@ -1278,7 +1278,7 @@ TEST(RsBlockErasureEmitTest, RedundantParityNotCountedLate)
     rs_block_erasure enc;
     ASSERT_TRUE(enc.init(4, 6, 20));
     rs_block_erasure dec;
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     for (uint16_t b = 0; b < 8; b++)
     {
         for (const auto &shard : encode_block_apps(enc, static_cast<uint16_t>(4 * b), {1, 2, 3, 4}))
@@ -1297,7 +1297,7 @@ TEST(RsBlockErasureEmitTest, SequencerDeviationBounds)
     const int lo = rs_block_erasure::k_max_lo_block_id_deviation;
     const int hi = rs_block_erasure::k_max_hi_block_id_deviation;
     rs_block_erasure dec;
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     const uint16_t ref = 30000;
     feed_append(dec, encode_one(enc, ref, 1), &out); /* reference -> 30001 */
     feed_append(dec, encode_one(enc, static_cast<uint16_t>(ref + 1 - lo), 2), &out);
@@ -1322,7 +1322,7 @@ TEST(RsBlockErasureEmitTest, RsFailureOfLaterBlockStillInOrder)
     rs_block_erasure dec;
     fake_clock       clk;
     clk.attach(dec);
-    winject::fec_vendor::fec_rx_payload_list out;
+    winject::core::fec_vendor::fec_rx_payload_list out;
     const auto a = encode_block_apps(enc, 0, {1, 2, 3, 4});
     const auto b = encode_block_apps(enc, 4, {5, 6, 7, 8});
     feed_append(dec, a[0], &out); /* head incomplete */

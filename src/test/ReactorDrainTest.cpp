@@ -15,11 +15,10 @@
 #include <thread>
 #include <vector>
 
-namespace winject
+namespace winject::core
 {
 using test::reserve_free_udp_port;
 using test::run_reactor_with_watchdog;
-using test::stub_console_handlers;
 
 TEST(ReactorDrainTest, WifiUdpDrainDoesNotBlock)
 {
@@ -48,9 +47,9 @@ TEST(ReactorDrainTest, WifiUdpDrainDoesNotBlock)
 
     ASSERT_TRUE(wifi.open(reactor, on_rx));
     wifi.set_tx_dplane(dplane);
-    wifi.post_rx_event(winject::EventCtrlRecvSocketChange{dplane});
+    wifi.post_rx_event(winject::core::EventCtrlRecvSocketChange{dplane});
     ASSERT_TRUE(run_reactor_with_watchdog(reactor, []() {}));
-    wifi.set_fcs_mode(winject::RadioFcsMode::actual);
+    wifi.set_fcs_mode(winject::core::RadioFcsMode::actual);
 
     uint8_t reg_buf[8] = {};
     sockaddr_in manager_addr = {};
@@ -64,7 +63,7 @@ TEST(ReactorDrainTest, WifiUdpDrainDoesNotBlock)
     mpdu[0] = 0x08;
     mpdu[1] = 0x01;
     uint8_t fcs[4];
-    winject::wifi_fcs_store(mpdu.data(), mpdu.size(), fcs);
+    winject::core::wifi_fcs_store(mpdu.data(), mpdu.size(), fcs);
     mpdu.insert(mpdu.end(), fcs, fcs + 4);
 
     const bfc::const_buffer_view frame_view(
@@ -87,4 +86,4 @@ TEST(ReactorDrainTest, WifiUdpDrainDoesNotBlock)
     wifi.close();
 }
 
-}  // namespace winject
+}  // namespace winject::core

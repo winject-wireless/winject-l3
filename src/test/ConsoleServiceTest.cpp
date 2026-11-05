@@ -1,6 +1,5 @@
 #include "console/ConsoleParse.h"
-#include "console/ManagerConsoleTypes.h"
-#include "console/MplaneErrno.h"
+#include "mplane/MplaneErrno.h"
 
 #include <arpa/inet.h>
 #include <gtest/gtest.h>
@@ -8,47 +7,48 @@
 #include <string.h>
 #include <vector>
 
-using namespace winject;
+using namespace winject::core;
+using winject::FecType;
 
 TEST(ConsoleParseTest, ParseKv)
 {
     const char* value = nullptr;
     EXPECT_TRUE(
-        console_parse_kv("max_rate_kbps=1000", "max_rate_kbps=", &value));
+        mplane_parse_kv("max_rate_kbps=1000", "max_rate_kbps=", &value));
     ASSERT_NE(value, nullptr);
     EXPECT_STREQ(value, "1000");
-    EXPECT_FALSE(console_parse_kv("other=1", "max_rate_kbps=", &value));
+    EXPECT_FALSE(mplane_parse_kv("other=1", "max_rate_kbps=", &value));
 }
 
 TEST(ConsoleParseTest, ParseU)
 {
     unsigned long v = 0;
-    EXPECT_TRUE(console_parse_u("42", &v));
+    EXPECT_TRUE(mplane_parse_u("42", &v));
     EXPECT_EQ(v, 42u);
-    EXPECT_FALSE(console_parse_u("", &v));
-    EXPECT_FALSE(console_parse_u("12abc", &v));
+    EXPECT_FALSE(mplane_parse_u("", &v));
+    EXPECT_FALSE(mplane_parse_u("12abc", &v));
 }
 
 TEST(ConsoleParseTest, ParseFecType)
 {
-    FecType type = FecType::RsBlockErasure;
+    FecType type = FecType::rs_block;
     EXPECT_TRUE(console_parse_fec_type("NONE", &type));
     EXPECT_EQ(type, FecType::none);
     EXPECT_TRUE(console_parse_fec_type("none", &type));
     EXPECT_EQ(type, FecType::none);
     EXPECT_TRUE(console_parse_fec_type("RS_BLOCK_ERASURE", &type));
-    EXPECT_EQ(type, FecType::RsBlockErasure);
+    EXPECT_EQ(type, FecType::rs_block);
     EXPECT_TRUE(console_parse_fec_type("BLOCK", &type));
-    EXPECT_EQ(type, FecType::RsBlockErasure);
+    EXPECT_EQ(type, FecType::rs_block);
     EXPECT_FALSE(console_parse_fec_type("bogus", &type));
 }
 
 TEST(ConsoleParseTest, ParseU8)
 {
     uint8_t b = 0;
-    EXPECT_TRUE(console_parse_u8("255", &b));
+    EXPECT_TRUE(mplane_parse_u8("255", &b));
     EXPECT_EQ(b, 255);
-    EXPECT_FALSE(console_parse_u8("256", &b));
+    EXPECT_FALSE(mplane_parse_u8("256", &b));
 }
 
 TEST(ConsoleParseTest, ParseDurationMs)
@@ -107,7 +107,7 @@ TEST(ConsoleParseTest, FecDisplay)
     EXPECT_TRUE(
         console_format_fec_display(FecType::none, 0, 0, buf, sizeof(buf)));
     EXPECT_STREQ(buf, "none");
-    EXPECT_TRUE(console_format_fec_display(FecType::RsBlockErasure, 10, 16, buf,
+    EXPECT_TRUE(console_format_fec_display(FecType::rs_block, 10, 16, buf,
                                            sizeof(buf)));
     EXPECT_STREQ(buf, "block(10,16)");
 }
@@ -115,14 +115,14 @@ TEST(ConsoleParseTest, FecDisplay)
 TEST(ConsoleParseTest, ParseIpv4Port)
 {
     sockaddr_in addr = {};
-    EXPECT_TRUE(console_parse_ipv4_port("127.0.0.1:22", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port(":22", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:0", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:65536", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("127.0.0.1:22x", &addr));
-    EXPECT_FALSE(console_parse_ipv4_port("localhost:22", &addr));
+    EXPECT_TRUE(mplane_parse_ipv4_port("127.0.0.1:22", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port(":22", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1:", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1:0", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1:65536", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("127.0.0.1:22x", &addr));
+    EXPECT_FALSE(mplane_parse_ipv4_port("localhost:22", &addr));
 }
 
 TEST(ConsoleParseTest, ParseRadioDeviceArgs)
@@ -131,7 +131,7 @@ TEST(ConsoleParseTest, ParseRadioDeviceArgs)
     strncpy(buf, "radio_device id=0", sizeof(buf));
     char* save = nullptr;
     strtok_r(buf, " \t", &save);
-    ManagerRadioDeviceUpdate patch;
+    RadioDeviceUpdate patch;
     std::string err;
     EXPECT_TRUE(console_parse_radio_device_args(save, &patch, &err));
     EXPECT_FALSE(patch.have_mplane);
@@ -139,18 +139,15 @@ TEST(ConsoleParseTest, ParseRadioDeviceArgs)
 
 TEST(ConsoleParseTest, FormatRadioDevice)
 {
-    ManagerRadioDeviceView view;
-    view.id = 0;
-    view.device.mplane.sin_family = AF_INET;
-    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &view.device.mplane.sin_addr),
-              1);
-    view.device.mplane.sin_port = htons(22);
-    view.device.dplane.sin_family = AF_INET;
-    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &view.device.dplane.sin_addr),
-              1);
-    view.device.dplane.sin_port = htons(9000);
+    winject::RadioDevice device;
+    device.mplane.sin_family = AF_INET;
+    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &device.mplane.sin_addr), 1);
+    device.mplane.sin_port = htons(22);
+    device.dplane.sin_family = AF_INET;
+    ASSERT_EQ(inet_pton(AF_INET, "192.168.32.1", &device.dplane.sin_addr), 1);
+    device.dplane.sin_port = htons(9000);
     EXPECT_EQ(
-        console_format_radio_device(view),
+        console_format_radio_device(0, device),
         "radio_device id=0 mplane=192.168.32.1:22 dplane=192.168.32.1:9000 "
         "fcs=AUTO");
 }

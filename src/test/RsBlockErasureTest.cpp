@@ -7,7 +7,7 @@
 #include <thread>
 #include <vector>
 
-using namespace winject;
+using namespace winject::core;
 
 namespace
 {
