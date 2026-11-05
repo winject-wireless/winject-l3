@@ -223,7 +223,8 @@ UpstreamLink::TxCounters UpstreamLink::tx_counters() const
 {
     return {air.app_tx_packets(), air.app_tx_bytes(), air.app_rx_oversize_pkt(),
             air.tx_queue_drops(),
-            app_tx_queue_evictions_acc.load(std::memory_order_relaxed)};
+            app_tx_queue_evictions_acc.load(std::memory_order_relaxed),
+            foreign_source_drops_acc.load(std::memory_order_relaxed)};
 }
 void UpstreamLink::get_fec(FecType* type, int* k, int* n) const
 {

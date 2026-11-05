@@ -266,7 +266,7 @@ TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airt
 | Key | Meaning |
 |---|---|
 | `upstream-N.mode` | `UDP_SERVER_FORWARDING`, `UDP_CLIENT_FORWARDING`, `UDP_STATIC_FORWARDING`, or `QUEUE_FORWARDING`. UDP modes must match the addresses given. `UDP_GENERIC_FORWARDING` is rejected |
-| `upstream-N.rx` | UDP: `address:port` to receive application datagrams on (server mode replies to the last sender). Queue: registry name consumed (application datagrams toward the air; the sender's `queue_transport_tx`). `bind_address` and `queue_in` are rejected |
+| `upstream-N.rx` | UDP: `address:port` to receive application datagrams on (server mode replies to the last sender; static mode forwards only datagrams whose source is exactly the `tx` address and port, so the peer must send from its `tx` port and `tx` must be its unicast address, and drops the rest). Queue: registry name consumed (application datagrams toward the air; the sender's `queue_transport_tx`). `bind_address` and `queue_in` are rejected |
 | `upstream-N.tx` | UDP: `address:port` to send received air datagrams to. Queue: registry name produced (air datagrams toward the application; the sender's `queue_transport_rx`). Must differ from `rx`, and neither name may be reused. `connect_address` and `queue_out` are rejected |
 | `upstream-N.reactor` | Queue mode: name of the host's running `cv_reactor`. Several upstreams may share one reactor. UDP modes reject this key |
 | `upstream-N.tx_bus` | Bus stamped on this upstream's air traffic: 1–2 hex digits, non-zero (for example `b2`). `bus_tx` and `upstream_tx-N.bus` are rejected |

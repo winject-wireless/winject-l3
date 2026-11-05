@@ -43,6 +43,9 @@ public:
         // Oldest datagram dropped from the app TX queue by a UDP receive. A
         // queue upstream's app pushes that queue itself and counts its own.
         uint64_t app_queue_evictions = 0;
+        // UDP static mode: datagrams dropped because their source is not the
+        // upstream's tx peer.
+        uint64_t foreign_source_drops = 0;
     };
 
     // Next air and FEC SDU sequence numbers, carried into a replacement.
@@ -176,6 +179,10 @@ protected:
             app_tx_queue_evictions_acc.fetch_add(1, std::memory_order_relaxed);
         }
     }
+    void count_foreign_source_drop()
+    {
+        foreign_source_drops_acc.fetch_add(1, std::memory_order_relaxed);
+    }
     void submit_datagram(const uint8_t* data, size_t len);
     void reject_oversize_datagram(size_t len)
     {
@@ -195,6 +202,7 @@ private:
     std::shared_ptr<std::atomic<uint64_t>> rx_queue_evictions_acc =
         std::make_shared<std::atomic<uint64_t>>(0);
     std::atomic<uint64_t> app_tx_queue_evictions_acc{0};
+    std::atomic<uint64_t> foreign_source_drops_acc{0};
     DatagramAir air;
     mutable std::mutex stats_mu;
     UpstreamStats upstream_stats;

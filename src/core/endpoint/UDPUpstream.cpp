@@ -124,6 +124,15 @@ void UDPUpstream::on_socket_readable()
             }
             return;
         }
+        // Static mode has a fixed peer (tx): only that peer's datagrams go to
+        // the air, so nothing else that reaches the rx port is forwarded.
+        if (received > 0 && upstream_config.mode == UpstreamMode::udp_static &&
+            (from.sin_addr.s_addr != destination.sin_addr.s_addr ||
+             from.sin_port != destination.sin_port))
+        {
+            count_foreign_source_drop();
+            continue;
+        }
         // Preserve oversize rejection; never encode a silently truncated
         // datagram.
         if (received > 0)
