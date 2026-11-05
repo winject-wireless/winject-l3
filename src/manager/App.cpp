@@ -1204,6 +1204,27 @@ void App::console_radio_tx(const ManagerRadioUpdate& patch,
         });
 }
 
+// Transparent radio m-plane: a radio-specific command line, forwarded
+// unchanged. The manager does not track what it changes.
+void App::console_radio_mplane(const std::string& line, ManagerConsoleReply reply)
+{
+    if (!console_ok)
+    {
+        send_radio_unavailable_nok(reply);
+        return;
+    }
+    console.request(line,
+                    [reply](MplaneResult r)
+                    {
+                        if (!r.ok)
+                        {
+                            reply.send_nok(mplane_err_string(r.error).c_str());
+                            return;
+                        }
+                        reply.send_text(mplane_join_body(r));
+                    });
+}
+
 void App::console_radio_reset(ManagerConsoleReply reply)
 {
     if (!console_ok)
@@ -1326,6 +1347,10 @@ bool App::start_manager_console()
         [this](const ManagerRadioUpdate& patch, ManagerConsoleReply reply)
     {
         console_radio_tx(patch, reply);
+    };
+    handlers.radio_mplane = [this](const std::string& line, ManagerConsoleReply reply)
+    {
+        console_radio_mplane(line, reply);
     };
     handlers.config_slot = [this](uint8_t slot, ManagerConsoleReply reply)
     {

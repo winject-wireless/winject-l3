@@ -33,10 +33,11 @@ bool parse_radio_tx_line(const std::string& line, ManagerRadioView* out)
             out->channel = static_cast<uint16_t>(v);
             continue;
         }
+        long sv = 0;
         if (console_parse_kv(tok, "tx_power=", &value) &&
-            console_parse_u(value, &v))
+            console_parse_i(value, &sv))
         {
-            out->tx_power = static_cast<int>(v);
+            out->tx_power = static_cast<int>(sv);
             continue;
         }
         if (console_parse_kv(tok, "modulation=", &value))

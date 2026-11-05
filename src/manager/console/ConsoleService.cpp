@@ -38,7 +38,8 @@ constexpr const char k_help_text[] =
     "radio_info|ri\n"
     "radio_caps_info|rci\n"
     "radio_stats|rs\n"
-    "radio_tx|rt [channel= tx_power= modulation= cca=<0|1>]\n"
+    "radio_tx|rt [channel= tx_power=<dBm> modulation= cca=<0|1>]\n"
+    "radio_mplane|rmp <radio command line>\n"
     "reset|r\n"
     "config slot=<u8>\n"
     "radio_device|rd id=<u8> [mplane=<ip:port>] [dplane=<ip:port>] "
@@ -970,10 +971,11 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
                 any = true;
                 continue;
             }
+            long sv = 0;
             if (console_parse_kv(a, "tx_power=", &value) &&
-                console_parse_u(value, &v))
+                console_parse_i(value, &sv) && sv >= -128 && sv <= 127)
             {
-                patch.tx_power = static_cast<int>(v);
+                patch.tx_power = static_cast<int>(sv);
                 patch.have_tx_power = true;
                 any = true;
                 continue;
@@ -1011,6 +1013,35 @@ void ConsoleService::handle_line(uint32_t l3_id, const char* line)
             respond_nok(l3_id, msg);
         };
         handlers.radio_tx(patch, cr);
+        return;
+    }
+
+    if (console_cmd_is(cmd, "radio_mplane", "rmp"))
+    {
+        // Transparent radio m-plane: the rest of the line goes to the radio
+        // unchanged, for radio-specific commands the manager does not model.
+        const char* rest = save != nullptr ? save : "";
+        rest += strspn(rest, " \t");
+        if (*rest == '\0')
+        {
+            respond_nok(l3_id, k_einval);
+            return;
+        }
+        if (!handlers.radio_mplane)
+        {
+            respond_nok(l3_id, k_enosys);
+            return;
+        }
+        ManagerConsoleReply cr;
+        cr.send_text = [this, l3_id](const std::string& text)
+        {
+            respond(l3_id, text);
+        };
+        cr.send_nok = [this, l3_id](const char* msg)
+        {
+            respond_nok(l3_id, msg);
+        };
+        handlers.radio_mplane(std::string(rest), cr);
         return;
     }
 

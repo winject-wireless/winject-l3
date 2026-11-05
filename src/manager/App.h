@@ -89,6 +89,7 @@ private:
     void apply_radio_caps_mplane(const MplaneResult& r);
     void console_radio_info(ManagerConsoleReply reply);
     void console_radio_caps_info(ManagerConsoleReply reply);
+    void console_radio_mplane(const std::string& line, ManagerConsoleReply reply);
     void console_radio_stats(ManagerConsoleReply reply);
     void console_radio_tx(const ManagerRadioUpdate& patch,
                           ManagerConsoleReply reply);

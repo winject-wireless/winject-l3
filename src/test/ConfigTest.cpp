@@ -1117,3 +1117,41 @@ radio.reactor   = radio_cv
                           &err));
     EXPECT_FALSE(err.empty());
 }
+
+TEST(ConfigTest, PowerIsNormalizedDbm)
+{
+    const std::string base = R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_STATIC_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.scheduler_budget = 100
+upstream-0.rx               = 0.0.0.0:22081
+upstream-0.tx               = 127.0.0.1:21082
+)";
+    for (const char* p : {"-30", "-5", "0", "30"})
+    {
+        std::string text = base;
+        text.replace(text.find("radio.power         = 20"), 24,
+                     std::string("radio.power         = ") + p);
+        Config cfg;
+        std::string err;
+        ASSERT_TRUE(cfg.load(write_conf(text), &err)) << p << ": " << err;
+        EXPECT_EQ(cfg.power_dbm, atoi(p));
+    }
+    for (const char* p : {"-31", "31"})
+    {
+        std::string text = base;
+        text.replace(text.find("radio.power         = 20"), 24,
+                     std::string("radio.power         = ") + p);
+        Config cfg;
+        std::string err;
+        EXPECT_FALSE(cfg.load(write_conf(text), &err)) << p;
+    }
+}

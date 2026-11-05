@@ -15,6 +15,8 @@ namespace winject
 
 bool console_parse_kv(const char* text, const char* key, const char** value);
 bool console_parse_u(const char* text, unsigned long* out);
+// Signed decimal (tx_power in dBm can be negative).
+bool console_parse_i(const char* text, long* out);
 // Parses 0..255; rejects values > UINT8_MAX.
 bool console_parse_u8(const char* text, uint8_t* out);
 bool console_parse_fec_type(const char* text, FecType* out);
