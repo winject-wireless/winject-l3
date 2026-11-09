@@ -457,7 +457,8 @@ public:
 
     // Returns once started(l3) ran, or run() returned early.
     bool start(const Config& cfg,
-               std::function<void(const winject::L3&)> started = {})
+               std::function<void(const winject::L3&)> started = {},
+               winject::L3::Reactors reactors = {})
     {
         auto ready = std::make_shared<std::promise<void>>();
         auto is_ready = ready->get_future();
@@ -471,7 +472,7 @@ public:
                            });
         };
         result = std::async(std::launch::async,
-                            [this, cfg, started, signal]()
+                            [this, cfg, started, signal, reactors]()
                             {
                                 const int rc = winject::l3::detail::run_l3(
                                     core, cfg,
@@ -483,7 +484,7 @@ public:
                                         }
                                         signal();
                                     },
-                                    {});
+                                    {}, reactors);
                                 signal();
                                 return rc;
                             });

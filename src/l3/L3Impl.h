@@ -23,6 +23,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <future>
 #include <thread>
 #include <vector>
 
@@ -69,11 +70,17 @@ public:
     L3Impl(const L3Impl&) = delete;
     L3Impl& operator=(const L3Impl&) = delete;
 
+    // Before start(): run on the host's reactors, by bfc registry name
+    // (L3::Reactors); empty keeps a reactor and thread of l3's own. False
+    // when a named reactor is not registered.
+    bool use_host_reactors(const std::string& io, const std::string& upstream);
     // Starts the upstream reactor thread and l3's thread, attached to
-    // core. thread_setup runs on this thread before each one starts.
+    // core; on a host reactor it posts l3's setup there instead.
+    // thread_setup runs on this thread before each thread starts.
     void start(winject::l3::detail::L3Core* core,
                const L3::ThreadSetup& thread_setup);
-    // Waits for l3's thread, which exits after stop().
+    // Waits until l3 has shut down after stop(): its thread exited, or on a
+    // host reactor its teardown ran and every wake-up queued before it.
     void join();
     void stop();
     winject::core::IOReactor& io_reactor()
@@ -117,6 +124,12 @@ public:
 
 private:
     void loop();
+    // loop() without the run: everything before reactor->run() (on l3's
+    // reactor thread), and the shutdown after it.
+    void setup();
+    void finish();
+    // finish() on a host IO reactor: once, on its thread; leaves it running.
+    void finish_on_host();
     bool add_upstream_config(const UpstreamConfig& uc);
     // nullptr, or the errno name of what failed.
     const char* setup_radio();
@@ -180,6 +193,13 @@ private:
         std::make_shared<UpstreamLink::Reactor>();
     std::thread upstream_reactor_thread;
     std::thread l3_thread;
+    // Host reactors (use_host_reactors): no thread of l3's own for them.
+    bool host_io = false;
+    bool host_upstream = false;
+    // Host IO reactor: teardown ran (finish_on_host), and its signal.
+    bool host_finished = false;
+    std::promise<void> host_done;
+    int registered_stop_fd = -1;
     OneShotTimer reconnect_timer;
     // Runs RadioMplaneClient::poll_deadlines() at the earliest request
     // deadline.

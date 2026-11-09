@@ -162,7 +162,10 @@ L3Impl::~L3Impl()
     tx_mux.stop();
     radio_upstream_table.clear();
     upstreams.clear();
-    upstream_reactor->stop();
+    if (!host_upstream)
+    {
+        upstream_reactor->stop();
+    }
     if (upstream_reactor_thread.joinable())
     {
         upstream_reactor_thread.join();
@@ -173,6 +176,34 @@ L3Impl::~L3Impl()
         l3_thread.join();
     }
     close_radio();
+}
+
+bool L3Impl::use_host_reactors(const std::string& io,
+                               const std::string& upstream)
+{
+    if (!io.empty())
+    {
+        auto r = bfc::default_reactor_registry::get_instance().get(io);
+        if (!r)
+        {
+            LOG_ERR("l3 IO reactor %s: not registered", io.c_str());
+            return false;
+        }
+        reactor = std::move(r);
+        host_io = true;
+    }
+    if (!upstream.empty())
+    {
+        auto r = bfc::cv_reactor_registry::get_instance().get(upstream);
+        if (!r)
+        {
+            LOG_ERR("l3 upstream reactor %s: not registered", upstream.c_str());
+            return false;
+        }
+        upstream_reactor = std::move(r);
+        host_upstream = true;
+    }
+    return true;
 }
 
 bool L3Impl::add_upstream_config(const UpstreamConfig& uc)
@@ -1780,7 +1811,18 @@ void L3Impl::arm_stats()
 void L3Impl::stop()
 {
     stop_requested.store(true);
-    reactor->stop();
+    if (!host_io)
+    {
+        reactor->stop();
+        return;
+    }
+    // Any thread; core detaches on the reactor thread before l3 goes, so
+    // this wake-up runs while l3 still exists (join waits for it).
+    reactor->wake_up(
+        [this]()
+        {
+            finish_on_host();
+        });
 }
 
 void L3Impl::start(winject::l3::detail::L3Core* l3_core,
@@ -1795,16 +1837,42 @@ void L3Impl::start(winject::l3::detail::L3Core* l3_core,
         {
             started->set_value();
         });
-    if (thread_setup)
+    if (!host_upstream)
     {
-        thread_setup(L3::Thread::upstream);
-    }
-    upstream_reactor_thread = std::thread(
-        [cv = upstream_reactor]
+        if (thread_setup)
         {
-            cv->run();
-        });
+            thread_setup(L3::Thread::upstream);
+        }
+        upstream_reactor_thread = std::thread(
+            [cv = upstream_reactor]
+            {
+                cv->run();
+            });
+    }
+    // Also waits until a host's upstream reactor runs.
     ready.wait();
+    if (host_io)
+    {
+        // Setup and attach on the reactor thread, so a stop() (a wake-up
+        // once attached) runs after setup. A stop() before attach only set
+        // stop_requested: finish here. Returns attached, like a thread of
+        // l3's own.
+        auto attached = std::make_shared<std::promise<void>>();
+        auto is_attached = attached->get_future();
+        reactor->wake_up(
+            [this, attached]()
+            {
+                setup();
+                core->attach(reactor.get(), this);
+                attached->set_value();
+                if (stop_requested.load() || core->stop_requested.load())
+                {
+                    finish_on_host();
+                }
+            });
+        is_attached.wait();
+        return;
+    }
     core->attach(reactor.get(), this);
     if (thread_setup)
     {
@@ -1817,15 +1885,91 @@ void L3Impl::start(winject::l3::detail::L3Core* l3_core,
         });
 }
 
+namespace
+{
+// Returns once r has run every wake-up queued before this one.
+template <typename Reactor>
+void drain(Reactor& r)
+{
+    auto ran = std::make_shared<std::promise<void>>();
+    auto done = ran->get_future();
+    r.wake_up(
+        [ran]()
+        {
+            ran->set_value();
+        });
+    done.wait();
+}
+}  // namespace
+
 void L3Impl::join()
 {
     if (l3_thread.joinable())
     {
         l3_thread.join();
     }
+    if (host_io)
+    {
+        host_done.get_future().wait();
+        // Wake-ups l3 queued before its teardown (radio events, stop) hold
+        // pointers into l3: run them before it goes.
+        drain(*reactor);
+    }
+    if (host_upstream)
+    {
+        drain(*upstream_reactor);
+    }
 }
 
 void L3Impl::loop()
+{
+    setup();
+    reactor->run();
+    finish();
+}
+
+void L3Impl::finish()
+{
+    // Calls posted from here on get ESRCH; the ones still pending get
+    // ECANCELED, also those whose wake-up the stopped loop will never run.
+    core->detach_and_cancel();
+    begin_shutdown();
+    if (!host_upstream)
+    {
+        upstream_reactor->stop();
+        upstream_reactor_thread.join();
+    }
+    core->callbacks.close();
+}
+
+void L3Impl::finish_on_host()
+{
+    if (host_finished)
+    {
+        return;
+    }
+    host_finished = true;
+    core->detach_and_cancel();
+    begin_shutdown();
+    // The host reactor keeps running: take l3's fds and timers off it.
+    close_console();
+    reconnect_timer.cancel();
+    stats_timer.cancel();
+    if (registered_stop_fd >= 0)
+    {
+        reactor->rem_read_rdy(registered_stop_fd);
+        registered_stop_fd = -1;
+    }
+    if (!host_upstream)
+    {
+        upstream_reactor->stop();
+        upstream_reactor_thread.join();
+    }
+    core->callbacks.close();
+    host_done.set_value();
+}
+
+void L3Impl::setup()
 {
     reconnect_timer.bind(reactor.get());
     console_deadline_timer.bind(reactor.get());
@@ -1906,6 +2050,7 @@ void L3Impl::loop()
         while (::read(stop_fd, buf, sizeof(buf)) > 0)
         {
         }
+        registered_stop_fd = stop_fd;
         reactor->add_read_rdy(
             stop_fd,
             [this, stop_fd]()
@@ -1927,23 +2072,19 @@ void L3Impl::loop()
     arm_stats();
     // stop() before reactor->run() set it running would be lost; the first
     // loop pass runs this and stops then.
-    reactor->get_timer().wait_us(
-        0,
-        [this]()
-        {
-            if (stop_requested.load() || core->stop_requested.load())
+    // (A host reactor already runs: start() checks after setup instead.)
+    if (!host_io)
+    {
+        reactor->get_timer().wait_us(
+            0,
+            [this]()
             {
-                reactor->stop();
-            }
-        });
-    reactor->run();
-    // Calls posted from here on get ESRCH; the ones still pending get
-    // ECANCELED, also those whose wake-up the stopped loop will never run.
-    core->detach_and_cancel();
-    begin_shutdown();
-    upstream_reactor->stop();
-    upstream_reactor_thread.join();
-    core->callbacks.close();
+                if (stop_requested.load() || core->stop_requested.load())
+                {
+                    reactor->stop();
+                }
+            });
+    }
 }
 
 void L3Impl::begin_shutdown()
