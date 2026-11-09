@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <netinet/in.h>
@@ -27,23 +28,51 @@ std::atomic<bool> g_stop{false};
 // clock, so a longer tick (ESP-IDF rounds up to FreeRTOS ticks) only makes
 // the bursts bigger, not the rate lower.
 constexpr auto k_tick = std::chrono::milliseconds(1);
-// Receive poll interval while the queue is empty. An idle tester costs one
-// wakeup per 10 ms instead of per tick. Latency is measured at queue drain,
-// so it includes this polling delay as well as receiver scheduling.
-constexpr auto k_rx_idle = std::chrono::milliseconds(10);
+// Enqueue notifications are retained until consumed, including a push
+// between an empty poll and wait(). No periodic receiver wakeups are needed.
+class ReceiveWake
+{
+public:
+    void wake_up()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pending_ = true;
+        }
+        cv_.notify_one();
+    }
+    void wait()
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock,
+                 [this]
+                 {
+                     return pending_;
+                 });
+        pending_ = false;
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool pending_ = false;
+};
 
 }  // namespace
 
 Bwtest::Bwtest(std::shared_ptr<winject::core::UpstreamQueue> upstream,
                size_t payload_bytes, NowUs now_us)
-    : upstream_(std::move(upstream)), payload_bytes_(payload_bytes),
+    : upstream_(std::move(upstream)),
+      payload_bytes_(payload_bytes),
       now_us_(std::move(now_us))
 {
     if (!now_us_)
     {
-        now_us_ = [] {
+        now_us_ = []
+        {
             return std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
+                       std::chrono::system_clock::now().time_since_epoch())
+                .count();
         };
     }
     clear();
@@ -150,7 +179,9 @@ size_t Bwtest::poll_receive()
         if (header)
         {
             for (size_t i = 0; i < 8; ++i)
+            {
                 timestamp |= uint64_t(bytes[8 + i]) << (8 * i);
+            }
         }
         {
             std::lock_guard<std::mutex> lock(latency_mu_);
@@ -162,7 +193,9 @@ size_t Bwtest::poll_receive()
             {
                 const uint64_t us = uint64_t(now) - timestamp;
                 if (!latency_.lat_samples || us < latency_.lat_min_us)
+                {
                     latency_.lat_min_us = us;
+                }
                 latency_.lat_last_us = us;
                 latency_.lat_max_us = std::max(latency_.lat_max_us, us);
                 ++latency_.lat_samples;
@@ -245,7 +278,8 @@ std::string Bwtest::handle_command(const std::string& line)
         snprintf(out, sizeof(out),
                  "snd_pkt %llu\nsnd_byt %llu\nsnd_drop %llu\nrcv_pkt %llu\n"
                  "rcv_byt %llu\nlat_samples %llu\nlat_invalid %llu\n"
-                 "lat_last_us %llu\nlat_min_us %llu\nlat_avg_us %llu\nlat_max_us %llu\n",
+                 "lat_last_us %llu\nlat_min_us %llu\nlat_avg_us "
+                 "%llu\nlat_max_us %llu\n",
                  static_cast<unsigned long long>(s.snd_pkt),
                  static_cast<unsigned long long>(s.snd_byt),
                  static_cast<unsigned long long>(s.snd_drop),
@@ -326,14 +360,16 @@ int main(const Config& config)
                     entry.first.c_str());
         }
     }
+    auto receive_wake = std::make_shared<ReceiveWake>();
+    config.upstream->set_receive_wakeup(receive_wake);
     std::thread receiver(
-        [&bwtest]
+        [&bwtest, receive_wake]
         {
             while (!g_stop.load())
             {
                 if (bwtest.poll_receive() == 0)
                 {
-                    std::this_thread::sleep_for(k_rx_idle);
+                    receive_wake->wait();
                 }
             }
         });
@@ -351,7 +387,8 @@ int main(const Config& config)
         {
             // A timeout wakes the loop to check stop(); any other error
             // would repeat at once, so back off instead of spinning.
-            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
+                errno != EINTR)
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
@@ -362,7 +399,9 @@ int main(const Config& config)
         sendto(fd, reply.data(), reply.size(), 0,
                reinterpret_cast<const sockaddr*>(&from), from_len);
     }
+    receive_wake->wake_up();
     receiver.join();
+    config.upstream->set_receive_wakeup(nullptr);
     close(fd);
     return 0;
 }

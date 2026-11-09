@@ -16,8 +16,8 @@ the receiver during or after the send.
 
 Latency runs from immediately before sender queue submission until receiver
 queue polling. It includes application queues, L3/FEC, radio transport, and
-receiver scheduling, including up to the 10 ms idle receive poll interval
-(plus scheduler delays). It does not measure camera or display latency.
+receiver scheduling. The receiver wakes on enqueue notifications rather than
+periodic polling, so an idle polling interval does not inflate this measurement. It does not measure camera or display latency.
 
 Both devices must use synchronized Unix realtime clocks. The P4 apps already
 use krono to synchronize the rover against the ground. Check synchronization
