@@ -51,6 +51,18 @@ public:
     {
         return egress_->pop();
     }
+    // Single receive consumer: retain a wake sink (wake_up()) and notify it
+    // after every receive enqueue. Signal only; drain on the consumer thread.
+    template <typename Wake>
+    void set_receive_wakeup(std::shared_ptr<Wake> wake)
+    {
+        egress_->set_reactor(std::move(wake));
+    }
+    void set_receive_wakeup(std::nullptr_t)
+    {
+        egress_->set_reactor(nullptr);
+    }
+
     void disconnect()
     {
         active_.store(false);

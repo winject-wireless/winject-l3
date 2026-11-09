@@ -102,7 +102,9 @@ TEST_F(BwtestTest, ConsoleCommands)
 {
     make(1024);
     EXPECT_EQ(bw->handle_command("stats"),
-              "snd_pkt 0\nsnd_byt 0\nsnd_drop 0\nrcv_pkt 0\nrcv_byt 0\nlat_samples 0\nlat_invalid 0\nlat_last_us 0\nlat_min_us 0\nlat_avg_us 0\nlat_max_us 0\n");
+              "snd_pkt 0\nsnd_byt 0\nsnd_drop 0\nrcv_pkt 0\nrcv_byt "
+              "0\nlat_samples 0\nlat_invalid 0\nlat_last_us 0\nlat_min_us "
+              "0\nlat_avg_us 0\nlat_max_us 0\n");
     EXPECT_EQ(bw->handle_command("test_send 800"),
               "error usage: test_send <offer_kbps> <duration_ms>\n");
     EXPECT_EQ(bw->handle_command("test_send 0 10"),
@@ -115,7 +117,9 @@ TEST_F(BwtestTest, ConsoleCommands)
     EXPECT_EQ(bw->handle_command("test_send 800 50"), "error busy\n");
     wait_done();
     EXPECT_EQ(bw->handle_command("stats"),
-              "snd_pkt 50\nsnd_byt 5000\nsnd_drop 0\nrcv_pkt 0\nrcv_byt 0\nlat_samples 0\nlat_invalid 0\nlat_last_us 0\nlat_min_us 0\nlat_avg_us 0\nlat_max_us 0\n");
+              "snd_pkt 50\nsnd_byt 5000\nsnd_drop 0\nrcv_pkt 0\nrcv_byt "
+              "0\nlat_samples 0\nlat_invalid 0\nlat_last_us 0\nlat_min_us "
+              "0\nlat_avg_us 0\nlat_max_us 0\n");
 }
 
 TEST_F(BwtestTest, AppCommands)
@@ -146,7 +150,11 @@ TEST_F(BwtestTest, TimestampRoundTripAndInvalidPackets)
 {
     make(16);
     int64_t now = 1000000;
-    bw = std::make_unique<Bwtest>(up, 100, [&now] { return now; });
+    bw = std::make_unique<Bwtest>(up, 100,
+                                  [&now]
+                                  {
+                                      return now;
+                                  });
     ASSERT_TRUE(bw->start_send(800, 2));
     wait_done();
     auto first = ingress->pop();
@@ -165,7 +173,8 @@ TEST_F(BwtestTest, TimestampRoundTripAndInvalidPackets)
     EXPECT_EQ(s.lat_min_us, 250u);
     EXPECT_EQ(s.lat_avg_us, 500u);
     EXPECT_EQ(s.lat_max_us, 750u);
-    EXPECT_NE(bw->handle_command("stats").find("lat_avg_us 500\n"), std::string::npos);
+    EXPECT_NE(bw->handle_command("stats").find("lat_avg_us 500\n"),
+              std::string::npos);
     bw->clear();
     EXPECT_EQ(bw->stats().lat_samples, 0u);
     EXPECT_EQ(bw->stats().lat_max_us, 0u);
@@ -191,4 +200,91 @@ TEST_F(BwtestTest, RejectsPayloadTooSmallForTimestamp)
     make(16);
     Bwtest small(up, k_timestamp_header_bytes - 1);
     EXPECT_FALSE(small.start_send(800, 1));
+}
+
+#include <arpa/inet.h>
+#include <cstring>
+#include <sys/socket.h>
+#include <unistd.h>
+
+TEST(ReactiveBwtestTest, ReceivesAfterIdleAndStopsWhileWaiting)
+{
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    ASSERT_GE(fd, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+    socklen_t len = sizeof(addr);
+    ASSERT_EQ(getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len), 0);
+    const auto port = ntohs(addr.sin_port);
+    close(fd);
+    auto in = std::make_shared<ReactiveLossyQueue>();
+    auto out = std::make_shared<ReactiveLossyQueue>();
+    in->set_capacity(32);
+    out->set_capacity(32);
+    app_bwtest::Config cfg;
+    cfg.upstream = std::make_shared<UpstreamQueue>(in, out);
+    cfg.console = "127.0.0.1:" + std::to_string(port);
+    int rc = -1;
+    std::thread server(
+        [&]
+        {
+            rc = app_bwtest::main(cfg);
+        });
+    struct Guard
+    {
+        std::thread& thread;
+        ~Guard()
+        {
+            app_bwtest::stop();
+            if (thread.joinable())
+            {
+                thread.join();
+            }
+        }
+    } guard{server};
+    auto query = [&]
+    {
+        int sock = socket(AF_INET, SOCK_DGRAM, 0);
+        timeval timeout{0, 100000};
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        sendto(sock, "stats", 5, 0, reinterpret_cast<sockaddr*>(&addr),
+               sizeof(addr));
+        char buf[1024];
+        auto n = recv(sock, buf, sizeof(buf), 0);
+        close(sock);
+        return n > 0 ? std::string(buf, n) : std::string{};
+    };
+    std::string reply;
+    for (int i = 0; i < 30 && reply.empty(); ++i)
+    {
+        reply = query();
+    }
+    ASSERT_FALSE(reply.empty());
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    uint8_t packet[16]{};
+    std::memcpy(packet, "BWT1", 4);
+    auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+                   std::chrono::system_clock::now().time_since_epoch())
+                   .count();
+    for (int i = 0; i < 8; ++i)
+    {
+        packet[8 + i] = uint64_t(now) >> (8 * i);
+    }
+    out->push(bfc::shared_sized_buffer::copy_from(packet, sizeof(packet)));
+    for (int i = 0; i < 20; ++i)
+    {
+        reply = query();
+        if (reply.find("lat_samples 1\n") != std::string::npos)
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_NE(reply.find("lat_samples 1\n"), std::string::npos);
+    // Stop main while the receive thread is blocked without traffic.
+    app_bwtest::stop();
+    server.join();
+    EXPECT_EQ(rc, 0);
 }
