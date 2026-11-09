@@ -10,7 +10,7 @@ endif()
 idf_component_register(
     SRCS ${WINJECT_L3_ROOT}/src/apps/bwtest/Bwtest.cpp
     INCLUDE_DIRS ${WINJECT_L3_ROOT}/src
-                 ${bfc_SOURCE_DIR}/src
+                 ${BFC_INCLUDE_DIRS}
     REQUIRES winject_l3
     PRIV_REQUIRES lwip pthread
 )

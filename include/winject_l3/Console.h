@@ -35,9 +35,10 @@ std::string format(const RadioStats& s);  // the two radio_stats lines
 std::string format(uint8_t id, const UpstreamRxStats& s);
 std::string format(uint8_t id, const UpstreamTxStats& s);
 
-// Same type and registry as vstreamer's default reactor.
-using Reactor = bfc::default_reactor<std::function<void()>>;
-using ReactorRegistry = bfc::object_registry<bfc::object_tag<Reactor>>;
+// The project's bfc default reactor and its one registry, shared with
+// vstreamer and the firmware's own reactors.
+using Reactor = bfc::default_reactor<>;
+using ReactorRegistry = bfc::default_reactor_registry;
 
 // The UDP console: a socket and cmd:<u8> correlation on a named reactor the
 // host registered and runs. It calls execute() and never waits on l3.
