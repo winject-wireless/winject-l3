@@ -71,7 +71,7 @@ target_include_directories(winject-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../core
     ${CMAKE_CURRENT_SOURCE_DIR}/../l3
-    ${bfc_SOURCE_DIR}/src
+    ${BFC_INCLUDE_DIRS}
 )
 target_compile_options(winject-tests PRIVATE
     -Wall

@@ -38,7 +38,7 @@ add_library(winject-l3-core STATIC ${WINJECT_CORE_SOURCES})
 target_include_directories(winject-l3-core PUBLIC
     ${WINJECT_SRC}/core
     ${CMAKE_CURRENT_BINARY_DIR}
-    ${bfc_SOURCE_DIR}/src
+    ${BFC_INCLUDE_DIRS}
 )
 target_compile_options(winject-l3-core PRIVATE ${WINJECT_WARNINGS})
 target_link_libraries(winject-l3-core PUBLIC pthread isal_ec)

@@ -50,6 +50,21 @@ public:
     static int run(const Config& cfg,
                    std::function<void(const L3&)> started = {},
                    ThreadSetup thread_setup = {});
+
+    // The host's reactors for run(), by bfc registry name. A named reactor
+    // must be registered and running before run() and outlive it; l3 starts
+    // no thread for it (thread_setup is not called for it) and, on stop,
+    // removes its fds and timers and leaves it running. Empty: l3 runs that
+    // reactor on a thread of its own, as run() above.
+    struct Reactors
+    {
+        std::string io;        // bfc::default_reactor_registry (Thread::l3)
+        std::string upstream;  // bfc::cv_reactor_registry (Thread::upstream)
+    };
+    // As run() above, on the host's reactors. Returns 1 also when a named
+    // reactor is not registered.
+    static int run(const Config& cfg, std::function<void(const L3&)> started,
+                   ThreadSetup thread_setup, const Reactors& reactors);
     // Asks run() to return. Any thread, also before run() starts: a stop()
     // while no run() is active makes the next run() return at once, without
     // applying the config.

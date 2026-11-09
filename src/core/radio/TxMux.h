@@ -8,6 +8,7 @@
 #include "radio/TxEvent.h"
 
 #include <atomic>
+#include <bfc/config.hpp>
 #include <bfc/function.hpp>
 #include <chrono>
 #include <functional>
@@ -77,10 +78,10 @@ private:
     // True when pacing or the bounded work budget requires another turn.
     bool tick_impl();
     using TimerId = std::pair<int64_t, uint64_t>;
-    using Callback = bfc::light_function<void()>;
-    using Wake = std::function<void(Callback)>;
-    using Arm = std::function<TimerId(int64_t, Callback)>;
-    using Cancel = std::function<void(TimerId)>;
+    using Callback = bfc::config::function<void()>;
+    using Wake = bfc::config::function<void(Callback)>;
+    using Arm = bfc::config::function<TimerId(int64_t, Callback)>;
+    using Cancel = bfc::config::function<void(TimerId)>;
     struct ReactorState;
     void start_on(uint64_t timer_step_us, Wake wake, Arm arm, Cancel cancel);
     void notify_reactor();

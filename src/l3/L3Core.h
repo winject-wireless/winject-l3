@@ -429,8 +429,8 @@ Result<T> call_async_wait(
 
 // L3::run for a given core; L3::run uses the process's core.
 int run_l3(const std::shared_ptr<L3Core>& core, const Config& cfg,
-           std::function<void(const L3&)> started,
-           L3::ThreadSetup thread_setup);
+           std::function<void(const L3&)> started, L3::ThreadSetup thread_setup,
+           const L3::Reactors& reactors = {});
 
 }  // namespace winject::l3::detail
 

@@ -115,6 +115,135 @@ TEST(L3ApiTest, ThreadSetupRunsBeforeEachThread)
     EXPECT_EQ(seen[1], api::L3::Thread::l3);
 }
 
+// A host's running reactors (L3::Reactors), as the P4 firmware shares one IO
+// and one CV reactor between l3 and its applets.
+class HostReactors
+{
+public:
+    explicit HostReactors(const std::string& prefix)
+        : io_name(prefix + "-io"), cv_name(prefix + "-cv")
+    {
+        bfc::default_reactor_registry::get_instance().add(io_name, io);
+        bfc::cv_reactor_registry::get_instance().add(cv_name, cv);
+        io_thread = std::thread(
+            [r = io]
+            {
+                r->run();
+            });
+        cv_thread = std::thread(
+            [r = cv]
+            {
+                r->run();
+            });
+    }
+    ~HostReactors()
+    {
+        io->stop();
+        cv->stop();
+        io_thread.join();
+        cv_thread.join();
+        bfc::default_reactor_registry::get_instance().rem(io_name);
+        bfc::cv_reactor_registry::get_instance().rem(cv_name);
+    }
+    api::L3::Reactors names() const
+    {
+        return {io_name, cv_name};
+    }
+    // True when both reactors still run callbacks.
+    bool alive()
+    {
+        auto io_ran = std::make_shared<std::promise<std::thread::id>>();
+        auto cv_ran = std::make_shared<std::promise<std::thread::id>>();
+        auto io_f = io_ran->get_future();
+        auto cv_f = cv_ran->get_future();
+        io->wake_up(
+            [io_ran]
+            {
+                io_ran->set_value(std::this_thread::get_id());
+            });
+        cv->wake_up(
+            [cv_ran]
+            {
+                cv_ran->set_value(std::this_thread::get_id());
+            });
+        return io_f.wait_for(std::chrono::seconds(2)) ==
+                   std::future_status::ready &&
+               cv_f.wait_for(std::chrono::seconds(2)) ==
+                   std::future_status::ready &&
+               io_f.get() == io_thread.get_id() &&
+               cv_f.get() == cv_thread.get_id();
+    }
+
+    std::string io_name;
+    std::string cv_name;
+    std::shared_ptr<bfc::default_reactor<>> io =
+        std::make_shared<bfc::default_reactor<>>();
+    std::shared_ptr<bfc::cv_reactor<>> cv = std::make_shared<bfc::cv_reactor<>>();
+    std::thread io_thread;
+    std::thread cv_thread;
+};
+
+TEST(L3ApiTest, HostReactorsRunL3AndOutliveIt)
+{
+    HostReactors host("l3api-host");
+    FakeRadio radio;
+    // Twice on the same reactors: the first run leaves nothing behind.
+    for (int run = 0; run < 2; ++run)
+    {
+        TestL3 t;
+        ASSERT_TRUE(t.start(config_for(radio), {}, host.names()));
+        ASSERT_TRUE(t.radio_up());
+        auto list = t.l3.upstreams().list();
+        ASSERT_TRUE(list.ok());
+        // l3's own calls run on the host's IO thread.
+        auto where = std::make_shared<std::promise<std::thread::id>>();
+        auto where_f = where->get_future();
+        ASSERT_TRUE(t.l3.post(
+                         [where](const api::L3&)
+                         {
+                             where->set_value(std::this_thread::get_id());
+                         })
+                        .ok());
+        ASSERT_EQ(where_f.wait_for(std::chrono::seconds(2)),
+                  std::future_status::ready);
+        EXPECT_EQ(t.stop(), 0);
+        EXPECT_FALSE(t.l3.running());
+        EXPECT_TRUE(host.alive());
+    }
+}
+
+TEST(L3ApiTest, HostReactorsStopBeforeRun)
+{
+    HostReactors host("l3api-host-early");
+    FakeRadio radio;
+    auto core = api::l3::detail::L3Core::create();
+    core->request_stop();
+    bool setup_called = false;
+    EXPECT_EQ(api::l3::detail::run_l3(
+                  core, config_for(radio), {},
+                  [&](api::L3::Thread)
+                  {
+                      setup_called = true;
+                  },
+                  host.names()),
+              0);
+    EXPECT_FALSE(setup_called);
+    EXPECT_TRUE(host.alive());
+}
+
+TEST(L3ApiTest, UnregisteredHostReactorReturnsOne)
+{
+    FakeRadio radio;
+    auto core = api::l3::detail::L3Core::create();
+    EXPECT_EQ(api::l3::detail::run_l3(core, config_for(radio), {}, {},
+                                      {"no-such-io", ""}),
+              1);
+    EXPECT_EQ(api::l3::detail::run_l3(core, config_for(radio), {}, {},
+                                      {"", "no-such-cv"}),
+              1);
+    EXPECT_FALSE(core->busy.load());
+}
+
 TEST(L3ApiTest, ApplyBuildsTheConfigAndHandlesWork)
 {
     FakeRadio radio;

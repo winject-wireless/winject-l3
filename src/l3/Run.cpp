@@ -143,7 +143,8 @@ Status L3::apply(const Config& cfg) const
 
 int l3::detail::run_l3(const std::shared_ptr<L3Core>& core, const Config& cfg,
                        std::function<void(const L3&)> started,
-                       L3::ThreadSetup thread_setup)
+                       L3::ThreadSetup thread_setup,
+                       const L3::Reactors& reactors)
 {
     std::string err;
     if (!cfg.validate(&err))
@@ -163,6 +164,12 @@ int l3::detail::run_l3(const std::shared_ptr<L3Core>& core, const Config& cfg,
         // also runs apply, every Done and the console commands.
         auto impl =
             std::make_unique<winject::l3::detail::L3Impl>(cfg.stats_sec);
+        if (!impl->use_host_reactors(reactors.io, reactors.upstream))
+        {
+            core->stop_requested = false;
+            core->busy = false;
+            return 1;
+        }
         core->callbacks.open();
         impl->start(core.get(), thread_setup);
         const L3 l3 = HandleAccess::l3(core);
@@ -197,6 +204,13 @@ int L3::run(const Config& cfg, std::function<void(const L3&)> started,
 {
     return l3::detail::run_l3(process_core(), cfg, std::move(started),
                               std::move(thread_setup));
+}
+
+int L3::run(const Config& cfg, std::function<void(const L3&)> started,
+            ThreadSetup thread_setup, const Reactors& reactors)
+{
+    return l3::detail::run_l3(process_core(), cfg, std::move(started),
+                              std::move(thread_setup), reactors);
 }
 
 void L3::stop()

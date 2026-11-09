@@ -419,7 +419,7 @@ TEST(TxMuxTest, CoarseTimerUsesReportedStepAndKeepsPacedThroughput)
             bfc::cv_reactor<>& cv;
             size_t positive_arms = 0;
             size_t sub_step_arms = 0;
-            auto wait_us(int64_t us, bfc::light_function<void()> fn)
+            auto wait_us(int64_t us, bfc::config::function<void()> fn)
             {
                 if (us > 0)
                 {
@@ -434,7 +434,7 @@ TEST(TxMuxTest, CoarseTimerUsesReportedStepAndKeepsPacedThroughput)
             }
         } timer{cv};
         auto& get_timer() { return timer; }
-        void wake_up(bfc::light_function<void()> fn)
+        void wake_up(bfc::config::function<void()> fn)
         {
             cv.wake_up(std::move(fn));
         }
@@ -486,7 +486,7 @@ TEST(TxMuxTest, TickLateCoarseTimerKeepsPacedThroughput)
         struct Timer
         {
             bfc::cv_reactor<>& cv;
-            auto wait_us(int64_t us, bfc::light_function<void()> fn)
+            auto wait_us(int64_t us, bfc::config::function<void()> fn)
             {
                 return cv.get_timer().wait_us(us > 0 ? us + 1000 : us,
                                               std::move(fn));
@@ -497,7 +497,7 @@ TEST(TxMuxTest, TickLateCoarseTimerKeepsPacedThroughput)
             }
         } timer{cv};
         auto& get_timer() { return timer; }
-        void wake_up(bfc::light_function<void()> fn)
+        void wake_up(bfc::config::function<void()> fn)
         {
             cv.wake_up(std::move(fn));
         }

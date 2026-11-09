@@ -1,6 +1,7 @@
 #ifndef WINJECT_MANAGER_UTILS_RADIO_QUEUES_H_
 #define WINJECT_MANAGER_UTILS_RADIO_QUEUES_H_
 
+#include <bfc/config.hpp>
 #include <bfc/event_queue.hpp>
 #include <bfc/shared_sized_buffer.hpp>
 #include <cstddef>
@@ -25,7 +26,7 @@ class BoundedLossyQueue
 {
 public:
     explicit BoundedLossyQueue(size_t capacity = 1024,
-                               bfc::light_function<void()> on_push = {})
+                               bfc::config::function<void()> on_push = {})
         : max_slots(capacity), on_push_fn(std::move(on_push))
     {
         slots.resize(max_slots);
@@ -135,7 +136,7 @@ public:
 private:
     std::mutex mutex;
     const size_t max_slots;
-    bfc::light_function<void()> on_push_fn;
+    bfc::config::function<void()> on_push_fn;
     size_t head = 0;
     size_t count = 0;
     uint64_t bytes = 0;
