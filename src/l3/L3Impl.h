@@ -20,10 +20,10 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <string>
-#include <future>
 #include <thread>
 #include <vector>
 

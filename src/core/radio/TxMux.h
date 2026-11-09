@@ -1,7 +1,6 @@
 #ifndef WINJECT_MANAGER_RADIO_TX_MUX_H_
 #define WINJECT_MANAGER_RADIO_TX_MUX_H_
 
-#include <bfc/config.hpp>
 #include "endpoint/UpstreamConfig.h"
 #include "radio/PhyAirtime.h"
 #include "radio/RadioDefs.h"
@@ -9,6 +8,7 @@
 #include "radio/TxEvent.h"
 
 #include <atomic>
+#include <bfc/config.hpp>
 #include <bfc/function.hpp>
 #include <chrono>
 #include <functional>
