@@ -59,16 +59,11 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
             return;
         }
 
-        std::array<std::vector<size_t>, 256> rx_by_bus;
-        const auto& entries = table.entries();
-        for (size_t i = 0; i < entries.size(); ++i)
-        {
-            const uint8_t bus = entries[i].bus_rx;
-            if (bus != 0 && entries[i].rx_queue != nullptr)
-            {
-                rx_by_bus[bus].push_back(i);
-            }
-        }
+        // Scan the table per slot (a dozen entries) instead of building a
+        // bus -> entries index for every frame: that cost a heap allocation
+        // per upstream per frame (~130 us/frame on the ground P4 with the
+        // radio-reactor). Same targets, in table order.
+        auto& entries = table.entries();
 
         for (int slot = 0; slot < WIFI_PDU_SLOTS; ++slot)
         {
@@ -91,17 +86,16 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
             {
                 continue;
             }
-            const auto& targets = rx_by_bus[bus];
-            if (targets.empty())
+            const size_t payload_off = static_cast<size_t>(
+                reinterpret_cast<const uint8_t*>(pdu.data()) - mpdu_bytes);
+            bool matched = false;
+            for (RadioUpstreamEntry& s : entries)
             {
-                rx_drop_bus_total.fetch_add(1, std::memory_order_relaxed);
-                continue;
-            }
-            for (size_t idx : targets)
-            {
-                RadioUpstreamEntry& s = table.entries()[idx];
-                const size_t payload_off = static_cast<size_t>(
-                    reinterpret_cast<const uint8_t*>(pdu.data()) - mpdu_bytes);
+                if (s.bus_rx != bus || s.rx_queue == nullptr)
+                {
+                    continue;
+                }
+                matched = true;
                 if (pending_count >= pending.size())
                 {
                     return;
@@ -111,6 +105,10 @@ void RxDemux::on_mpdu(bfc::shared_sized_buffer mpdu_owned)
                 pending[pending_count].view =
                     mpdu_owned.subview(payload_off, pdu.size());
                 ++pending_count;
+            }
+            if (!matched)
+            {
+                rx_drop_bus_total.fetch_add(1, std::memory_order_relaxed);
             }
         }
     }
