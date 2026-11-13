@@ -65,6 +65,26 @@ TEST_F(BwtestTest, SendsOfferedRateForDuration)
     wait_done();
 }
 
+TEST_F(BwtestTest, PayloadSizePerSend)
+{
+    make(1024);
+    // 512 kbit/s with 64 B datagrams for 100 ms = 100 datagrams (1000/s).
+    EXPECT_EQ(bw->handle_command("test_send 512 100 64"), "ok\n");
+    wait_done();
+    Stats s = bw->stats();
+    EXPECT_EQ(s.snd_pkt, 100u);
+    EXPECT_EQ(s.snd_byt, 6400u);
+    EXPECT_EQ(drain_ingress(), 100u);
+    // Without the size the configured one (100 B) is back.
+    bw->clear();
+    ASSERT_TRUE(bw->start_send(800, 100));
+    wait_done();
+    s = bw->stats();
+    EXPECT_EQ(s.snd_pkt, 100u);
+    EXPECT_EQ(s.snd_byt, 10000u);
+    EXPECT_FALSE(bw->start_send(800, 10, 15));  // below the timestamp header
+}
+
 TEST_F(BwtestTest, FullQueueAndDisconnectCountAsDrops)
 {
     make(10);
@@ -105,12 +125,14 @@ TEST_F(BwtestTest, ConsoleCommands)
               "snd_pkt 0\nsnd_byt 0\nsnd_drop 0\nrcv_pkt 0\nrcv_byt "
               "0\nlat_samples 0\nlat_invalid 0\nlat_last_us 0\nlat_min_us "
               "0\nlat_avg_us 0\nlat_max_us 0\n");
-    EXPECT_EQ(bw->handle_command("test_send 800"),
-              "error usage: test_send <offer_kbps> <duration_ms>\n");
-    EXPECT_EQ(bw->handle_command("test_send 0 10"),
-              "error usage: test_send <offer_kbps> <duration_ms>\n");
-    EXPECT_EQ(bw->handle_command("test_send 800 10 x"),
-              "error usage: test_send <offer_kbps> <duration_ms>\n");
+    const std::string usage =
+        "error usage: test_send <offer_kbps> <duration_ms> [payload_bytes]\n";
+    EXPECT_EQ(bw->handle_command("test_send 800"), usage);
+    EXPECT_EQ(bw->handle_command("test_send 0 10"), usage);
+    EXPECT_EQ(bw->handle_command("test_send 800 10 x"), usage);
+    EXPECT_EQ(bw->handle_command("test_send 800 10 15"), usage);
+    EXPECT_EQ(bw->handle_command("test_send 800 10 64 x"), usage);
+    EXPECT_EQ(bw->handle_command("test_send 800 10 999999"), usage);
     EXPECT_EQ(bw->handle_command("nope"),
               "error unknown command (test_send, stats, clr)\n");
     EXPECT_EQ(bw->handle_command("test_send 800 50\n"), "ok\n");

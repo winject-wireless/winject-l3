@@ -88,11 +88,16 @@ Bwtest::~Bwtest()
     }
 }
 
-bool Bwtest::start_send(uint32_t offer_kbps, uint32_t duration_ms)
+bool Bwtest::start_send(uint32_t offer_kbps, uint32_t duration_ms,
+                        size_t payload_bytes)
 {
+    if (payload_bytes == 0)
+    {
+        payload_bytes = payload_bytes_;
+    }
     if (offer_kbps == 0 || duration_ms == 0 ||
-        payload_bytes_ < k_timestamp_header_bytes ||
-        payload_bytes_ > winject::core::k_stream_payload_max)
+        payload_bytes < k_timestamp_header_bytes ||
+        payload_bytes > winject::core::k_stream_payload_max)
     {
         return false;
     }
@@ -107,9 +112,9 @@ bool Bwtest::start_send(uint32_t offer_kbps, uint32_t duration_ms)
     }
     sending_.store(true);
     send_thread_ = std::thread(
-        [this, offer_kbps, duration_ms]
+        [this, offer_kbps, duration_ms, payload_bytes]
         {
-            run_send(offer_kbps, duration_ms);
+            run_send(offer_kbps, duration_ms, payload_bytes);
             sending_.store(false);
         });
     return true;
@@ -120,17 +125,18 @@ bool Bwtest::sending() const
     return sending_.load();
 }
 
-void Bwtest::run_send(uint32_t offer_kbps, uint32_t duration_ms)
+void Bwtest::run_send(uint32_t offer_kbps, uint32_t duration_ms,
+                      size_t payload_bytes)
 {
     using clock = std::chrono::steady_clock;
-    std::vector<uint8_t> payload(payload_bytes_, 0);
+    std::vector<uint8_t> payload(payload_bytes, 0);
     // Versioned wire header: BWT1, sequence LE32, Unix timestamp LE64.
     std::memcpy(payload.data(), "BWT1", 4);
     const auto start = clock::now();
     const auto end = start + std::chrono::milliseconds(duration_ms);
     // Bits per µs = kbps / 1000, so due datagrams after t µs are
     // t * kbps / (8000 * payload).
-    const uint64_t divisor = 8000ull * payload_bytes_;
+    const uint64_t divisor = 8000ull * payload_bytes;
     uint64_t sent = 0;
     for (;;)
     {
@@ -257,15 +263,29 @@ std::string Bwtest::handle_command(const std::string& line)
     in >> cmd;
     if (cmd == "test_send")
     {
+        static const char* const k_usage =
+            "error usage: test_send <offer_kbps> <duration_ms> "
+            "[payload_bytes]\n";
         uint64_t kbps = 0;
         uint64_t ms = 0;
+        uint64_t bytes = 0;
         std::string extra;
-        if (!(in >> kbps >> ms) || (in >> extra) || kbps == 0 || ms == 0 ||
+        if (!(in >> kbps >> ms) || kbps == 0 || ms == 0 ||
             kbps > UINT32_MAX || ms > UINT32_MAX)
         {
-            return "error usage: test_send <offer_kbps> <duration_ms>\n";
+            return k_usage;
         }
-        if (!start_send(static_cast<uint32_t>(kbps), static_cast<uint32_t>(ms)))
+        if (in >> std::ws, !in.eof())
+        {
+            if (!(in >> bytes) || (in >> extra) ||
+                bytes < k_timestamp_header_bytes ||
+                bytes > winject::core::k_stream_payload_max)
+            {
+                return k_usage;
+            }
+        }
+        if (!start_send(static_cast<uint32_t>(kbps), static_cast<uint32_t>(ms),
+                        static_cast<size_t>(bytes)))
         {
             return "error busy\n";
         }
