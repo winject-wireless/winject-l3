@@ -2,8 +2,13 @@
 
 Both peers run `app_bwtest` on the paired L3 queue upstream. The P4 apps
 expose its UDP console on port 5100. Run `clr` on the receiver, then
-`test_send <offer_kbps> <duration_ms>` on the sender, and query `stats` on
-the receiver during or after the send.
+`test_send <offer_kbps> <duration_ms> [payload_bytes]` on the sender, and
+query `stats` on the receiver during or after the send.
+
+`payload_bytes` sets the datagram size for that send (16 up to the stream
+payload maximum); without it the app's configured size is used. The
+datagram rate is `offer_kbps * 1000 / (8 * payload_bytes)` per second, so
+`test_send 512 10000 64` sends 1000 datagrams/s of 64 B for 10 s.
 
 `stats` retains the packet/byte/drop counters and adds:
 

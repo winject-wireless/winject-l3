@@ -67,9 +67,11 @@ public:
     Bwtest(const Bwtest&) = delete;
     Bwtest& operator=(const Bwtest&) = delete;
 
-    // Starts a send of offer_kbps for duration_ms on its own thread. False
-    // when a send is running, an argument is 0, or payload size is invalid.
-    bool start_send(uint32_t offer_kbps, uint32_t duration_ms);
+    // Starts a send of offer_kbps for duration_ms on its own thread, with
+    // datagrams of payload_bytes (0 = the configured size). False when a send
+    // is running, a rate/duration is 0, or the payload size is invalid.
+    bool start_send(uint32_t offer_kbps, uint32_t duration_ms,
+                    size_t payload_bytes = 0);
     bool sending() const;
     // Drains the upstream's receive queue once; returns datagrams taken.
     size_t poll_receive();
@@ -81,7 +83,8 @@ public:
     std::string handle_command(const std::string& line);
 
 private:
-    void run_send(uint32_t offer_kbps, uint32_t duration_ms);
+    void run_send(uint32_t offer_kbps, uint32_t duration_ms,
+                  size_t payload_bytes);
     uint64_t evictions() const;
 
     std::shared_ptr<winject::core::UpstreamQueue> upstream_;
