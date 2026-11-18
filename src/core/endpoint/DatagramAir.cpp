@@ -2,6 +2,7 @@
 
 #include "utils/NetUtil.h"
 
+#include <algorithm>
 #include <cstring>
 #include <utility>
 
@@ -22,10 +23,17 @@ bool DatagramAir::fec_write_config(const UpstreamConfig& cfg,
                                    fec_write_stream::config* out)
 {
     fec_write_stream::config w;
+    // Checked with FEC off too: a later FEC change would pick it up.
+    if (cfg.fec_spread_ms < 0 || cfg.fec_spread_ms > winject::fec::k_spread_cap_ms)
+    {
+        return false;
+    }
     if (cfg.fec_type == FecType::RsBlockErasure)
     {
-        // l3 keeps its rules: at least one parity shard, n <= 31.
-        if (cfg.fec_k < 1 || cfg.fec_n <= cfg.fec_k || cfg.fec_n > 31)
+        // l3 keeps its rules: at least one parity shard, n within one header
+        // field (k_header_k_n_max, 31).
+        if (cfg.fec_k < 1 || cfg.fec_n <= cfg.fec_k ||
+            cfg.fec_n > winject::fec::k_header_k_n_max)
         {
             return false;
         }
@@ -85,7 +93,9 @@ bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
     const size_t rx_capacity =
         cfg.rx_queue_capacity ? cfg.rx_queue_capacity : tx_queue->capacity();
     rs->set_input_capacity(rx_capacity);
-    rs->set_output_capacity(rx_capacity);
+    // A rebuilt or given-up hole releases everything held behind it at once:
+    // up to the read stream's whole window, before drain_rx runs.
+    rs->set_output_capacity(std::max(rx_capacity, fec_read_stream::k_rx_ring));
     rs->attach(reactor);
 
     fec_tx_on = wcfg.k > 0;
@@ -323,6 +333,16 @@ void DatagramAir::sync_fec_counters()
     fec_recovered_acc.store(c.recovered, std::memory_order_relaxed);
     fec_decode_fail_acc.store(c.decode_fail + c.hdr_errors + c.kn_mismatch,
                               std::memory_order_relaxed);
+    fec_rx_drops_acc.store(c.drop_output + c.drop_input,
+                           std::memory_order_relaxed);
+}
+
+void DatagramAir::refresh_fec_counters() const
+{
+    // The read stream's timer can give up a hole without releasing anything,
+    // so its counters are read when asked, not only on delivery.
+    std::lock_guard<std::mutex> lock(mu);
+    const_cast<DatagramAir*>(this)->sync_fec_counters();
 }
 
 }  // namespace winject::core

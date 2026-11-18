@@ -151,6 +151,10 @@ public:
     {
         return air.fec_decode_fail();
     }
+    uint64_t fec_rx_drops() const
+    {
+        return air.fec_rx_drops();
+    }
     uint64_t tx_queue_drops() const
     {
         return air.tx_queue_drops();

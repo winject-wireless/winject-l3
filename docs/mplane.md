@@ -142,6 +142,7 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `rx_drop_bus` | Slots whose LC bus matches no upstream `rx_bus` |
 | `upstream_<id>_air_rx_gap_loss` | Air RX sequence gaps on upstream `<id>` |
 | `upstream_<id>_air_rx_resyncs` | Air RX sequence jumped back more than 64 (peer restart); taken as the new reference, no loss counted |
+| `upstream_<id>_fec_rx_drops` | Datagrams the FEC read stream of upstream `<id>` dropped because its rings were full (should stay 0) |
 | `upstream_<id>_air_rx_lc_type_unknown` | Slots dropped on upstream `<id>` for an LC type this build does not know (the peer runs a different manager) |
 | `upstream_<id>_app_rx_oversize_pkt` | Application datagrams over 1444 bytes (1438 with FEC) dropped on upstream `<id>` |
 | `upstream_<id>_app_delivery_attempts` | Decoded/raw datagrams handed to the application transport, including local failures |

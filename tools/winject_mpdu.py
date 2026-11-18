@@ -10,9 +10,12 @@ from typing import Iterator
 WIFI_HDR_LEN = 24
 WIFI_PDU_SLOTS = 5
 ADDR3_PREFIX = bytes([0xCA, 0xFE, 0xBA, 0xBE])
-LC_LEN = 3
-SEQ_MASK = 0x7FFF
-SEQ_HALF = 0x4000
+# LC header: u8 bus | u8 lc_type (0 plain, 1 fec) | u16 sn (BE).
+LC_LEN = 4
+LC_TYPE_PLAIN = 0
+LC_TYPE_FEC = 1
+SEQ_MASK = 0xFFFF
+SEQ_HALF = 0x8000
 FC_TYPE_DATA = 0x08  # Data frame, subtype 0
 
 
@@ -62,8 +65,8 @@ def unpack_slot_sizes(addr1: bytes, addr2: bytes) -> list[int]:
 
 
 def lc_write(bus: int, seq: int, is_fec: bool = False) -> bytes:
-    word = (seq & SEQ_MASK) | (0x8000 if is_fec else 0)
-    return bytes([bus & 0xFF]) + struct.pack(">H", word)
+    lc_type = LC_TYPE_FEC if is_fec else LC_TYPE_PLAIN
+    return bytes([bus & 0xFF, lc_type]) + struct.pack(">H", seq & SEQ_MASK)
 
 
 def build_data_mpdu(
@@ -141,7 +144,7 @@ class LcAirRxTracker:
         bus = payload[0]
         if self.bus is not None and bus != self.bus:
             return False
-        seq = struct.unpack(">H", payload[1:3])[0] & SEQ_MASK
+        seq = struct.unpack(">H", payload[2:4])[0]
         if self.have and seq == self.last_seq:
             return False
         now = time.monotonic()

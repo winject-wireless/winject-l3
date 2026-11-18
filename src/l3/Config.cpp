@@ -460,7 +460,7 @@ bool Config::load(const std::string& path, std::string* error)
             auto fk = parser.as<unsigned>(key_of(i, "fec.k"));
             auto fn = parser.as<unsigned>(key_of(i, "fec.n"));
             if (!fk || !fn || *fk < 1 || *fn <= *fk ||
-                *fn > 31)
+                *fn > static_cast<unsigned>(winject::fec::k_header_k_n_max))
             {
                 *error = "invalid " + key_of(i, "fec.k") + "/" +
                          key_of(i, "fec.n") + " (need 1 <= k < n <= 31)";
@@ -472,9 +472,11 @@ bool Config::load(const std::string& path, std::string* error)
             auto fto = parser.as<int>(key_of(i, "fec.timeout_ms"));
             if (fto)
             {
-                if (*fto < 0)
+                // A block with parity needs a flush to close it short.
+                if (*fto < 1)
                 {
-                    *error = "invalid " + key_of(i, "fec.timeout_ms");
+                    *error = "invalid " + key_of(i, "fec.timeout_ms") +
+                             " (need >= 1)";
                     return false;
                 }
                 u.fec_timeout_ms = *fto;
@@ -484,8 +486,8 @@ bool Config::load(const std::string& path, std::string* error)
             {
                 if (*fsp < 0 || *fsp > winject::fec::k_spread_cap_ms)
                 {
-                    *error = "invalid " + key_of(i, "fec.spread_ms") +
-                             " (need 0..250)";
+                    *error = "invalid " + key_of(i, "fec.spread_ms") + " (need 0.." +
+                             std::to_string(winject::fec::k_spread_cap_ms) + ")";
                     return false;
                 }
                 u.fec_spread_ms = *fsp;

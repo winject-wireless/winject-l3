@@ -396,3 +396,63 @@ TEST(DatagramAirTest, DestroyWithPendingTimers)
     }
     std::this_thread::sleep_for(milliseconds(20));
 }
+
+// A hole rebuilt late releases everything held behind it at once; the read
+// stream's output holds its whole window whatever rx_queue_capacity is.
+TEST(DatagramAirTest, LateRebuildReleasesLongHeldRunWithoutDrops)
+{
+    CvThread cvt;
+    End a(cvt);
+    End b(cvt);
+    ASSERT_TRUE(a.start(fec_cfg(4, 5)));
+    UpstreamConfig small = plain_cfg();
+    small.rx_queue_capacity = 64;
+    ASSERT_TRUE(b.start(small));
+    std::vector<bytes> sent;
+    for (int i = 0; i < 208; i++)
+    {
+        sent.push_back(app(uint8_t(i), 8 + i % 50));
+        a.send(sent.back());
+    }
+    const auto slots = a.pull();
+    ASSERT_EQ(slots.size(), 260u);  // 52 blocks of 4 data + 1 parity
+    // Block 0 arrives whole. Block 1 loses data 0 (slot 5); its parity
+    // (slot 9) comes after all the other blocks, 200 data shards later.
+    for (size_t i = 0; i < slots.size(); i++)
+    {
+        if (i != 5 && i != 9)
+        {
+            b.receive(slots[i]);
+        }
+    }
+    EXPECT_EQ(b.received_count(), 4u);  // block 0; the rest waits
+    b.receive(slots[9]);
+    ASSERT_TRUE(wait_for([&] { return b.received_count() == sent.size(); }));
+    EXPECT_EQ(b.received(), sent);
+    EXPECT_EQ(b.air->fec_rx_drops(), 0u);
+    EXPECT_EQ(b.air->fec_recovered(), 1u);
+}
+
+// A block that cannot be rebuilt and has nothing behind it: the give-up
+// releases nothing, and the loss still shows in the counters.
+TEST(DatagramAirTest, GiveUpWithNothingToReleaseIsCounted)
+{
+    CvThread cvt;
+    End a(cvt);
+    End b(cvt);
+    ASSERT_TRUE(a.start(fec_cfg(3, 4)));
+    ASSERT_TRUE(b.start(plain_cfg()));
+    for (uint8_t i = 0; i < 3; i++)
+    {
+        a.send(app(i));
+    }
+    const auto slots = a.pull();
+    ASSERT_EQ(slots.size(), 4u);
+    b.receive(slots[0]);
+    b.receive(slots[3]);  // data 1 and 2 lost: 2 of 4, not enough
+    EXPECT_EQ(b.received(), (std::vector<bytes>{app(0)}));
+    EXPECT_EQ(b.air->fec_decode_fail(), 0u);
+    ASSERT_TRUE(wait_for([&] { return b.air->fec_decode_fail() >= 1u; },
+                         milliseconds(1000)));
+    EXPECT_EQ(b.received_count(), 1u);
+}

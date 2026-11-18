@@ -647,8 +647,7 @@ L3Impl::Result<api::UpstreamSpec> L3Impl::update_upstream(
     const bool have_fec = patch.fec.has_value();
     const api::Fec fec = have_fec ? *patch.fec : api::Fec{};
     const int timeout_ms = static_cast<int>(fec.timeout.count());
-    // A timeout equal to the current one is no change (it may be 0 from a
-    // config file, which an update could not set).
+    // A timeout equal to the current one is no change.
     const bool have_timeout = have_fec && timeout_ms != current.fec_timeout_ms;
     UpstreamConfig candidate;
     std::string val_err;
@@ -847,6 +846,10 @@ void L3Impl::refresh_host_metrics()
             .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
                                     "_air_rx_lc_type_unknown")
             ->store(air.air_rx_lc_type_unknown);
+        metrics_registry
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_fec_rx_drops")
+            ->store(up->fec_rx_drops());
         const std::string oversize_key =
             "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
         metrics_registry.get_metrics<MetricU64>(oversize_key)

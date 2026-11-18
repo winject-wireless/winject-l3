@@ -141,13 +141,21 @@ public:
     // Data shards rebuilt from parity.
     uint64_t fec_recovered() const
     {
+        refresh_fec_counters();
         return fec_recovered_acc.load(std::memory_order_relaxed);
     }
     // Blocks that lost data (given up, failed to decode or evicted), plus
     // malformed and k/n-mismatched shards.
     uint64_t fec_decode_fail() const
     {
+        refresh_fec_counters();
         return fec_decode_fail_acc.load(std::memory_order_relaxed);
+    }
+    // Datagrams the read stream dropped because its rings were full.
+    uint64_t fec_rx_drops() const
+    {
+        refresh_fec_counters();
+        return fec_rx_drops_acc.load(std::memory_order_relaxed);
     }
 
 private:
@@ -158,11 +166,12 @@ private:
     void drain_rx_locked();
     void deliver(bfc::shared_sized_buffer datagram);
     void sync_fec_counters();
+    void refresh_fec_counters() const;
 
     // Held by every data-path entry and by start/stop. The streams' timers do
     // not take it: they only fill the stream outputs, which drain_tx/drain_rx
     // empty under it.
-    std::mutex mu;
+    mutable std::mutex mu;
 
     std::shared_ptr<Reactor> reactor;
     std::shared_ptr<BoundedLossyQueue> tx_queue;
@@ -193,6 +202,7 @@ private:
     std::atomic<uint64_t> fec_air_tx_packets_acc{0};
     std::atomic<uint64_t> fec_recovered_acc{0};
     std::atomic<uint64_t> fec_decode_fail_acc{0};
+    std::atomic<uint64_t> fec_rx_drops_acc{0};
 };
 
 }  // namespace winject::core
