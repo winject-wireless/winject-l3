@@ -79,14 +79,28 @@ struct UpstreamRxStats
     uint64_t packets = 0;
     uint64_t oversize = 0;
     uint64_t air_gap = 0;
+    // Data shards rebuilt from parity.
     uint64_t fec_recovered = 0;
+    // Blocks that lost data, plus malformed and k/n-mismatched shards.
     uint64_t fec_lost = 0;
+    // FEC slots (data and parity) received on the air, and their bytes.
     uint64_t fec_bytes = 0;
     uint64_t fec_packets = 0;
+    // Data shards given up: app datagrams lost after FEC.
     uint64_t fec_gap = 0;
     // Queue transport: deliveries that evicted the oldest datagram from the
     // app's RX queue. 0 for UDP.
     uint64_t push_drops = 0;
+    // Blocks given up at their deadline.
+    uint64_t fec_given_up = 0;
+    // Data shards that came behind the release point (not delivered).
+    uint64_t fec_late = 0;
+    // Datagrams the FEC receiver dropped for want of room (should stay 0).
+    uint64_t fec_drops = 0;
+    // The sender's parity spread and the arrival jitter, as the FEC receiver
+    // measured them (ms); 250 / 0 until it has measured two blocks.
+    double fec_spread_est_ms = 0.;
+    double fec_jitter_est_ms = 0.;
 };
 
 struct UpstreamTxStats

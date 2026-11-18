@@ -302,6 +302,7 @@ void DatagramAir::drain_rx_locked()
         deliver(std::move(b));
     }
     sync_fec_counters();
+    sync_fec_estimates();
 }
 
 void DatagramAir::deliver(bfc::shared_sized_buffer datagram)
@@ -335,6 +336,36 @@ void DatagramAir::sync_fec_counters()
                               std::memory_order_relaxed);
     fec_rx_drops_acc.store(c.drop_output + c.drop_input,
                            std::memory_order_relaxed);
+    fec_missing_data_acc.store(c.missing_data, std::memory_order_relaxed);
+    fec_given_up_acc.store(c.given_up_blocks, std::memory_order_relaxed);
+    fec_late_acc.store(c.late, std::memory_order_relaxed);
+}
+
+void DatagramAir::sync_fec_estimates()
+{
+    if (!rx_stream)
+    {
+        return;
+    }
+    fec_spread_est_ms.store(rx_stream->spread_estimate_ms(),
+                            std::memory_order_relaxed);
+    fec_jitter_est_ms.store(rx_stream->jitter_estimate_ms(),
+                            std::memory_order_relaxed);
+}
+
+DatagramAir::FecRxStats DatagramAir::fec_rx_stats() const
+{
+    refresh_fec_counters();
+    FecRxStats s;
+    s.recovered = fec_recovered_acc.load(std::memory_order_relaxed);
+    s.lost = fec_decode_fail_acc.load(std::memory_order_relaxed);
+    s.missing_data = fec_missing_data_acc.load(std::memory_order_relaxed);
+    s.given_up_blocks = fec_given_up_acc.load(std::memory_order_relaxed);
+    s.late = fec_late_acc.load(std::memory_order_relaxed);
+    s.drops = fec_rx_drops_acc.load(std::memory_order_relaxed);
+    s.spread_est_ms = fec_spread_est_ms.load(std::memory_order_relaxed);
+    s.jitter_est_ms = fec_jitter_est_ms.load(std::memory_order_relaxed);
+    return s;
 }
 
 void DatagramAir::refresh_fec_counters() const

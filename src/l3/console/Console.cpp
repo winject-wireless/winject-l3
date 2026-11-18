@@ -151,16 +151,20 @@ std::string format(const RadioStats& s)
 
 std::string format(uint8_t id, const UpstreamRxStats& s)
 {
-    char line[512];
+    char line[640];
     snprintf(line, sizeof(line),
              "upstream_rx_stat id=%u rxbyt=%llu rxpkt=%llu "
              "rx_oversize=%llu rxgap=%llu "
              "fec=%s fec_rec=%llu fec_lost=%llu fec_rxbyt=%llu "
-             "fec_rxpkt=%llu fec_rxgap=%llu rx_push_drop=%llu",
+             "fec_rxpkt=%llu fec_rxgap=%llu rx_push_drop=%llu "
+             "fec_given_up=%llu fec_late=%llu fec_drops=%llu "
+             "fec_spread_ms=%.1f fec_jitter_ms=%.1f",
              static_cast<unsigned>(id), ull(s.bytes), ull(s.packets),
              ull(s.oversize), ull(s.air_gap), fec_text(s.fec).c_str(),
              ull(s.fec_recovered), ull(s.fec_lost), ull(s.fec_bytes),
-             ull(s.fec_packets), ull(s.fec_gap), ull(s.push_drops));
+             ull(s.fec_packets), ull(s.fec_gap), ull(s.push_drops),
+             ull(s.fec_given_up), ull(s.fec_late), ull(s.fec_drops),
+             s.fec_spread_est_ms, s.fec_jitter_est_ms);
     return line;
 }
 

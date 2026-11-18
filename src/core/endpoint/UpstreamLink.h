@@ -155,6 +155,10 @@ public:
     {
         return air.fec_rx_drops();
     }
+    DatagramAir::FecRxStats fec_rx_stats() const
+    {
+        return air.fec_rx_stats();
+    }
     uint64_t tx_queue_drops() const
     {
         return air.tx_queue_drops();

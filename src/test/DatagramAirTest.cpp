@@ -285,6 +285,13 @@ TEST(DatagramAirTest, RxGivesUpHoleOnItsTimer)
                          milliseconds(1000)));
     EXPECT_EQ(b.received()[1], app(2));
     EXPECT_GE(b.air->fec_decode_fail(), 1u);
+    const auto f = b.air->fec_rx_stats();
+    EXPECT_EQ(f.missing_data, 1u);
+    EXPECT_EQ(f.given_up_blocks, 1u);
+    EXPECT_EQ(f.recovered, 0u);
+    EXPECT_EQ(f.drops, 0u);
+    // Nothing measured yet: the receiver assumes the cap.
+    EXPECT_DOUBLE_EQ(f.spread_est_ms, 250.);
 }
 
 TEST(DatagramAirTest, PayloadStaysOpaque)

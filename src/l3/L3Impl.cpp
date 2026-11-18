@@ -703,8 +703,15 @@ L3Impl::Result<api::UpstreamRxStats> L3Impl::upstream_rx_stats(uint8_t id) const
         s.bytes = endpoint->app_rx_bytes();
         s.packets = endpoint->app_rx_packets();
         s.oversize = endpoint->app_rx_oversize_pkt();
-        s.fec_recovered = endpoint->fec_recovered();
-        s.fec_lost = endpoint->fec_decode_fail();
+        const auto f = endpoint->fec_rx_stats();
+        s.fec_recovered = f.recovered;
+        s.fec_lost = f.lost;
+        s.fec_gap = f.missing_data;
+        s.fec_given_up = f.given_up_blocks;
+        s.fec_late = f.late;
+        s.fec_drops = f.drops;
+        s.fec_spread_est_ms = f.spread_est_ms;
+        s.fec_jitter_est_ms = f.jitter_est_ms;
         s.fec_bytes = endpoint->fec_air_rx_bytes();
         s.fec_packets = endpoint->fec_air_rx_packets();
         s.push_drops = endpoint->rx_counters().queue_evictions;

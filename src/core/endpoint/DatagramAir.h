@@ -158,6 +158,28 @@ public:
         return fec_rx_drops_acc.load(std::memory_order_relaxed);
     }
 
+    // The read stream's view of the FEC link, for stats. Any thread.
+    struct FecRxStats
+    {
+        // Data shards rebuilt from parity.
+        uint64_t recovered = 0;
+        // Blocks that lost data, plus malformed and k/n-mismatched shards.
+        uint64_t lost = 0;
+        // Data shards given up: app datagrams lost after FEC.
+        uint64_t missing_data = 0;
+        // Blocks given up at their deadline.
+        uint64_t given_up_blocks = 0;
+        // Data shards that came behind the release point (not delivered).
+        uint64_t late = 0;
+        // Datagrams the read stream's rings dropped.
+        uint64_t drops = 0;
+        // The sender's parity spread and the arrival jitter the receiver
+        // measured (ms); 250 / 0 until two blocks have been measured.
+        double spread_est_ms = 0.;
+        double jitter_est_ms = 0.;
+    };
+    FecRxStats fec_rx_stats() const;
+
 private:
     void stop_locked();
     void drain_tx();
@@ -167,6 +189,8 @@ private:
     void deliver(bfc::shared_sized_buffer datagram);
     void sync_fec_counters();
     void refresh_fec_counters() const;
+    // Reactor thread: the read stream's spread and jitter estimates.
+    void sync_fec_estimates();
 
     // Held by every data-path entry and by start/stop. The streams' timers do
     // not take it: they only fill the stream outputs, which drain_tx/drain_rx
@@ -203,6 +227,13 @@ private:
     std::atomic<uint64_t> fec_recovered_acc{0};
     std::atomic<uint64_t> fec_decode_fail_acc{0};
     std::atomic<uint64_t> fec_rx_drops_acc{0};
+    std::atomic<uint64_t> fec_missing_data_acc{0};
+    std::atomic<uint64_t> fec_given_up_acc{0};
+    std::atomic<uint64_t> fec_late_acc{0};
+    // Read on the reactor thread only (the read stream's estimates are not
+    // thread safe), kept here for any thread.
+    std::atomic<double> fec_spread_est_ms{double(winject::fec::k_spread_cap_ms)};
+    std::atomic<double> fec_jitter_est_ms{0.};
 };
 
 }  // namespace winject::core

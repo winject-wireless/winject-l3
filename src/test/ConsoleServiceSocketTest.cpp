@@ -373,7 +373,8 @@ TEST(ConsoleServiceSocketTest, UpstreamCommandsOnTheWire)
     EXPECT_NE(reply.find("\nupstream_rx_stat id=6 rxbyt=0 rxpkt=0 "
                          "rx_oversize=0 rxgap=0 fec=block(3,5) fec_rec=0 "
                          "fec_lost=0 fec_rxbyt=0 fec_rxpkt=0 fec_rxgap=0 "
-                         "rx_push_drop=0\n"),
+                         "rx_push_drop=0 fec_given_up=0 fec_late=0 fec_drops=0 "
+                         "fec_spread_ms=250.0 fec_jitter_ms=0.0\n"),
               std::string::npos)
         << reply;
     ASSERT_TRUE(harness.exchange(client, "cmd:9 lut", &reply));
