@@ -2,14 +2,52 @@
 
 #include "utils/NetUtil.h"
 
+#include <cstring>
 #include <utility>
 
 namespace winject::core
 {
 
+using winject::fec::fec_read_stream;
+using winject::fec::fec_write_stream;
+using winject::fec::out_shard;
+using winject::fec::shard_type;
+
 DatagramAir::~DatagramAir()
 {
     stop();
+}
+
+bool DatagramAir::fec_write_config(const UpstreamConfig& cfg,
+                                   fec_write_stream::config* out)
+{
+    fec_write_stream::config w;
+    if (cfg.fec_type == FecType::RsBlockErasure)
+    {
+        // l3 keeps its rules: at least one parity shard, n <= 31.
+        if (cfg.fec_k < 1 || cfg.fec_n <= cfg.fec_k || cfg.fec_n > 31)
+        {
+            return false;
+        }
+        w.k = cfg.fec_k;
+        w.n = cfg.fec_n;
+        w.max_datagram = k_stream_payload_max;
+        w.spread_ms = cfg.fec_spread_ms;
+        w.flush_ms = cfg.fec_timeout_ms;
+    }
+    else if (cfg.fec_type != FecType::none)
+    {
+        return false;
+    }
+    if (!fec_write_stream::valid(w))
+    {
+        return false;
+    }
+    if (out != nullptr)
+    {
+        *out = w;
+    }
+    return true;
 }
 
 bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
@@ -21,28 +59,41 @@ bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
 {
     std::lock_guard<std::mutex> lock(mu);
     stop_locked();
+    fec_write_stream::config wcfg;
     if (!reactor || !tx_queue || tx_queue->capacity() == 0 || route_bus == 0 ||
         tx_stats == nullptr || tx_stats_mu == nullptr ||
-        cfg.fec_timeout_ms < 0 ||
-        (cfg.fec_type != FecType::none &&
-         cfg.fec_type != FecType::RsBlockErasure))
+        !fec_write_config(cfg, &wcfg))
     {
         return false;
     }
-    auto emit = [this](const uint8_t* shard, size_t len)
-    {
-        push_tx(shard, len, true);
-    };
-    if (cfg.fec_type == FecType::RsBlockErasure &&
-        !fec_tx.start(reactor, cfg.fec_k, cfg.fec_n, cfg.fec_timeout_ms, emit))
+    auto ws = std::make_unique<fec_write_stream>();
+    // The LC prefix goes into the room the stream leaves in front of every
+    // shard.
+    ws->set_tx_buffers(k_slot_prefix_len, nullptr);
+    ws->set_input_capacity(tx_queue->capacity());
+    ws->set_output_capacity(tx_queue->capacity());
+    if (!ws->configure(wcfg))
     {
         return false;
     }
-    fec_rx.start(std::move(reactor),
-                 [this](const uint8_t* data, size_t len)
-                 {
-                     deliver(data, len);
-                 });
+    if (fec_seq_set)
+    {
+        ws->set_tx_sequence(fec_seq);
+    }
+    ws->attach(reactor);
+    auto rs = std::make_unique<fec_read_stream>();
+    const size_t rx_capacity =
+        cfg.rx_queue_capacity ? cfg.rx_queue_capacity : tx_queue->capacity();
+    rs->set_input_capacity(rx_capacity);
+    rs->set_output_capacity(rx_capacity);
+    rs->attach(reactor);
+
+    fec_tx_on = wcfg.k > 0;
+    max_app_datagram = fec_tx_on ? fec_write_stream::max_original(wcfg)
+                                 : k_stream_payload_max;
+    tx_stream = std::move(ws);
+    rx_stream = std::move(rs);
+    this->reactor = std::move(reactor);
     this->tx_queue = std::move(tx_queue);
     this->route_bus = route_bus;
     this->tx_stats = tx_stats;
@@ -60,116 +111,218 @@ void DatagramAir::stop()
 
 void DatagramAir::stop_locked()
 {
-    fec_tx.stop();
-    fec_rx.stop();
+    if (outputs_bound && reactor)
+    {
+        auto tx_out = tx_stream->output();
+        auto rx_out = rx_stream->output();
+        reactor->remove_read_rdy(*tx_out);
+        reactor->remove_read_rdy(*rx_out);
+        tx_out->set_reactor(nullptr);
+        rx_out->set_reactor(nullptr);
+        // The reactor walks its contexts unlocked: keep both rings alive
+        // past a walk in flight.
+        reactor->wake_up([tx_out, rx_out] {});
+    }
+    outputs_bound = false;
+    if (tx_stream)
+    {
+        fec_seq = tx_stream->tx_sequence();
+        fec_seq_set = true;
+        sync_fec_counters();
+    }
+    // Pending parity and held RX data go with the streams.
+    tx_stream.reset();
+    rx_stream.reset();
+    reactor.reset();
     tx_queue.reset();
     route_bus = 0;
     tx_stats = nullptr;
     tx_stats_mu = nullptr;
     deliver_app = nullptr;
     deliver_owned_app = nullptr;
+    fec_tx_on = false;
+    max_app_datagram = 0;
 }
 
-void DatagramAir::push_tx(const uint8_t* data, size_t len, bool is_fec)
+uint16_t DatagramAir::fec_tx_sdu_seq() const
 {
-    if (len == 0 || !tx_queue)
+    return tx_stream ? tx_stream->tx_sequence() : fec_seq;
+}
+
+void DatagramAir::set_fec_tx_sdu_seq(uint16_t seq)
+{
+    fec_seq = seq;
+    fec_seq_set = true;
+    if (tx_stream)
     {
-        return;
-    }
-    const auto capacity = tx_queue->capacity();
-    bfc::sized_buffer framed(k_slot_prefix_len + len);
-    size_t framed_len = 0;
-    {
-        std::lock_guard<std::mutex> lock(*tx_stats_mu);
-        if (!stamp_slot_payload(tx_stats, route_bus, is_fec, data, len,
-                                reinterpret_cast<uint8_t*>(framed.data()),
-                                framed.size(), &framed_len))
-        {
-            return;
-        }
-    }
-    auto shared =
-        bfc::shared_sized_buffer::copy_from(framed.data(), framed_len);
-    const auto before = tx_queue->push(std::move(shared));
-    if (capacity == 0 || before >= capacity)
-    {
-        tx_queue_drops_acc.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (is_fec)
-    {
-        fec_air_tx_bytes_acc.fetch_add(len, std::memory_order_relaxed);
-        fec_air_tx_packets_acc.fetch_add(1, std::memory_order_relaxed);
+        tx_stream->set_tx_sequence(seq);
     }
 }
 
-void DatagramAir::deliver(const uint8_t* data, size_t len)
+void DatagramAir::set_lifetime(std::weak_ptr<void> owner)
 {
-    if (data == nullptr || len == 0 || !deliver_app)
+    std::lock_guard<std::mutex> lock(mu);
+    if (!tx_stream || outputs_bound)
     {
         return;
     }
-    app_rx_bytes_acc.fetch_add(len, std::memory_order_relaxed);
-    app_rx_packets_acc.fetch_add(1, std::memory_order_relaxed);
-    deliver_app(data, len);
+    auto tx_out = tx_stream->output();
+    auto rx_out = rx_stream->output();
+    tx_out->set_reactor(reactor);
+    rx_out->set_reactor(reactor);
+    reactor->add_read_rdy(*tx_out,
+                          [owner, this]
+                          {
+                              if (auto alive = owner.lock())
+                              {
+                                  drain_tx();
+                              }
+                          });
+    reactor->add_read_rdy(*rx_out,
+                          [owner, this]
+                          {
+                              if (auto alive = owner.lock())
+                              {
+                                  drain_rx();
+                              }
+                          });
+    outputs_bound = true;
 }
 
 void DatagramAir::accept_app_datagram(const uint8_t* data, size_t len)
 {
     std::lock_guard<std::mutex> lock(mu);
-    if (data == nullptr || len == 0 || !tx_queue)
+    if (data == nullptr || len == 0 || !tx_stream)
     {
         return;
     }
     app_tx_bytes_acc.fetch_add(len, std::memory_order_relaxed);
     app_tx_packets_acc.fetch_add(1, std::memory_order_relaxed);
-    const size_t limit =
-        fec_tx.enabled() ? FecTx::max_original() : k_stream_payload_max;
-    if (len > limit)
+    if (len > max_app_datagram)
     {
         app_rx_oversize_pkt_acc.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    if (fec_tx.enabled())
+    // The one copy on the way out: the stream and the LC stamp then write
+    // their headers into the room in front.
+    const size_t offset = tx_stream->push_offset();
+    auto buf = bfc::shared_sized_buffer::allocate(offset + len);
+    buf.resize(offset + len);
+    memcpy(buf.u8() + offset, data, len);
+    tx_stream->push(std::move(buf));
+    drain_tx_locked();
+}
+
+void DatagramAir::drain_tx()
+{
+    std::lock_guard<std::mutex> lock(mu);
+    if (tx_stream)
     {
-        fec_tx.push(data, len);
-    }
-    else
-    {
-        push_tx(data, len, false);
+        drain_tx_locked();
     }
 }
 
-void DatagramAir::on_radio_rx(bfc::shared_sized_buffer pkt, bool is_fec)
+void DatagramAir::drain_tx_locked()
+{
+    const auto capacity = tx_queue->capacity();
+    for (out_shard s = tx_stream->pop(); s.type != shard_type::none;
+         s = tx_stream->pop())
+    {
+        if (s.buf.size() <= k_slot_prefix_len)
+        {
+            continue;
+        }
+        const bool fec = s.type != shard_type::plain;
+        {
+            std::lock_guard<std::mutex> lock(*tx_stats_mu);
+            if (!stamp_slot_prefix(tx_stats, route_bus,
+                                   fec ? LcType::fec : LcType::plain,
+                                   s.buf.u8()))
+            {
+                continue;
+            }
+        }
+        const size_t body = s.buf.size() - k_slot_prefix_len;
+        const auto before = tx_queue->push(std::move(s.buf));
+        if (capacity == 0 || before >= capacity)
+        {
+            tx_queue_drops_acc.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (fec)
+        {
+            fec_air_tx_bytes_acc.fetch_add(body, std::memory_order_relaxed);
+            fec_air_tx_packets_acc.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+void DatagramAir::on_radio_rx(bfc::shared_sized_buffer body, LcType type)
 {
     std::lock_guard<std::mutex> lock(mu);
-    if (pkt.empty() || pkt.size() > k_stream_payload_max || !tx_queue)
+    if (body.empty() || body.size() > k_stream_payload_max || !rx_stream)
     {
         return;
     }
-    if (!is_fec)
+    if (type == LcType::fec)
     {
-        if (!deliver_owned_app)
+        fec_air_rx_bytes_acc.fetch_add(body.size(), std::memory_order_relaxed);
+        fec_air_rx_packets_acc.fetch_add(1, std::memory_order_relaxed);
+        if (!fec_tx_on)
         {
-            deliver(pkt.u8(), pkt.size());
-            return;
+            fec_air_rx_unexpected_acc.fetch_add(1, std::memory_order_relaxed);
         }
-        // Hand the radio buffer on without a copy.
-        if (pkt.size() == 0)
-        {
-            return;
-        }
-        app_rx_bytes_acc.fetch_add(pkt.size(), std::memory_order_relaxed);
-        app_rx_packets_acc.fetch_add(1, std::memory_order_relaxed);
-        deliver_owned_app(std::move(pkt));
+    }
+    rx_stream->push(std::move(body), type);
+    drain_rx_locked();
+}
+
+void DatagramAir::drain_rx()
+{
+    std::lock_guard<std::mutex> lock(mu);
+    if (rx_stream)
+    {
+        drain_rx_locked();
+    }
+}
+
+void DatagramAir::drain_rx_locked()
+{
+    for (auto b = rx_stream->pop(); !b.empty(); b = rx_stream->pop())
+    {
+        deliver(std::move(b));
+    }
+    sync_fec_counters();
+}
+
+void DatagramAir::deliver(bfc::shared_sized_buffer datagram)
+{
+    if (datagram.empty())
+    {
         return;
     }
-    fec_air_rx_bytes_acc.fetch_add(pkt.size(), std::memory_order_relaxed);
-    fec_air_rx_packets_acc.fetch_add(1, std::memory_order_relaxed);
-    if (!fec_tx.enabled())
+    app_rx_bytes_acc.fetch_add(datagram.size(), std::memory_order_relaxed);
+    app_rx_packets_acc.fetch_add(1, std::memory_order_relaxed);
+    if (deliver_owned_app)
     {
-        fec_air_rx_unexpected_acc.fetch_add(1, std::memory_order_relaxed);
+        // The radio buffer goes on without a copy.
+        deliver_owned_app(std::move(datagram));
     }
-    fec_rx.push(std::move(pkt));
+    else if (deliver_app)
+    {
+        deliver_app(datagram.u8(), datagram.size());
+    }
+}
+
+void DatagramAir::sync_fec_counters()
+{
+    if (!rx_stream)
+    {
+        return;
+    }
+    const auto c = rx_stream->get_counters();
+    fec_recovered_acc.store(c.recovered, std::memory_order_relaxed);
+    fec_decode_fail_acc.store(c.decode_fail + c.hdr_errors + c.kn_mismatch,
+                              std::memory_order_relaxed);
 }
 
 }  // namespace winject::core

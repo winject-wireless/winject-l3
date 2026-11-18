@@ -34,7 +34,11 @@ struct Fec
     FecType type = FecType::none;
     int k = 0;
     int n = 0;
+    // A short block is flushed this long after its first datagram.
     std::chrono::milliseconds timeout{20};
+    // Parity spread (0..250 ms): a block's data and parity span this long
+    // from its first datagram. 0 sends parity right behind the data.
+    std::chrono::milliseconds spread{0};
 };
 
 enum class Transport

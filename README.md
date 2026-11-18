@@ -224,7 +224,7 @@ Useful options:
 | `--bitrate 15M` | ESP32: stays under the radios' sustained TX rate (~1,450–1,550 frames/s). `20M` overflows the radio inject queue (`dropped_tx_queue`) |
 | `--dir ab` / `--dir ba` | One direction only (`both` runs A→B then B→A) |
 | `-t` / `--time SEC` | Duration per direction (default 10) |
-| `-- -l <bytes>` | iperf datagram size, passed after `--` (default 1400; the script rejects more than 1445) |
+| `-- -l <bytes>` | iperf datagram size, passed after `--` (default 1400; the script rejects more than 1444) |
 | `--channel` / `--modulation` / `--power` / `--cca` / `--no-cca` | Radio PHY written into the managers' configs. Omitted: channel, modulation and power come from `bw_a.cfg` / `bw_b.cfg`, and CCA keeps the radio's setting |
 
 Output:

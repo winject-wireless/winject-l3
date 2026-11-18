@@ -60,8 +60,9 @@ private:
     std::vector<uint8_t> frame_sdu(const std::vector<uint8_t>& sdu, bool fec)
     {
         std::vector<uint8_t> slot(LCHeader::k_len + sdu.size());
-        LCHeader::write(slot.data(), k_bus, seq, fec);
-        seq = static_cast<uint16_t>((seq + 1) & LCHeader::k_seq_mask);
+        LCHeader::write(slot.data(), k_bus, fec ? LcType::fec : LcType::plain,
+                        seq);
+        seq = static_cast<uint16_t>(seq + 1);
         memcpy(slot.data() + LCHeader::k_len, sdu.data(), sdu.size());
         return slot;
     }
@@ -223,7 +224,8 @@ private:
                 const uint8_t* p =
                     reinterpret_cast<const uint8_t*>(slot.data());
                 EXPECT_EQ(p[0], QueueProducer::k_bus);
-                received_fec_flags.push_back(LCHeader::read_is_fec(p));
+                received_fec_flags.push_back(LCHeader::read_type(p) ==
+                                             static_cast<uint8_t>(LcType::fec));
                 received_seq_nums.push_back(LCHeader::read_seq(p));
                 received_pdus.emplace_back(p + LCHeader::k_len, p + slot.size());
             }
@@ -303,8 +305,7 @@ TEST(TxMuxTest, ForwardsPreframedFecFlagPerSdu)
     ASSERT_EQ(seq.size(), sdus.size());
     for (size_t i = 1; i < seq.size(); i++)
     {
-        EXPECT_EQ(seq[i], static_cast<uint16_t>((seq[i - 1] + 1) &
-                                                LCHeader::k_seq_mask));
+        EXPECT_EQ(seq[i], static_cast<uint16_t>(seq[i - 1] + 1));
     }
 }
 

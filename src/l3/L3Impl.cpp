@@ -2,7 +2,7 @@
 
 #include "L3Core.h"
 #include "WinjectBuildVersion.h"
-#include "fec/RsBlockErasure.h"
+#include "endpoint/DatagramAir.h"
 #include "frames/Mpdu.h"
 #include "mplane/MplaneCorrelation.h"
 #include "mplane/MplaneErrno.h"
@@ -45,7 +45,8 @@ core::FecType core_fec_type(api::FecType type)
                                           : core::FecType::none;
 }
 
-api::Fec api_fec(core::FecType type, int k, int n, int timeout_ms)
+api::Fec api_fec(core::FecType type, int k, int n, int timeout_ms,
+                 int spread_ms)
 {
     api::Fec fec;
     fec.type = type == core::FecType::RsBlockErasure ? api::FecType::rs_block
@@ -53,10 +54,12 @@ api::Fec api_fec(core::FecType type, int k, int n, int timeout_ms)
     fec.k = k;
     fec.n = n;
     fec.timeout = std::chrono::milliseconds(timeout_ms);
+    fec.spread = std::chrono::milliseconds(spread_ms);
     return fec;
 }
 
-api::Fec api_fec_of(const UpstreamLink* endpoint, int timeout_ms)
+api::Fec api_fec_of(const UpstreamLink* endpoint, int timeout_ms,
+                    int spread_ms)
 {
     core::FecType type = core::FecType::none;
     int k = 0;
@@ -65,7 +68,7 @@ api::Fec api_fec_of(const UpstreamLink* endpoint, int timeout_ms)
     {
         endpoint->get_fec(&type, &k, &n);
     }
-    return api_fec(type, k, n, timeout_ms);
+    return api_fec(type, k, n, timeout_ms, spread_ms);
 }
 
 RadioFcsConfig core_fcs(api::RadioFcs fcs)
@@ -503,13 +506,15 @@ api::UpstreamSpec L3Impl::upstream_spec_at(size_t index) const
     {
         spec.rx = endpoint->endpoint_rx();
         spec.tx = endpoint->endpoint_tx();
-        spec.fec = api_fec_of(endpoint, endpoint->fec_timeout_ms());
+        spec.fec = api_fec_of(endpoint, endpoint->fec_timeout_ms(),
+                              endpoint->config().fec_spread_ms);
     }
     else
     {
         spec.rx = uc.endpoint.rx;
         spec.tx = uc.endpoint.tx;
-        spec.fec = api_fec(uc.fec_type, uc.fec_k, uc.fec_n, uc.fec_timeout_ms);
+        spec.fec = api_fec(uc.fec_type, uc.fec_k, uc.fec_n, uc.fec_timeout_ms,
+                           uc.fec_spread_ms);
     }
     size_t budget = 0;
     spec.quanta = radio_upstream_table.get_budget(index, &budget)
@@ -567,6 +572,7 @@ api::Status L3Impl::add_upstream(const api::UpstreamSpec& spec)
     uc.fec_k = spec.fec.k;
     uc.fec_n = spec.fec.n;
     uc.fec_timeout_ms = static_cast<int>(spec.fec.timeout.count());
+    uc.fec_spread_ms = static_cast<int>(spec.fec.spread.count());
     if (uc.fec_type == core::FecType::none)
     {
         uc.fec_k = 0;
@@ -574,8 +580,7 @@ api::Status L3Impl::add_upstream(const api::UpstreamSpec& spec)
     }
     else
     {
-        RsBlockErasure codec;
-        if (!codec.init(uc.fec_k, uc.fec_n, uc.fec_timeout_ms))
+        if (!DatagramAir::fec_write_config(uc, nullptr))
         {
             return error_status(k_einval);
         }
@@ -655,6 +660,14 @@ L3Impl::Result<api::UpstreamSpec> L3Impl::update_upstream(
     {
         return error_result<api::UpstreamSpec>(k_einval);
     }
+    if (have_fec)
+    {
+        candidate.fec_spread_ms = static_cast<int>(fec.spread.count());
+        if (!DatagramAir::fec_write_config(candidate, nullptr))
+        {
+            return error_result<api::UpstreamSpec>(k_einval);
+        }
+    }
     std::string err;
     if (have_fec)
     {
@@ -683,7 +696,8 @@ L3Impl::Result<api::UpstreamRxStats> L3Impl::upstream_rx_stats(uint8_t id) const
     const UpstreamLink* endpoint =
         index < upstreams.size() ? upstreams[index].get() : nullptr;
     api::UpstreamRxStats s;
-    s.fec = api_fec_of(endpoint, cfg.upstreams[index].fec_timeout_ms);
+    s.fec = api_fec_of(endpoint, cfg.upstreams[index].fec_timeout_ms,
+                       cfg.upstreams[index].fec_spread_ms);
     if (endpoint != nullptr)
     {
         s.fec.timeout = std::chrono::milliseconds(endpoint->fec_timeout_ms());
@@ -714,7 +728,8 @@ L3Impl::Result<api::UpstreamTxStats> L3Impl::upstream_tx_stats(uint8_t id) const
     const UpstreamLink* endpoint =
         index < upstreams.size() ? upstreams[index].get() : nullptr;
     api::UpstreamTxStats s;
-    s.fec = api_fec_of(endpoint, cfg.upstreams[index].fec_timeout_ms);
+    s.fec = api_fec_of(endpoint, cfg.upstreams[index].fec_timeout_ms,
+                       cfg.upstreams[index].fec_spread_ms);
     if (endpoint != nullptr)
     {
         s.fec.timeout = std::chrono::milliseconds(endpoint->fec_timeout_ms());
@@ -828,6 +843,10 @@ void L3Impl::refresh_host_metrics()
             .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
                                     "_air_rx_resyncs")
             ->store(air.air_rx_resyncs);
+        metrics_registry
+            .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
+                                    "_air_rx_lc_type_unknown")
+            ->store(air.air_rx_lc_type_unknown);
         const std::string oversize_key =
             "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
         metrics_registry.get_metrics<MetricU64>(oversize_key)

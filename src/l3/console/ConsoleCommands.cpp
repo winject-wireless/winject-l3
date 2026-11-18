@@ -38,6 +38,7 @@ struct UpstreamLine
     int fec_k = 0;
     int fec_n = 0;
     int fec_timeout_ms = 0;
+    int fec_spread_ms = 0;
     size_t quanta = 0;
 };
 
@@ -46,9 +47,10 @@ constexpr const char k_help_text[] =
     "ping|p\n"
     "add_upstream|au id=<u8> txbus=<u8> rxbus=<u8> type=<UDP> "
     "rx=<address:port> tx=<interface:port> fec=<NONE|BLOCK> k=<n> n=<n> "
-    "fec_timeout=<ms> quanta=<bytes>\n"
+    "fec_timeout=<ms> fec_spread=<ms> quanta=<bytes>\n"
     "list_upstream|lu [ids=<u8>,...]\n"
-    "update_upstream|uu id=<u8> [fec= k= n= fec_timeout= quanta=]\n"
+    "update_upstream|uu id=<u8> [fec= k= n= fec_timeout= fec_spread= "
+    "quanta=]\n"
     "remove_upstream|ru id=<u8>\n"
     "list_upstream_rx_stat|lur [ids=<u8>,...]\n"
     "list_upstream_tx_stat|lut [ids=<u8>,...]\n"
@@ -224,6 +226,20 @@ bool parse_upstream_spec(char* save, UpstreamLine* spec, bool require_all,
             have_timeout = true;
             continue;
         }
+        if (mplane_parse_kv(a, "fec_spread=", &value))
+        {
+            int ms = 0;
+            if (!console_parse_duration_ms(value, &ms))
+            {
+                if (err != nullptr)
+                {
+                    *err = k_einval;
+                }
+                return false;
+            }
+            spec->fec_spread_ms = ms;
+            continue;
+        }
         if (mplane_parse_kv(a, "quanta=", &value) && mplane_parse_u(value, &v))
         {
             if (v == 0)
@@ -288,10 +304,11 @@ void append_upstream_line(std::string* out, const UpstreamLine& u)
     char buf[384];
     snprintf(buf, sizeof(buf),
              "upstream id=%u txbus=%u rxbus=%u type=%s rx=%s tx=%s fec=%s "
-             "fec_timeout=%dms quanta=%zu",
+             "fec_timeout=%dms fec_spread=%dms quanta=%zu",
              static_cast<unsigned>(u.id), static_cast<unsigned>(u.bus_tx),
              static_cast<unsigned>(u.bus_rx), u.type.c_str(), u.rx.c_str(),
-             u.tx.c_str(), fec_buf, u.fec_timeout_ms, u.quanta);
+             u.tx.c_str(), fec_buf, u.fec_timeout_ms, u.fec_spread_ms,
+             u.quanta);
     if (!out->empty())
     {
         *out += '\n';
@@ -354,6 +371,7 @@ UpstreamLine line_of(const winject::UpstreamSpec& u)
     line.fec_k = u.fec.k;
     line.fec_n = u.fec.n;
     line.fec_timeout_ms = static_cast<int>(u.fec.timeout.count());
+    line.fec_spread_ms = static_cast<int>(u.fec.spread.count());
     line.quanta = u.quanta;
     return line;
 }
@@ -581,6 +599,7 @@ void ConsoleCommands::handle(const L3& l3, const char* line, Reply reply,
         add.fec.k = spec.fec_k;
         add.fec.n = spec.fec_n;
         add.fec.timeout = std::chrono::milliseconds(spec.fec_timeout_ms);
+        add.fec.spread = std::chrono::milliseconds(spec.fec_spread_ms);
         add.quanta = spec.quanta;
         const auto added = l3.upstreams().add(add);
         if (!added.ok())
@@ -649,6 +668,8 @@ void ConsoleCommands::handle(const L3& l3, const char* line, Reply reply,
         int fec_n = 0;
         bool have_timeout = false;
         int fec_timeout_ms = 0;
+        bool have_spread = false;
+        int fec_spread_ms = 0;
         bool have_quanta = false;
         size_t quanta = 0;
         for (char* a = strtok_r(nullptr, " \t", &save); a != nullptr;
@@ -696,6 +717,18 @@ void ConsoleCommands::handle(const L3& l3, const char* line, Reply reply,
                 have_timeout = true;
                 continue;
             }
+            if (mplane_parse_kv(a, "fec_spread=", &value))
+            {
+                int ms = 0;
+                if (!console_parse_duration_ms(value, &ms))
+                {
+                    reply(nok(k_einval));
+                    return;
+                }
+                fec_spread_ms = ms;
+                have_spread = true;
+                continue;
+            }
             if (mplane_parse_kv(a, "quanta=", &value) &&
                 mplane_parse_u(value, &v))
             {
@@ -722,7 +755,8 @@ void ConsoleCommands::handle(const L3& l3, const char* line, Reply reply,
             reply(nok_status(up.status));
             return;
         }
-        const bool fec_field = have_fec || have_k || have_n || have_timeout;
+        const bool fec_field =
+            have_fec || have_k || have_n || have_timeout || have_spread;
         if (!fec_field && !have_quanta)
         {
             reply(nok(k_einval));
@@ -760,6 +794,10 @@ void ConsoleCommands::handle(const L3& l3, const char* line, Reply reply,
             if (have_timeout)
             {
                 merged.timeout = std::chrono::milliseconds(fec_timeout_ms);
+            }
+            if (have_spread)
+            {
+                merged.spread = std::chrono::milliseconds(fec_spread_ms);
             }
             patch.fec = merged;
         }

@@ -21,8 +21,8 @@ FetchContent_Declare(googletest
 )
 FetchContent_MakeAvailable(googletest)
 
-include(${CMAKE_CURRENT_SOURCE_DIR}/../core/fec/IsalEc.cmake)
-winject_add_isal_ec()
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/WinjectFecFetch.cmake)
+winject_add_fec()
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/../core/CoreSources.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../l3/L3Sources.cmake)
@@ -34,8 +34,6 @@ add_executable(winject-tests
     MpduSlotTest.cpp
     MpduTest.cpp
     ConfigTest.cpp
-    RsBlockErasureTest.cpp
-    VendoredFecTest.cpp
     DatagramAirTest.cpp
     UpstreamTest.cpp
     AppShutdownTest.cpp
@@ -78,7 +76,7 @@ target_compile_options(winject-tests PRIVATE
     -Wextra
     -Werror=return-type
 )
-target_link_libraries(winject-tests PRIVATE GTest::gtest_main pthread isal_ec)
+target_link_libraries(winject-tests PRIVATE GTest::gtest_main pthread winject::fec)
 
 enable_testing()
 include(GoogleTest)

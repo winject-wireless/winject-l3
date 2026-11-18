@@ -12,6 +12,7 @@
 namespace
 {
 using winject::core::LCHeader;
+using winject::core::LcType;
 using winject::core::Mpdu;
 using winject::core::RadioUpstreamTable;
 using winject::core::RxDemux;
@@ -43,7 +44,7 @@ bfc::shared_sized_buffer make_slot_mpdu(uint16_t domain, uint8_t bus,
         return bfc::shared_sized_buffer();
     }
     uint8_t* slot = reinterpret_cast<uint8_t*>(tx.get_slot_payload(0).data());
-    LCHeader::write(slot, bus, seq, is_fec);
+    LCHeader::write(slot, bus, is_fec ? LcType::fec : LcType::plain, seq);
     if (plen > 0)
     {
         memcpy(slot + LCHeader::k_len, payload, plen);
@@ -123,13 +124,13 @@ TEST(RxDemuxTest, DeliversLcFecFlag)
     EXPECT_EQ(queue->size(), 1u);
     auto raw = queue->pop();
     ASSERT_TRUE(raw);
-    EXPECT_FALSE(LCHeader::read_is_fec(raw->u8()));
+    EXPECT_EQ(LCHeader::read_type(raw->u8()), static_cast<uint8_t>(LcType::plain));
 
     demux.on_mpdu(make_slot_mpdu(0x1234, 1, body, sizeof(body), true, 1));
     EXPECT_EQ(queue->size(), 1u);
     auto fec = queue->pop();
     ASSERT_TRUE(fec);
-    EXPECT_TRUE(LCHeader::read_is_fec(fec->u8()));
+    EXPECT_EQ(LCHeader::read_type(fec->u8()), static_cast<uint8_t>(LcType::fec));
 }
 
 TEST(RxDemuxTest, CountsInboxEvictions)

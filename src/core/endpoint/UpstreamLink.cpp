@@ -184,17 +184,17 @@ void UpstreamLink::drain_radio_rx()
         }
         const uint8_t* payload = nullptr;
         size_t size = 0;
-        bool fec = false;
+        LcType type = LcType::plain;
         {
             std::lock_guard<std::mutex> lock(stats_mu);
             if (!accept_air_payload(&upstream_stats, packet->u8(), packet->size(),
-                                    &payload, &size, &fec))
+                                    &payload, &size, &type))
             {
                 continue;
             }
         }
         air.on_radio_rx(packet->subview(size_t(payload - packet->u8()), size),
-                         fec);
+                         type);
     }
     if (host_rx_queue->has_data())
     {

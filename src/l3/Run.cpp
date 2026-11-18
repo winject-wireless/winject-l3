@@ -76,6 +76,7 @@ UpstreamSpec upstream_spec_of(const Config& cfg,
     spec.fec.k = u.fec_k;
     spec.fec.n = u.fec_n;
     spec.fec.timeout = std::chrono::milliseconds(u.fec_timeout_ms);
+    spec.fec.spread = std::chrono::milliseconds(u.fec_spread_ms);
     spec.quanta = u.scheduler_budget;
     spec.rx_queue_capacity = u.rx_queue_capacity;
     if (cfg.on_upstream_queue)

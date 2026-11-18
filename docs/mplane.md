@@ -80,12 +80,12 @@ Procedure for a new connection:
 
 | Request | Description | Response |
 |---|---|---|
-| `add_upstream\|au id=<u8> txbus=<u8> rxbus=<u8> type=UDP rx=<address:port> tx=<address:port> fec=<NONE\|BLOCK> k=<n> n=<n> fec_timeout=<ms> quanta=<bytes>` | Add an upstream. `type` must be `UDP`. `rx` only = server mode (bind), `tx` only = client mode (send to), both = static | `OK upstream id=<u8> txbus=<u8> rxbus=<u8> type=UDP rx=<address:port> tx=<address:port> fec=none\|block(<k>,<n>) fec_timeout=<n>ms quanta=<bytes>` |
+| `add_upstream\|au id=<u8> txbus=<u8> rxbus=<u8> type=UDP rx=<address:port> tx=<address:port> fec=<NONE\|BLOCK> k=<n> n=<n> fec_timeout=<ms> fec_spread=<ms> quanta=<bytes>` | Add an upstream. `type` must be `UDP`. `rx` only = server mode (bind), `tx` only = client mode (send to), both = static | `OK upstream id=<u8> txbus=<u8> rxbus=<u8> type=UDP rx=<address:port> tx=<address:port> fec=none\|block(<k>,<n>) fec_timeout=<n>ms fec_spread=<n>ms quanta=<bytes>` |
 | `list_upstream\|lu [ids=<u8>,...]` | List upstreams, optionally only the given ids | `N=<count>`, then one `upstream id=...` line per upstream (same fields as above) |
-| `update_upstream\|uu id=<u8> [fec=<NONE\|BLOCK>] [k=<n>] [n=<n>] [fec_timeout=<ms>] [quanta=<bytes>]` | Change FEC or scheduling of an existing upstream | Same as `add_upstream` |
+| `update_upstream\|uu id=<u8> [fec=<NONE\|BLOCK>] [k=<n>] [n=<n>] [fec_timeout=<ms>] [fec_spread=<ms>] [quanta=<bytes>]` | Change FEC or scheduling of an existing upstream | Same as `add_upstream` |
 | `remove_upstream\|ru id=<u8>` | Remove an upstream | `OK` |
 
-`fec_timeout` accepts a number of milliseconds with an optional `ms` suffix (`50` or `50ms`). It closes a partial FEC block after that long. `quanta` is the upstream's scheduling share per TX pass, in bytes of SDU plus its 3-byte LC header (config key `scheduler_budget`). An upstream may always send its first SDU of a pass even when it is larger than `quanta`, so a small `quanta` slows an upstream but never blocks it.
+`fec_timeout` accepts a number of milliseconds with an optional `ms` suffix (`50` or `50ms`). It closes a partial FEC block that long after its first datagram (at least 1 ms with FEC). `fec_spread` (same format, 0–250 ms, default 0) spreads each block's parity so that its shards span that long from its first datagram; see [upstream-fec.md](upstream-fec.md). `quanta` is the upstream's scheduling share per TX pass, in bytes of SDU plus its 4-byte LC header (config key `scheduler_budget`). An upstream may always send its first SDU of a pass even when it is larger than `quanta`, so a small `quanta` slows an upstream but never blocks it.
 
 ### Statistics
 
@@ -95,7 +95,7 @@ Procedure for a new connection:
 | `list_upstream_tx_stat\|lut [ids=<u8>,...]` | TX counters per upstream, including what is still queued | `N=<count> T=<epoch µs>`, then per upstream: `upstream_tx_stat id=<u8> txbyt=<u64> txpkt=<u64> fec=... fec_txbyt=<u64> fec_txpkt=<u64> tx_pending_byt=<u64> tx_pending_pkt=<u64>` |
 | `get_metrics\|gm [keys=<key>,...]` | Snapshot of manager and d-plane counters (§ `get_metrics` keys), optionally filtered by a comma-separated key list | `N=<count> T=<epoch µs>`, then one `key=value` line per metric |
 
-- `rx_oversize`: application datagrams dropped because they exceed 1445 bytes (`k_stream_payload_max`).
+- `rx_oversize`: application datagrams dropped because they exceed 1444 bytes (`k_stream_payload_max`), or 1438 with FEC.
 - `rxgap`: air RX sequence gaps (lost slot payloads on this upstream's bus).
 - `tx_pending_byt` / `tx_pending_pkt`: bytes and datagrams waiting in the upstream's TX queue, not yet sent to the radio.
 
@@ -142,7 +142,8 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `rx_drop_bus` | Slots whose LC bus matches no upstream `rx_bus` |
 | `upstream_<id>_air_rx_gap_loss` | Air RX sequence gaps on upstream `<id>` |
 | `upstream_<id>_air_rx_resyncs` | Air RX sequence jumped back more than 64 (peer restart); taken as the new reference, no loss counted |
-| `upstream_<id>_app_rx_oversize_pkt` | Application datagrams over 1445 bytes dropped on upstream `<id>` |
+| `upstream_<id>_air_rx_lc_type_unknown` | Slots dropped on upstream `<id>` for an LC type this build does not know (the peer runs a different manager) |
+| `upstream_<id>_app_rx_oversize_pkt` | Application datagrams over 1444 bytes (1438 with FEC) dropped on upstream `<id>` |
 | `upstream_<id>_app_delivery_attempts` | Decoded/raw datagrams handed to the application transport, including local failures |
 | `upstream_<id>_app_delivery_accepted` | Datagrams accepted locally by the socket or output queue; does not prove peer receipt |
 | `upstream_<id>_app_delivery_errors` | Local send failures (or unavailable output queue capacity) |
@@ -152,7 +153,7 @@ Counters are monotonic for the lifetime of the manager process. Diff two snapsho
 | `upstream_<id>_tx_queue_drops` | Oldest raw datagrams or encoded shards evicted from the bounded 1024-packet upstream TX queue |
 | `upstream_<id>_rx_queue_evictions` | Oldest air payloads evicted from the upstream's radio RX inbox by the demux |
 | `upstream_<id>_app_tx_queue_evictions` | Oldest app datagrams evicted from the app TX queue by a UDP receive (queue upstreams: counted by the app) |
-| `upstream_<id>_air_rx_fec_unexpected` | FEC shards (LC header F flag) received on upstream `<id>` while its FEC is disabled; still decoded. Non-zero means the two ends disagree on `fec.type` |
+| `upstream_<id>_air_rx_fec_unexpected` | FEC shards (LC type fec) received on upstream `<id>` while its FEC is disabled; still decoded. Non-zero means the two ends disagree on `fec.type` |
 
 Example (replies arrive on the same UDP socket you send from):
 
@@ -274,7 +275,8 @@ TX pacing is not configurable: it follows `radio.modulation` at 90 % of its airt
 | `upstream-N.scheduler_budget` | Scheduling share per TX pass, bytes (default 256; console `quanta`) |
 | `upstream-N.fec.type` | `NONE` or `RS_BLOCK_ERASURE` |
 | `upstream-N.fec.k`, `upstream-N.fec.n` | Data and total shards per block (`1 ≤ k < n ≤ 31`; 5-bit fields in the shard header) |
-| `upstream-N.fec.timeout_ms` | Close a partial block after this long (default 20; zero disables automatic closing) |
+| `upstream-N.fec.timeout_ms` | Close a partial block this long after its first datagram (default 20; at least 1 with FEC) |
+| `upstream-N.fec.spread_ms` | Parity spread: a block's shards span this long from its first datagram (0–250, default 0: parity right behind the block's data) |
 
 Server mode has `rx` only, client mode `tx` only, static mode both. `QUEUE_FORWARDING` has `rx`, `tx`, and `reactor`: `rx` and `tx` are queue names. The host registers both queues (nonzero capacity, distinct objects) on `bfc::cv_reactor_circular_lossy_queue_registry<bfc::shared_sized_buffer>` and the reactor on `bfc::cv_reactor_registry` before the manager opens the upstream. The manager does not create or stop them. Each queue has one consumer. With none of `rx`, `tx`, and `reactor`, the queues are L3-owned: the manager creates them (`rx_queue_capacity` each) and hands the host an `UpstreamQueue` through `Config::on_upstream_queue`, which the host sets before `Config::load` (validation fails without it). In-process apps such as `app_bwtest` (`idf/app_bwtest`) use this. `add_upstream` remains a UDP upstream. A flow between two managers pairs one side's `tx_bus` with the other side's `rx_bus` (see [winject.md](winject.md) § Domains and buses).
 

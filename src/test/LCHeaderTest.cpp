@@ -9,32 +9,37 @@
 namespace
 {
 using winject::core::accept_air_payload;
+using winject::core::k_slot_prefix_len;
 using winject::core::LCHeader;
-using winject::core::stamp_slot_payload;
+using winject::core::LcType;
+using winject::core::stamp_slot_prefix;
 using winject::core::UpstreamStats;
 
+// A slot as DatagramAir builds it: the body already in place behind the
+// prefix room, the prefix stamped in front.
 std::vector<uint8_t> frame(UpstreamStats* tx, uint8_t bus, const uint8_t* data,
-                           size_t len, bool is_fec = false)
+                           size_t len, LcType type = LcType::plain)
 {
-    std::vector<uint8_t> out(len + LCHeader::k_len + 8);
-    size_t n = 0;
-    EXPECT_TRUE(stamp_slot_payload(tx, bus, is_fec, data, len, out.data(),
-                                   out.size(), &n));
-    out.resize(n);
+    std::vector<uint8_t> out(k_slot_prefix_len + len);
+    if (len > 0)
+    {
+        memcpy(out.data() + k_slot_prefix_len, data, len);
+    }
+    EXPECT_TRUE(stamp_slot_prefix(tx, bus, type, out.data()));
     return out;
 }
 
 bool accept(UpstreamStats* rx, const std::vector<uint8_t>& pkt,
-            bool* is_fec = nullptr)
+            LcType* type = nullptr)
 {
     const uint8_t* body = nullptr;
     size_t plen = 0;
-    bool fec = false;
+    LcType t = LcType::plain;
     const bool ok =
-        accept_air_payload(rx, pkt.data(), pkt.size(), &body, &plen, &fec);
-    if (is_fec != nullptr)
+        accept_air_payload(rx, pkt.data(), pkt.size(), &body, &plen, &t);
+    if (type != nullptr)
     {
-        *is_fec = fec;
+        *type = t;
     }
     return ok;
 }
@@ -52,57 +57,61 @@ TEST(LCHeaderTest, StampThenAccept)
 
     const uint8_t* body = nullptr;
     size_t plen = 0;
-    bool is_fec = true;
+    LcType type = LcType::fec;
     ASSERT_TRUE(
-        accept_air_payload(&rx, pkt.data(), pkt.size(), &body, &plen, &is_fec));
+        accept_air_payload(&rx, pkt.data(), pkt.size(), &body, &plen, &type));
     ASSERT_EQ(plen, sizeof(payload));
     EXPECT_EQ(memcmp(body, payload, plen), 0);
-    EXPECT_FALSE(is_fec);
+    EXPECT_EQ(type, LcType::plain);
 }
 
-TEST(LCHeaderTest, BusRoundTrip)
+// u8 bus | u8 lc_type | u16 sn (big endian) | body
+TEST(LCHeaderTest, WireLayout)
 {
-    UpstreamStats tx;
-    tx.air_tx = 7;
-    const auto pkt = frame(&tx, 0xAB, nullptr, 0);
-    EXPECT_EQ(LCHeader::read_bus(pkt.data()), 0xAB);
-    EXPECT_EQ(LCHeader::read_seq(pkt.data()), 7u);
-    EXPECT_FALSE(LCHeader::read_is_fec(pkt.data()));
-}
-
-// The flag is the MSB of the BE seq word and does not leak into the seq.
-TEST(LCHeaderTest, FecFlagWireLayout)
-{
+    EXPECT_EQ(LCHeader::k_len, 4u);
     uint8_t out[LCHeader::k_len] = {};
-    LCHeader::write(out, 0xC3, 0x1234, true);
+    LCHeader::write(out, 0xC3, LcType::fec, 0x1234);
     EXPECT_EQ(out[0], 0xC3);
-    EXPECT_EQ(out[1], 0x92);
-    EXPECT_EQ(out[2], 0x34);
-    EXPECT_TRUE(LCHeader::read_is_fec(out));
+    EXPECT_EQ(out[1], 1);
+    EXPECT_EQ(out[2], 0x12);
+    EXPECT_EQ(out[3], 0x34);
+    EXPECT_EQ(LCHeader::read_bus(out), 0xC3);
+    EXPECT_EQ(LCHeader::read_type(out), 1);
     EXPECT_EQ(LCHeader::read_seq(out), 0x1234u);
 
-    LCHeader::write(out, 0xC3, 0x7FFF, false);
-    EXPECT_EQ(out[1], 0x7F);
+    LCHeader::write(out, 0xC3, LcType::plain, 0xFFFF);
+    EXPECT_EQ(out[1], 0);
     EXPECT_EQ(out[2], 0xFF);
-    EXPECT_FALSE(LCHeader::read_is_fec(out));
-    EXPECT_EQ(LCHeader::read_seq(out), 0x7FFFu);
-
-    // A seq wider than 15 bits never sets the flag.
-    LCHeader::write(out, 1, 0xFFFF, false);
-    EXPECT_FALSE(LCHeader::read_is_fec(out));
-    EXPECT_EQ(LCHeader::read_seq(out), 0x7FFFu);
+    EXPECT_EQ(out[3], 0xFF);
+    EXPECT_EQ(LCHeader::read_seq(out), 0xFFFFu);
 }
 
-TEST(LCHeaderTest, FecFlagRoundTrip)
+TEST(LCHeaderTest, TypeRoundTrip)
 {
     UpstreamStats tx;
     UpstreamStats rx;
     const uint8_t a[] = {1};
-    bool is_fec = false;
-    ASSERT_TRUE(accept(&rx, frame(&tx, 1, a, sizeof(a), true), &is_fec));
-    EXPECT_TRUE(is_fec);
-    ASSERT_TRUE(accept(&rx, frame(&tx, 1, a, sizeof(a), false), &is_fec));
-    EXPECT_FALSE(is_fec);
+    LcType type = LcType::plain;
+    ASSERT_TRUE(accept(&rx, frame(&tx, 1, a, sizeof(a), LcType::fec), &type));
+    EXPECT_EQ(type, LcType::fec);
+    ASSERT_TRUE(accept(&rx, frame(&tx, 1, a, sizeof(a), LcType::plain), &type));
+    EXPECT_EQ(type, LcType::plain);
+    EXPECT_EQ(rx.air_rx_gap_loss, 0u);
+}
+
+// A type this build does not know is dropped and counted; its sn still counts
+// as on the air, so it is not taken for a gap.
+TEST(LCHeaderTest, UnknownTypeIsDroppedAndCounted)
+{
+    UpstreamStats tx;
+    UpstreamStats rx;
+    const uint8_t a[] = {1};
+    ASSERT_TRUE(accept(&rx, frame(&tx, 1, a, sizeof(a))));
+    auto odd = frame(&tx, 1, a, sizeof(a));
+    odd[1] = 7;
+    EXPECT_FALSE(accept(&rx, odd));
+    EXPECT_EQ(rx.air_rx_lc_type_unknown, 1u);
+    ASSERT_TRUE(accept(&rx, frame(&tx, 1, a, sizeof(a))));
     EXPECT_EQ(rx.air_rx_gap_loss, 0u);
 }
 
@@ -121,31 +130,31 @@ TEST(LCHeaderTest, DetectsGap)
     EXPECT_EQ(rx.air_rx_gap_loss, 1u);
 }
 
-TEST(LCHeaderTest, TxSeqWrapsAt15Bits)
+TEST(LCHeaderTest, TxSeqWrapsAt16Bits)
 {
     UpstreamStats tx;
-    tx.air_tx = LCHeader::k_seq_mask;
-    const auto last = frame(&tx, 1, nullptr, 0, true);
-    EXPECT_EQ(LCHeader::read_seq(last.data()), 0x7FFFu);
+    tx.air_tx = 0xFFFF;
+    const auto last = frame(&tx, 1, nullptr, 0, LcType::fec);
+    EXPECT_EQ(LCHeader::read_seq(last.data()), 0xFFFFu);
     EXPECT_EQ(tx.air_tx, 0u);
-    const auto first = frame(&tx, 1, nullptr, 0, true);
+    const auto first = frame(&tx, 1, nullptr, 0, LcType::fec);
     EXPECT_EQ(LCHeader::read_seq(first.data()), 0u);
     EXPECT_EQ(tx.air_tx, 1u);
 }
 
-// 0x7FFF -> 0x0000 is the next seq, with or without the FEC flag set.
+// 0xFFFF -> 0x0000 is the next sn, whatever the type.
 TEST(LCHeaderTest, NoGapAcrossWrap)
 {
-    for (const bool fec : {false, true})
+    for (const LcType type : {LcType::plain, LcType::fec})
     {
         UpstreamStats tx;
-        tx.air_tx = 0x7FFE;
+        tx.air_tx = 0xFFFE;
         UpstreamStats rx;
         for (int i = 0; i < 4; i++)
         {
-            ASSERT_TRUE(accept(&rx, frame(&tx, 1, nullptr, 0, fec)));
+            ASSERT_TRUE(accept(&rx, frame(&tx, 1, nullptr, 0, type)));
         }
-        EXPECT_EQ(rx.air_rx_gap_loss, 0u) << "fec=" << fec;
+        EXPECT_EQ(rx.air_rx_gap_loss, 0u);
         EXPECT_EQ(rx.air_rx, 1u);
     }
 }
@@ -153,11 +162,11 @@ TEST(LCHeaderTest, NoGapAcrossWrap)
 TEST(LCHeaderTest, GapAcrossWrap)
 {
     UpstreamStats tx;
-    tx.air_tx = 0x7FFD;
+    tx.air_tx = 0xFFFD;
     UpstreamStats rx;
-    ASSERT_TRUE(accept(&rx, frame(&tx, 1, nullptr, 0, true)));
-    tx.air_tx = 2;  // 0x7FFE, 0x7FFF, 0x0000, 0x0001 lost
-    ASSERT_TRUE(accept(&rx, frame(&tx, 1, nullptr, 0, true)));
+    ASSERT_TRUE(accept(&rx, frame(&tx, 1, nullptr, 0, LcType::fec)));
+    tx.air_tx = 2;  // 0xFFFE, 0xFFFF, 0x0000, 0x0001 lost
+    ASSERT_TRUE(accept(&rx, frame(&tx, 1, nullptr, 0, LcType::fec)));
     EXPECT_EQ(rx.air_rx_gap_loss, 4u);
 }
 
@@ -169,7 +178,7 @@ TEST(LCHeaderTest, OldSeqIsNotAGap)
     tx.air_tx = 0x0005;
     UpstreamStats rx;
     ASSERT_TRUE(accept(&rx, frame(&tx, 1, nullptr, 0)));
-    tx.air_tx = 0x7FF0;  // 21 behind on the 15-bit ring
+    tx.air_tx = 0xFFF0;  // 21 behind on the 16-bit ring
     ASSERT_TRUE(accept(&rx, frame(&tx, 1, nullptr, 0)));
     EXPECT_EQ(rx.air_rx_gap_loss, 0u);
     EXPECT_EQ(rx.air_rx, 0x0005u);
@@ -180,10 +189,10 @@ TEST(LCHeaderTest, DropsRepeatOfLastSeq)
     UpstreamStats tx;
     tx.air_tx = 9;
     UpstreamStats rx;
-    const auto pkt = frame(&tx, 1, nullptr, 0, true);
+    const auto pkt = frame(&tx, 1, nullptr, 0, LcType::fec);
     EXPECT_TRUE(accept(&rx, pkt));
     EXPECT_FALSE(accept(&rx, pkt));
-    // Same seq with the other flag value is still the same slot seq.
+    // The same sn with the other type is still the same slot.
     tx.air_tx = 9;
-    EXPECT_FALSE(accept(&rx, frame(&tx, 1, nullptr, 0, false)));
+    EXPECT_FALSE(accept(&rx, frame(&tx, 1, nullptr, 0, LcType::plain)));
 }

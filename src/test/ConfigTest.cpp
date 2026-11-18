@@ -256,6 +256,7 @@ upstream-0.fec.type         = RS_BLOCK_ERASURE
 upstream-0.fec.k            = 10
 upstream-0.fec.n            = 15
 upstream-0.fec.timeout_ms   = 25
+upstream-0.fec.spread_ms    = 30
 )");
     Config cfg;
     std::string err;
@@ -265,6 +266,7 @@ upstream-0.fec.timeout_ms   = 25
     EXPECT_EQ(cfg.upstreams[0].fec_k, 10);
     EXPECT_EQ(cfg.upstreams[0].fec_n, 15);
     EXPECT_EQ(cfg.upstreams[0].fec_timeout_ms, 25);
+    EXPECT_EQ(cfg.upstreams[0].fec_spread_ms, 30);
     EXPECT_EQ(cfg.upstreams[0].rx_queue_capacity, 17u);
     std::remove(path.c_str());
 }
@@ -1153,5 +1155,35 @@ upstream-0.tx               = 127.0.0.1:21082
         Config cfg;
         std::string err;
         EXPECT_FALSE(cfg.load(write_conf(text), &err)) << p;
+    }
+}
+
+// The write stream needs a flush for a block with parity, and a spread within
+// the receiver's cap.
+TEST(ConfigTest, FecRejectsZeroTimeoutAndLongSpread)
+{
+    for (const char* extra : {"upstream-0.fec.timeout_ms   = 0\n",
+                              "upstream-0.fec.spread_ms    = 251\n"})
+    {
+        const std::string path = write_conf(std::string(R"(
+radio.dplane        = 192.168.32.1:9000
+radio.mplane        = 192.168.32.1:22
+radio.channel       = 1
+radio.modulation    = OFDM_24M
+radio.power         = 20
+winject.domain        = 1234
+upstream.size = 1
+upstream-0.mode             = UDP_SERVER_FORWARDING
+upstream-0.tx_bus           = b2
+upstream-0.rx_bus           = a1
+upstream-0.rx               = 127.0.0.1:22081
+upstream-0.fec.type         = RS_BLOCK_ERASURE
+upstream-0.fec.k            = 10
+upstream-0.fec.n            = 15
+)") + extra);
+        Config cfg;
+        std::string err;
+        EXPECT_FALSE(cfg.load(path, &err)) << extra;
+        std::remove(path.c_str());
     }
 }
