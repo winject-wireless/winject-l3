@@ -50,7 +50,6 @@ public:
         uint64_t foreign_source_drops = 0;
     };
 
-
     virtual void bind_callbacks();
     // Any thread but the CV reactor's; returns without waiting for the reactor.
     virtual void teardown();

@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-
 #include <winject_fec/wire.hpp>
 
 namespace winject::core

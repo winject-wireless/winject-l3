@@ -246,7 +246,8 @@ private:
     std::atomic<uint64_t> fec_late_acc{0};
     // Read on the reactor thread only (the read stream's estimates are not
     // thread safe), kept here for any thread.
-    std::atomic<double> fec_spread_est_ms{double(winject::fec::k_spread_cap_ms)};
+    std::atomic<double> fec_spread_est_ms{
+        double(winject::fec::k_spread_cap_ms)};
     std::atomic<double> fec_jitter_est_ms{0.};
 };
 
