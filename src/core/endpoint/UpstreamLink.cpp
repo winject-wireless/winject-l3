@@ -99,27 +99,6 @@ void UpstreamLink::teardown()
     air.stop();
 }
 
-UpstreamLink::TxSequences UpstreamLink::tx_sequences() const
-{
-    if (bound)
-    {
-        throw std::logic_error("upstream sequences read while bound");
-    }
-    std::lock_guard<std::mutex> lock(stats_mu);
-    return {upstream_stats.air_tx, air.fec_tx_sdu_seq()};
-}
-
-void UpstreamLink::resume_tx_sequences(const TxSequences& sequences)
-{
-    if (bound)
-    {
-        throw std::logic_error("upstream sequences resumed while bound");
-    }
-    std::lock_guard<std::mutex> lock(stats_mu);
-    upstream_stats.air_tx = sequences.air;
-    air.set_fec_tx_sdu_seq(sequences.fec_sdu);
-}
-
 UpstreamLink::~UpstreamLink()
 {
     unbind_callbacks();
@@ -240,6 +219,19 @@ void UpstreamLink::get_fec(FecType* type, int* k, int* n) const
     {
         *n = upstream_config.fec_type == FecType::none ? 0 : upstream_config.fec_n;
     }
+}
+bool UpstreamLink::set_fec(const UpstreamConfig& next)
+{
+    if (!air.reconfigure_fec(next))
+    {
+        return false;
+    }
+    upstream_config.fec_type = next.fec_type;
+    upstream_config.fec_k = next.fec_k;
+    upstream_config.fec_n = next.fec_n;
+    upstream_config.fec_timeout_ms = next.fec_timeout_ms;
+    upstream_config.fec_spread_ms = next.fec_spread_ms;
+    return true;
 }
 void UpstreamLink::tx_pending_stats(uint64_t* packets, uint64_t* bytes) const
 {

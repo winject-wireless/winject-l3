@@ -328,17 +328,12 @@ void L3Impl::apply_configured_fcs()
 
 std::shared_ptr<UpstreamLink> L3Impl::construct_upstream(
     const UpstreamConfig& uc,
-    const std::shared_ptr<BoundedLossyQueue>& tx_queue,
-    const UpstreamLink::TxSequences* resume)
+    const std::shared_ptr<BoundedLossyQueue>& tx_queue)
 {
     if (uc.mode != UpstreamMode::queue)
     {
         auto up = std::make_shared<UDPUpstream>(upstream_reactor, reactor, uc,
                                                 tx_queue);
-        if (resume)
-        {
-            up->resume_tx_sequences(*resume);
-        }
         up->bind_callbacks();
         return up;
     }
@@ -361,10 +356,6 @@ std::shared_ptr<UpstreamLink> L3Impl::construct_upstream(
     }
     auto up = std::make_shared<QueueUpstream>(cv, uc, tx_queue, app_tx_queue,
                                               app_rx_queue);
-    if (resume)
-    {
-        up->resume_tx_sequences(*resume);
-    }
     up->bind_callbacks();
     if (publish != on_queue.end() && publish->second)
     {
@@ -372,65 +363,6 @@ std::shared_ptr<UpstreamLink> L3Impl::construct_upstream(
         publish->second(up->app_transport());
     }
     return up;
-}
-
-bool L3Impl::replace_upstream(size_t index, const UpstreamConfig& uc,
-                              std::string* error)
-{
-    const auto original = cfg.upstreams[index];
-    {
-        std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
-        radio_upstream_table.entries()[index] = {};
-    }
-    // The peer's sequencers see one unbroken stream across the swap.
-    std::optional<UpstreamLink::TxSequences> sequences;
-    if (upstreams[index])
-    {
-        upstreams[index]->teardown();
-        sequences = upstreams[index]->tx_sequences();
-    }
-    upstreams[index].reset();
-    auto install = [&](const UpstreamConfig& config)
-    {
-        auto queue = tx_mux.make_tx_queue();
-        auto up = construct_upstream(config, queue,
-                                     sequences ? &*sequences : nullptr);
-        {
-            std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
-            radio_upstream_table.entries()[index] =
-                RadioUpstreamEntry{up,
-                                   up->rx_queue(),
-                                   up->rx_queue_eviction_counter(),
-                                   queue,
-                                   radio,
-                                   config.bus_tx,
-                                   config.bus_rx,
-                                   config.scheduler_budget};
-        }
-        upstreams[index] = std::move(up);
-    };
-    try
-    {
-        install(uc);
-    }
-    catch (const std::exception& e)
-    {
-        if (error)
-        {
-            *error = k_eio;
-        }
-        LOG_ERR("upstream replacement failed: %s", e.what());
-        try
-        {
-            install(original);
-        }
-        catch (const std::exception& rollback)
-        {
-            LOG_ERR("upstream restore failed: %s", rollback.what());
-        }
-        return false;
-    }
-    return true;
 }
 
 bool L3Impl::set_upstream_scheduler_budget(size_t index, size_t budget,
@@ -667,19 +599,31 @@ L3Impl::Result<api::UpstreamSpec> L3Impl::update_upstream(
             return error_result<api::UpstreamSpec>(k_einval);
         }
     }
+    // Both applied to the running upstream (nothing restarts), quanta first:
+    // if the FEC change then fails, the budget goes back, so the call changes
+    // all or nothing.
     std::string err;
-    if (have_fec)
-    {
-        if (!replace_upstream(index, candidate, &err))
-        {
-            return error_result<api::UpstreamSpec>(err.empty() ? k_eio
-                                                               : err.c_str());
-        }
-    }
-    else if (!set_upstream_scheduler_budget(index, candidate.scheduler_budget,
-                                            &err))
+    if (patch.quanta &&
+        !set_upstream_scheduler_budget(index, candidate.scheduler_budget, &err))
     {
         return error_result<api::UpstreamSpec>(err);
+    }
+    if (have_fec)
+    {
+        // The settings were validated above: a failure here is a stopped
+        // upstream.
+        UpstreamLink* endpoint =
+            index < upstreams.size() ? upstreams[index].get() : nullptr;
+        if (endpoint == nullptr || !endpoint->set_fec(candidate))
+        {
+            if (patch.quanta)
+            {
+                std::string ignored;
+                (void)set_upstream_scheduler_budget(
+                    index, current.scheduler_budget, &ignored);
+            }
+            return error_result<api::UpstreamSpec>(k_eio);
+        }
     }
     cfg.upstreams[index] = candidate;
     return value_result(upstream_spec_at(index));
@@ -695,6 +639,8 @@ L3Impl::Result<api::UpstreamRxStats> L3Impl::upstream_rx_stats(uint8_t id) const
     const UpstreamLink* endpoint =
         index < upstreams.size() ? upstreams[index].get() : nullptr;
     api::UpstreamRxStats s;
+    // Unmeasured: the receiver assumes the cap.
+    s.fec_spread_est_ms = winject::fec::k_spread_cap_ms;
     s.fec = api_fec_of(endpoint, cfg.upstreams[index].fec_timeout_ms,
                        cfg.upstreams[index].fec_spread_ms);
     if (endpoint != nullptr)
@@ -703,9 +649,18 @@ L3Impl::Result<api::UpstreamRxStats> L3Impl::upstream_rx_stats(uint8_t id) const
         s.bytes = endpoint->app_rx_bytes();
         s.packets = endpoint->app_rx_packets();
         s.oversize = endpoint->app_rx_oversize_pkt();
-        s.fec_recovered = endpoint->fec_recovered();
-        s.fec_lost = endpoint->fec_decode_fail();
+        const auto f = endpoint->fec_rx_stats();
+        s.fec_recovered = f.recovered;
+        s.fec_lost = f.lost;
+        s.fec_gap = f.missing_data;
+        s.fec_given_up = f.given_up_blocks;
+        s.fec_late = f.late;
+        s.fec_drops = f.drops;
+        s.fec_spread_est_ms = f.spread_est_ms;
+        s.fec_jitter_est_ms = f.jitter_est_ms;
         s.fec_bytes = endpoint->fec_air_rx_bytes();
+        s.air_packets = endpoint->air_rx_packets();
+        s.air_bytes = endpoint->air_rx_bytes();
         s.fec_packets = endpoint->fec_air_rx_packets();
         s.push_drops = endpoint->rx_counters().queue_evictions;
     }
@@ -849,7 +804,7 @@ void L3Impl::refresh_host_metrics()
         metrics_registry
             .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
                                     "_fec_rx_drops")
-            ->store(up->fec_rx_drops());
+            ->store(up->fec_rx_stats().drops);
         const std::string oversize_key =
             "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
         metrics_registry.get_metrics<MetricU64>(oversize_key)

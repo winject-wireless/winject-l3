@@ -59,9 +59,11 @@ bytes (was 1445); an FEC upstream up to **1438** (unchanged).
 
 ## Lifecycle
 
-- A FEC change replaces the upstream (hot-swap). The old streams go with their pending parity
-  and held RX data. The air sn and the FEC data sequence continue into the replacement, so the
-  peer sees one stream.
+- A FEC change (type, k/n, timeout, spread; config, API or `uu`) applies to the running
+  upstream: the write stream takes it from its next block. The open block finishes under the
+  settings it started with and keeps its parity, the air sn and the FEC data sequence run on,
+  and the receive side, which reads k/n from the shards, needs nothing. No restart, no
+  `on_queue` callback, nothing dropped.
 - `stop()` may run on any thread but the CV reactor's; it waits out an in-flight data-path call,
   and the streams' timers hold the streams only weakly.
 
@@ -77,4 +79,4 @@ bytes (was 1445); an FEC upstream up to **1438** (unchanged).
   slot layout, data-at-once and parity timing, spread, timeout flush, a lossy loopback with
   in-order recovery, give-up on the reactor timer, sequence carry-over and teardown;
   `LCHeaderTest` the wire layout, wrap and unknown types; `UpstreamTest` and `AppShutdownTest`
-  the upstream and hot-swap paths.
+  the upstream and live FEC changes.

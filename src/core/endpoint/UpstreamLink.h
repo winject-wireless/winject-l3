@@ -15,8 +15,10 @@
 namespace winject::core
 {
 // After make_shared, call bind_callbacks before publishing the instance.
-// Hot-swap calls teardown() on the IO thread before dropping the last ref;
-// once it returns no handler or FEC timer of this instance runs.
+// Removal calls teardown() on a thread other than the CV reactor's before
+// dropping the last ref; once it returns no handler or FEC timer of this
+// instance runs. Reactors, queues, endpoint and buses are fixed for the
+// instance's life; FEC settings change live (set_fec).
 class UpstreamLink : public std::enable_shared_from_this<UpstreamLink>
 {
 public:
@@ -48,20 +50,11 @@ public:
         uint64_t foreign_source_drops = 0;
     };
 
-    // Next air and FEC SDU sequence numbers, carried into a replacement.
-    struct TxSequences
-    {
-        uint16_t air = 0;
-        uint16_t fec_sdu = 0;
-    };
 
     virtual void bind_callbacks();
     // Any thread but the CV reactor's; returns without waiting for the reactor.
     virtual void teardown();
     virtual ~UpstreamLink();
-    // Only while unbound: after teardown(), and before bind_callbacks().
-    TxSequences tx_sequences() const;
-    void resume_tx_sequences(const TxSequences& sequences);
     std::shared_ptr<ReactiveLossyQueue> rx_queue() const
     {
         return host_rx_queue;
@@ -97,6 +90,10 @@ public:
     UpstreamStats stats() const;
     uint64_t collect_air_seq_loss_delta();
     void get_fec(FecType* type, int* k, int* n) const;
+    // FEC type, k/n, timeout and spread from next, on the running upstream
+    // (l3's thread): no restart, nothing in flight dropped. False (nothing
+    // changes) when they are invalid.
+    bool set_fec(const UpstreamConfig& next);
     int fec_timeout_ms() const
     {
         return config().fec_timeout_ms;
@@ -123,6 +120,14 @@ public:
     {
         return air.app_tx_packets();
     }
+    uint64_t air_rx_packets() const
+    {
+        return air.air_rx_packets();
+    }
+    uint64_t air_rx_bytes() const
+    {
+        return air.air_rx_bytes();
+    }
     uint64_t fec_air_rx_bytes() const
     {
         return air.fec_air_rx_bytes();
@@ -143,17 +148,9 @@ public:
     {
         return air.fec_air_tx_packets();
     }
-    uint64_t fec_recovered() const
+    DatagramAir::FecRxStats fec_rx_stats() const
     {
-        return air.fec_recovered();
-    }
-    uint64_t fec_decode_fail() const
-    {
-        return air.fec_decode_fail();
-    }
-    uint64_t fec_rx_drops() const
-    {
-        return air.fec_rx_drops();
+        return air.fec_rx_stats();
     }
     uint64_t tx_queue_drops() const
     {

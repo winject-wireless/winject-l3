@@ -60,10 +60,11 @@ public:
                UpstreamStats* tx_stats, std::mutex* tx_stats_mu,
                DeliverOwnedApp deliver_owned_app = {});
     void stop();
-    // Next FEC data shard id. Read or set it only while no data path runs
-    // (before the reactor sees this instance, or after stop()).
-    uint16_t fec_tx_sdu_seq() const;
-    void set_fec_tx_sdu_seq(uint16_t seq);
+    // New FEC settings on the running streams (any thread): the write stream
+    // takes them from its next block, so nothing in flight is dropped and the
+    // sequences run on; the read stream needs none. False (nothing changes)
+    // when they are invalid or the streams are stopped.
+    bool reconfigure_fec(const UpstreamConfig& cfg);
     // Binds the streams' outputs to the reactor; their callbacks hold owner
     // while they run.
     void set_lifetime(std::weak_ptr<void> owner);
@@ -93,9 +94,13 @@ public:
     {
         return app_rx_packets_acc.load(std::memory_order_relaxed);
     }
+    // Oversize at l3's check, plus datagrams the write stream refused as too
+    // long for the block they fell in (after a live FEC change relaxed the
+    // limit while a block of the old settings was still open).
     uint64_t app_rx_oversize_pkt() const
     {
-        return app_rx_oversize_pkt_acc.load(std::memory_order_relaxed);
+        return app_rx_oversize_pkt_acc.load(std::memory_order_relaxed) +
+               fec_tx_size_drops_acc.load(std::memory_order_relaxed);
     }
     uint64_t app_tx_bytes() const
     {
@@ -104,6 +109,15 @@ public:
     uint64_t app_tx_packets() const
     {
         return app_tx_packets_acc.load(std::memory_order_relaxed);
+    }
+    // Every slot body taken from the air, plain and FEC.
+    uint64_t air_rx_packets() const
+    {
+        return air_rx_packets_acc.load(std::memory_order_relaxed);
+    }
+    uint64_t air_rx_bytes() const
+    {
+        return air_rx_bytes_acc.load(std::memory_order_relaxed);
     }
     uint64_t fec_air_rx_bytes() const
     {
@@ -158,6 +172,28 @@ public:
         return fec_rx_drops_acc.load(std::memory_order_relaxed);
     }
 
+    // The read stream's view of the FEC link, for stats. Any thread.
+    struct FecRxStats
+    {
+        // Data shards rebuilt from parity.
+        uint64_t recovered = 0;
+        // Blocks that lost data, plus malformed and k/n-mismatched shards.
+        uint64_t lost = 0;
+        // Data shards given up: app datagrams lost after FEC.
+        uint64_t missing_data = 0;
+        // Blocks given up at their deadline.
+        uint64_t given_up_blocks = 0;
+        // Data shards that came behind the release point (not delivered).
+        uint64_t late = 0;
+        // Datagrams the read stream's rings dropped.
+        uint64_t drops = 0;
+        // The sender's parity spread and the arrival jitter the receiver
+        // measured (ms); 250 / 0 until two blocks have been measured.
+        double spread_est_ms = 0.;
+        double jitter_est_ms = 0.;
+    };
+    FecRxStats fec_rx_stats() const;
+
 private:
     void stop_locked();
     void drain_tx();
@@ -167,6 +203,8 @@ private:
     void deliver(bfc::shared_sized_buffer datagram);
     void sync_fec_counters();
     void refresh_fec_counters() const;
+    // Reactor thread: the read stream's spread and jitter estimates.
+    void sync_fec_estimates();
 
     // Held by every data-path entry and by start/stop. The streams' timers do
     // not take it: they only fill the stream outputs, which drain_tx/drain_rx
@@ -185,9 +223,6 @@ private:
     std::unique_ptr<winject::fec::fec_write_stream> tx_stream;
     std::unique_ptr<winject::fec::fec_read_stream> rx_stream;
     bool outputs_bound = false;
-    // The FEC sequence across stop() and a replacement's start().
-    uint16_t fec_seq = 0;
-    bool fec_seq_set = false;
 
     std::atomic<uint64_t> tx_queue_drops_acc{0};
     std::atomic<uint64_t> app_rx_bytes_acc{0};
@@ -195,6 +230,8 @@ private:
     std::atomic<uint64_t> app_rx_oversize_pkt_acc{0};
     std::atomic<uint64_t> app_tx_bytes_acc{0};
     std::atomic<uint64_t> app_tx_packets_acc{0};
+    std::atomic<uint64_t> air_rx_packets_acc{0};
+    std::atomic<uint64_t> air_rx_bytes_acc{0};
     std::atomic<uint64_t> fec_air_rx_bytes_acc{0};
     std::atomic<uint64_t> fec_air_rx_packets_acc{0};
     std::atomic<uint64_t> fec_air_rx_unexpected_acc{0};
@@ -203,6 +240,14 @@ private:
     std::atomic<uint64_t> fec_recovered_acc{0};
     std::atomic<uint64_t> fec_decode_fail_acc{0};
     std::atomic<uint64_t> fec_rx_drops_acc{0};
+    std::atomic<uint64_t> fec_tx_size_drops_acc{0};
+    std::atomic<uint64_t> fec_missing_data_acc{0};
+    std::atomic<uint64_t> fec_given_up_acc{0};
+    std::atomic<uint64_t> fec_late_acc{0};
+    // Read on the reactor thread only (the read stream's estimates are not
+    // thread safe), kept here for any thread.
+    std::atomic<double> fec_spread_est_ms{double(winject::fec::k_spread_cap_ms)};
+    std::atomic<double> fec_jitter_est_ms{0.};
 };
 
 }  // namespace winject::core

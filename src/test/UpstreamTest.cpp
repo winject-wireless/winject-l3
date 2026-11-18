@@ -382,7 +382,7 @@ TEST_F(UpstreamTest, RxFecRecoversMissingShardOnCvReactor)
     ASSERT_EQ(app_rx_queue->size(), 2u);
     EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{1, 2}));
     EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{3, 4}));
-    EXPECT_GE(up->fec_recovered(), 1u);
+    EXPECT_GE(up->fec_rx_stats().recovered, 1u);
 }
 TEST_F(UpstreamTest, RxFecTimerSalvagesWithoutNewRadioPackets)
 {
@@ -657,48 +657,6 @@ TEST_F(UpstreamTest, TeardownWithStoppedReactorReturnsAtOnce)
     pump_cv(20);  // the FEC timer was cancelled
     EXPECT_EQ(tx->size(), 1u);  // only the first data shard
     EXPECT_TRUE(app_tx_queue->has_data());
-}
-
-// A replacement continues the air and FEC SDU sequences, so the peer's
-// sequencers see one stream across a hot-swap.
-TEST_F(UpstreamTest, ReplacementContinuesTxSequences)
-{
-    cfg.fec_type = FecType::RsBlockErasure;
-    cfg.fec_k = 2;
-    cfg.fec_n = 3;
-    // Data shard header: u8 flag | u16 seq.
-    auto sdu_base = [](const Packet& p)
-    {
-        const uint8_t* shard = p.u8() + LCHeader::k_len;
-        return uint16_t((shard[1] << 8) | shard[2]);
-    };
-    create_queue();
-    app_tx_queue->push(packet({1}));
-    app_tx_queue->push(packet({2}));
-    pump_cv();
-    ASSERT_EQ(tx->size(), 3u);
-    const uint16_t first_base = sdu_base(*tx->pop());
-    while (tx->pop())
-    {
-    }
-    EXPECT_THROW(up->tx_sequences(), std::logic_error);
-    up->teardown();
-    const auto sequences = up->tx_sequences();
-    EXPECT_EQ(sequences.air, 3u);
-    up.reset();
-
-    up = std::make_shared<QueueUpstream>(cv, cfg, tx, app_tx_queue,
-                                         app_rx_queue);
-    up->resume_tx_sequences(sequences);
-    up->bind_callbacks();
-    EXPECT_THROW(up->resume_tx_sequences(sequences), std::logic_error);
-    app_tx_queue->push(packet({3}));
-    app_tx_queue->push(packet({4}));
-    pump_cv();
-    ASSERT_EQ(tx->size(), 3u);
-    const auto next = *tx->pop();
-    EXPECT_EQ(LCHeader::read_seq(next.u8()), 3u);
-    EXPECT_EQ(sdu_base(next), uint16_t(first_base + 2));
 }
 
 TEST_F(UpstreamTest, ReconstructionReleasesInputClaim)

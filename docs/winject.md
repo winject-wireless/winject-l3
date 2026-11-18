@@ -219,7 +219,7 @@ parity shard (4 B):  u16 BE 0 | n 5 | k 5 | k_i 5  u16 BE first data sequence of
 
 | Field | Meaning |
 |---|---|
-| data sequence | One counter over data shards; starts at a random value so a restarted peer does not reuse recent ids, and continues across an upstream hot-swap |
+| data sequence | One counter over data shards; starts at a random value so a restarted peer does not reuse recent ids, and runs on across a live FEC change |
 | `n`, `k`, `k_i` | The block's parity count, data count and this parity's row; the block covers data `[seq, seq + k)` |
 
 Parity is computed over rows of `[u16 BE length | data | zero pad]`, so a rebuilt row carries its own length; the length is never sent with a data shard. The largest datagram an FEC upstream carries is `k_stream_payload_max − 4 − 2` = **1438** bytes. On a link with bursty loss, a parity spread recovers far more blocks; see [fec-spreading.md](fec-spreading.md).

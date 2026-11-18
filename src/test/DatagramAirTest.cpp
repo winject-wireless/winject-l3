@@ -2,6 +2,7 @@
 #include "frames/LCHeader.h"
 #include "utils/NetUtil.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -261,6 +262,7 @@ TEST(DatagramAirTest, LoopbackRecoversLostDataInOrder)
     EXPECT_EQ(b.air->fec_decode_fail(), 0u);
     // b sends plain: FEC from the peer is counted as unexpected.
     EXPECT_EQ(b.air->fec_air_rx_unexpected(), 10u);
+    EXPECT_EQ(b.air->air_rx_packets(), 10u);
 }
 
 // A hole with no parity to rebuild it is given up on the reactor timer, with
@@ -285,6 +287,13 @@ TEST(DatagramAirTest, RxGivesUpHoleOnItsTimer)
                          milliseconds(1000)));
     EXPECT_EQ(b.received()[1], app(2));
     EXPECT_GE(b.air->fec_decode_fail(), 1u);
+    const auto f = b.air->fec_rx_stats();
+    EXPECT_EQ(f.missing_data, 1u);
+    EXPECT_EQ(f.given_up_blocks, 1u);
+    EXPECT_EQ(f.recovered, 0u);
+    EXPECT_EQ(f.drops, 0u);
+    // Nothing measured yet: the receiver assumes the cap.
+    EXPECT_DOUBLE_EQ(f.spread_est_ms, 250.);
 }
 
 TEST(DatagramAirTest, PayloadStaysOpaque)
@@ -356,30 +365,21 @@ TEST(DatagramAirTest, FecConfigRules)
 }
 
 // A restart carries the FEC sequence, and a new config replaces the old FEC.
-TEST(DatagramAirTest, RestartCarriesSequenceAndDropsOldFec)
+// stop() drops the open block (its parity never goes); a new start() begins
+// with the new settings.
+TEST(DatagramAirTest, RestartDropsOldFec)
 {
     CvThread cvt;
     End a(cvt);
     ASSERT_TRUE(a.start(fec_cfg(2, 3)));
     a.send(app(1));
-    a.pull();
-    const uint16_t next = a.air->fec_tx_sdu_seq();
+    EXPECT_EQ(a.pull().size(), 1u);
     a.air->stop();
-    EXPECT_EQ(a.air->fec_tx_sdu_seq(), next);
     ASSERT_TRUE(a.start(plain_cfg()));
     a.send(app(2));
     const auto slots = a.pull();
     ASSERT_EQ(slots.size(), 1u);  // no parity of the dropped block
     EXPECT_EQ(slots[0].type, static_cast<uint8_t>(LcType::plain));
-    a.air->stop();
-    ASSERT_TRUE(a.start(fec_cfg(2, 3)));
-    a.send(app(3));
-    const auto fec = a.pull();
-    ASSERT_EQ(fec.size(), 1u);
-    // Data shard header: u8 flag | u16 seq.
-    const uint16_t seq =
-        uint16_t((fec[0].body.u8()[1] << 8) | fec[0].body.u8()[2]);
-    EXPECT_EQ(seq, next);
 }
 
 // Destroyed while its streams' timers are pending on a running reactor.
@@ -455,4 +455,83 @@ TEST(DatagramAirTest, GiveUpWithNothingToReleaseIsCounted)
     ASSERT_TRUE(wait_for([&] { return b.air->fec_decode_fail() >= 1u; },
                          milliseconds(1000)));
     EXPECT_EQ(b.received_count(), 1u);
+}
+
+// A FEC change applies to the running streams: the open block finishes under
+// the settings it started with (its parity still goes), the next block takes
+// the new ones, and the data sequence runs on. Off and on again likewise.
+TEST(DatagramAirTest, ReconfigureFecIsLiveFromTheNextBlock)
+{
+    CvThread cvt;
+    End a(cvt);
+    End b(cvt);
+    ASSERT_TRUE(a.start(fec_cfg(3, 4)));
+    ASSERT_TRUE(b.start(plain_cfg()));
+    std::vector<bytes> sent;
+    auto send = [&](uint8_t i)
+    {
+        sent.push_back(app(i, 12));
+        a.send(sent.back());
+    };
+    send(0);
+    EXPECT_FALSE(a.air->reconfigure_fec(fec_cfg(4, 4)));  // invalid: no change
+    ASSERT_TRUE(a.air->reconfigure_fec(fec_cfg(2, 3)));
+    send(1);
+    send(2);  // closes the 3/4 block: its parity follows
+    send(3);
+    send(4);  // a 2/3 block
+    ASSERT_TRUE(a.air->reconfigure_fec(plain_cfg()));
+    send(5);  // plain
+    ASSERT_TRUE(a.air->reconfigure_fec(fec_cfg(2, 3)));
+    send(6);
+    send(7);
+    std::vector<Slot> slots;
+    ASSERT_TRUE(wait_for(
+        [&]
+        {
+            for (auto& s : a.pull())
+            {
+                slots.push_back(std::move(s));
+            }
+            return slots.size() == 11;
+        }));
+    // d0 d1 d2 p | d3 d4 p | plain | d6 d7 p
+    size_t fec = 0;
+    for (size_t i = 0; i < slots.size(); ++i)
+    {
+        EXPECT_EQ(uint16_t(slots[i].sn - slots[0].sn), i);
+        fec += slots[i].type == static_cast<uint8_t>(LcType::fec) ? 1 : 0;
+    }
+    EXPECT_EQ(fec, 10u);  // 3+1, 2+1, then 2+1; one plain
+    EXPECT_EQ(slots[7].type, static_cast<uint8_t>(LcType::plain));
+    // Data shards keep one sequence across all of it; lose one of each FEC
+    // block and the receiver rebuilds it.
+    for (size_t i = 0; i < slots.size(); ++i)
+    {
+        if (i == 1 || i == 5 || i == 9)
+        {
+            continue;
+        }
+        b.receive(slots[i]);
+    }
+    ASSERT_TRUE(wait_for([&] { return b.received_count() == sent.size(); }));
+    auto got = b.received();
+    std::sort(got.begin(), got.end());
+    auto want = sent;
+    std::sort(want.begin(), want.end());
+    EXPECT_EQ(got, want);
+    EXPECT_EQ(b.air->fec_recovered(), 3u);
+}
+
+// Relaxing FEC live while a block of the old settings is open: a datagram
+// too long for that block is refused by the write stream and still counted.
+TEST(DatagramAirTest, OversizeInTheOldBlockAfterARelaxIsCounted)
+{
+    CvThread cvt;
+    End a(cvt);
+    ASSERT_TRUE(a.start(fec_cfg(3, 4)));
+    a.send(app(1));
+    ASSERT_TRUE(a.air->reconfigure_fec(plain_cfg()));
+    a.send(bytes(k_stream_payload_max, 1));
+    EXPECT_EQ(a.air->app_rx_oversize_pkt(), 1u);
 }

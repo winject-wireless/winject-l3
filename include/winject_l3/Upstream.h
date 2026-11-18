@@ -65,8 +65,8 @@ struct UpstreamSpec
     Fec fec;
     size_t quanta = 256;  // scheduler budget, bytes per turn
     size_t rx_queue_capacity = 1024;
-    // If set, a queue upstream hands the app its end here, at add and again
-    // on every hot-swap, on l3's thread: store the queue only, l3 calls
+    // If set, a queue upstream hands the app its end here, at add, on l3's
+    // thread: store the queue only, l3 calls
     // from here return EDEADLK. With rx, tx and reactor all empty, l3 owns
     // the queues and this is required (EINVAL).
     std::function<void(std::shared_ptr<UpstreamQueue>)> on_queue;
@@ -79,14 +79,32 @@ struct UpstreamRxStats
     uint64_t packets = 0;
     uint64_t oversize = 0;
     uint64_t air_gap = 0;
+    // Data shards rebuilt from parity.
     uint64_t fec_recovered = 0;
+    // Blocks that lost data, plus malformed and k/n-mismatched shards.
     uint64_t fec_lost = 0;
+    // FEC slots (data and parity) received on the air, and their bytes.
     uint64_t fec_bytes = 0;
     uint64_t fec_packets = 0;
+    // Data shards given up: app datagrams lost after FEC.
     uint64_t fec_gap = 0;
     // Queue transport: deliveries that evicted the oldest datagram from the
     // app's RX queue. 0 for UDP.
     uint64_t push_drops = 0;
+    // Blocks given up at their deadline.
+    uint64_t fec_given_up = 0;
+    // Data shards that came behind the release point (not delivered).
+    uint64_t fec_late = 0;
+    // Datagrams the FEC receiver dropped for want of room (should stay 0).
+    uint64_t fec_drops = 0;
+    // The sender's parity spread and the arrival jitter, as the FEC receiver
+    // measured them (ms); 250 / 0 until it has measured two blocks.
+    double fec_spread_est_ms = 0.;
+    double fec_jitter_est_ms = 0.;
+    // Every slot taken from the air (plain and FEC, before FEC recovery) and
+    // its body bytes: with air_gap, the link's own receive counters.
+    uint64_t air_packets = 0;
+    uint64_t air_bytes = 0;
 };
 
 struct UpstreamTxStats
@@ -100,7 +118,9 @@ struct UpstreamTxStats
     uint64_t pending_packets = 0;
 };
 
-// Several fields, one hot-swap.
+// Several fields, applied together to the running upstream. Only these change
+// at runtime; reactors, queues, endpoint and buses are fixed for an upstream's
+// life (remove and add for another).
 struct UpstreamPatch
 {
     std::optional<Fec> fec;
@@ -108,8 +128,8 @@ struct UpstreamPatch
 };
 
 // A handle to one upstream, by id. Cheap to copy, safe from any thread
-// (see winject::L3::run). An FEC change hot-swaps the data path underneath and
-// the handle keeps working. After remove its calls return ENOENT; if the same
+// (see winject::L3::run). An FEC change applies to the running data path (from
+// the next FEC block; nothing restarts or is dropped). After remove its calls return ENOENT; if the same
 // id is added again, the handle reaches the new upstream. A default handle is
 // attached to nothing: calls return ESRCH.
 class Upstream
@@ -125,11 +145,11 @@ public:
 
     Result<UpstreamSpec> spec() const;  // full snapshot (on_queue left empty)
     Result<Fec> fec() const;
-    Status set_fec(const Fec& fec);  // hot-swap, keeps the air sequence
+    Status set_fec(const Fec& fec);  // live, from the next FEC block
     Result<size_t> quanta() const;
     Status set_quanta(size_t quanta);
-    // fec set, alone or with quanta: one hot-swap. Only quanta: no hot-swap,
-    // as set_quanta. Neither: EINVAL.
+    // fec and/or quanta, applied to the running upstream (no restart).
+    // Neither: EINVAL.
     Result<UpstreamSpec> update(const UpstreamPatch& patch);
 
     Result<UpstreamRxStats> rx_stats() const;

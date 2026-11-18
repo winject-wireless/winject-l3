@@ -65,8 +65,8 @@ pass finishes. Without that `wake_up`, freeing the queue when `remove_read_rdy`
 returns is a use-after-free.
 
 Do **not** defer cv `remove_read_rdy` onto the reactor: a later deferred remove
-can clobber a **new** `add_read_rdy` on the same queue (remove-then-re-add during
-hot-swap).
+can clobber a **new** `add_read_rdy` on the same queue (remove-then-re-add when an
+upstream is removed and added again).
 
 Example (queue upstream CV path in
 [`UpstreamLink::unbind_callbacks`](../src/core/endpoint/UpstreamLink.cpp) when
@@ -137,8 +137,8 @@ destructor does the same for paths that never call `teardown()`.
 it without `cb_mtx`, so a sync `remove_read_rdy` does **not** wait for a running
 handler; the data-path mutex is what fences it.
 
-Instance replacement (`replace_upstream`) calls `UpstreamLink::teardown()` on the IO
-thread before `reset()`; `QueueUpstream::teardown()` releases the queue claim.
+Upstream removal calls `UpstreamLink::teardown()` on a thread other than the CV
+reactor's before `reset()`; `QueueUpstream::teardown()` releases the queue claim.
 
 [`WifiQueue`](../src/core/radio/WifiQueue.cpp) follows the same rule for its
 `wifi_rx` handler and posted RX events: callbacks capture a shared gate, not
