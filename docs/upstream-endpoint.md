@@ -25,11 +25,9 @@ what is not:
   stream takes them from its next block, the block in flight keeps its parity,
   nothing restarts, invalid settings change nothing) and the scheduler budget.
 
-Replacing an instance resets learned UDP peers, receive sequence state, FEC
-state and per-instance counters;
-`tx_sequences()` after `teardown()` and `resume_tx_sequences()` before
-`bind_callbacks()` carry the TX air and FEC sequences into a replacement, so the
-peer's duplicate filter and FEC receiver see one unbroken stream.
+Removing an upstream and adding it again starts from scratch: new learned UDP
+peers, receive sequence state, FEC state, sequences and counters (the peer takes
+the new sequences as a restart).
 
 ### Teardown and destruction
 

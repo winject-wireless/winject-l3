@@ -99,27 +99,6 @@ void UpstreamLink::teardown()
     air.stop();
 }
 
-UpstreamLink::TxSequences UpstreamLink::tx_sequences() const
-{
-    if (bound)
-    {
-        throw std::logic_error("upstream sequences read while bound");
-    }
-    std::lock_guard<std::mutex> lock(stats_mu);
-    return {upstream_stats.air_tx, air.fec_tx_sdu_seq()};
-}
-
-void UpstreamLink::resume_tx_sequences(const TxSequences& sequences)
-{
-    if (bound)
-    {
-        throw std::logic_error("upstream sequences resumed while bound");
-    }
-    std::lock_guard<std::mutex> lock(stats_mu);
-    upstream_stats.air_tx = sequences.air;
-    air.set_fec_tx_sdu_seq(sequences.fec_sdu);
-}
-
 UpstreamLink::~UpstreamLink()
 {
     unbind_callbacks();

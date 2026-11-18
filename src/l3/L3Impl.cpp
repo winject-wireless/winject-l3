@@ -599,22 +599,31 @@ L3Impl::Result<api::UpstreamSpec> L3Impl::update_upstream(
             return error_result<api::UpstreamSpec>(k_einval);
         }
     }
+    // Both applied to the running upstream (nothing restarts), quanta first:
+    // if the FEC change then fails, the budget goes back, so the call changes
+    // all or nothing.
     std::string err;
-    if (have_fec)
-    {
-        // Applied to the running upstream: the write stream takes the new
-        // settings from its next block; nothing is restarted or dropped.
-        UpstreamLink* endpoint =
-            index < upstreams.size() ? upstreams[index].get() : nullptr;
-        if (endpoint == nullptr || !endpoint->set_fec(candidate))
-        {
-            return error_result<api::UpstreamSpec>(endpoint ? k_einval : k_eio);
-        }
-    }
     if (patch.quanta &&
         !set_upstream_scheduler_budget(index, candidate.scheduler_budget, &err))
     {
         return error_result<api::UpstreamSpec>(err);
+    }
+    if (have_fec)
+    {
+        // The settings were validated above: a failure here is a stopped
+        // upstream.
+        UpstreamLink* endpoint =
+            index < upstreams.size() ? upstreams[index].get() : nullptr;
+        if (endpoint == nullptr || !endpoint->set_fec(candidate))
+        {
+            if (patch.quanta)
+            {
+                std::string ignored;
+                (void)set_upstream_scheduler_budget(
+                    index, current.scheduler_budget, &ignored);
+            }
+            return error_result<api::UpstreamSpec>(k_eio);
+        }
     }
     cfg.upstreams[index] = candidate;
     return value_result(upstream_spec_at(index));
@@ -630,6 +639,8 @@ L3Impl::Result<api::UpstreamRxStats> L3Impl::upstream_rx_stats(uint8_t id) const
     const UpstreamLink* endpoint =
         index < upstreams.size() ? upstreams[index].get() : nullptr;
     api::UpstreamRxStats s;
+    // Unmeasured: the receiver assumes the cap.
+    s.fec_spread_est_ms = winject::fec::k_spread_cap_ms;
     s.fec = api_fec_of(endpoint, cfg.upstreams[index].fec_timeout_ms,
                        cfg.upstreams[index].fec_spread_ms);
     if (endpoint != nullptr)
@@ -791,7 +802,7 @@ void L3Impl::refresh_host_metrics()
         metrics_registry
             .get_metrics<MetricU64>("upstream_" + std::to_string(view.id) +
                                     "_fec_rx_drops")
-            ->store(up->fec_rx_drops());
+            ->store(up->fec_rx_stats().drops);
         const std::string oversize_key =
             "upstream_" + std::to_string(view.id) + "_app_rx_oversize_pkt";
         metrics_registry.get_metrics<MetricU64>(oversize_key)

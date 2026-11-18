@@ -84,10 +84,6 @@ bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
     {
         return false;
     }
-    if (fec_seq_set)
-    {
-        ws->set_tx_sequence(fec_seq);
-    }
     ws->attach(reactor);
     auto rs = std::make_unique<fec_read_stream>();
     const size_t rx_capacity =
@@ -123,7 +119,7 @@ bool DatagramAir::reconfigure_fec(const UpstreamConfig& cfg)
         return false;
     }
     // A block the old settings opened finishes under them; the write stream
-    // drops (and counts) a datagram too long for it.
+    // drops a datagram too long for it, counted in app_rx_oversize_pkt.
     fec_tx_on = wcfg.k > 0;
     max_app_datagram = fec_tx_on ? fec_write_stream::max_original(wcfg)
                                  : k_stream_payload_max;
@@ -153,8 +149,6 @@ void DatagramAir::stop_locked()
     outputs_bound = false;
     if (tx_stream)
     {
-        fec_seq = tx_stream->tx_sequence();
-        fec_seq_set = true;
         sync_fec_counters();
     }
     // Pending parity and held RX data go with the streams.
@@ -169,21 +163,6 @@ void DatagramAir::stop_locked()
     deliver_owned_app = nullptr;
     fec_tx_on = false;
     max_app_datagram = 0;
-}
-
-uint16_t DatagramAir::fec_tx_sdu_seq() const
-{
-    return tx_stream ? tx_stream->tx_sequence() : fec_seq;
-}
-
-void DatagramAir::set_fec_tx_sdu_seq(uint16_t seq)
-{
-    fec_seq = seq;
-    fec_seq_set = true;
-    if (tx_stream)
-    {
-        tx_stream->set_tx_sequence(seq);
-    }
 }
 
 void DatagramAir::set_lifetime(std::weak_ptr<void> owner)
@@ -238,6 +217,8 @@ void DatagramAir::accept_app_datagram(const uint8_t* data, size_t len)
     memcpy(buf.u8() + offset, data, len);
     tx_stream->push(std::move(buf));
     drain_tx_locked();
+    fec_tx_size_drops_acc.store(tx_stream->get_counters().drop_size,
+                                std::memory_order_relaxed);
 }
 
 void DatagramAir::drain_tx()

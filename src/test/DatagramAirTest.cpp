@@ -364,30 +364,21 @@ TEST(DatagramAirTest, FecConfigRules)
 }
 
 // A restart carries the FEC sequence, and a new config replaces the old FEC.
-TEST(DatagramAirTest, RestartCarriesSequenceAndDropsOldFec)
+// stop() drops the open block (its parity never goes); a new start() begins
+// with the new settings.
+TEST(DatagramAirTest, RestartDropsOldFec)
 {
     CvThread cvt;
     End a(cvt);
     ASSERT_TRUE(a.start(fec_cfg(2, 3)));
     a.send(app(1));
-    a.pull();
-    const uint16_t next = a.air->fec_tx_sdu_seq();
+    EXPECT_EQ(a.pull().size(), 1u);
     a.air->stop();
-    EXPECT_EQ(a.air->fec_tx_sdu_seq(), next);
     ASSERT_TRUE(a.start(plain_cfg()));
     a.send(app(2));
     const auto slots = a.pull();
     ASSERT_EQ(slots.size(), 1u);  // no parity of the dropped block
     EXPECT_EQ(slots[0].type, static_cast<uint8_t>(LcType::plain));
-    a.air->stop();
-    ASSERT_TRUE(a.start(fec_cfg(2, 3)));
-    a.send(app(3));
-    const auto fec = a.pull();
-    ASSERT_EQ(fec.size(), 1u);
-    // Data shard header: u8 flag | u16 seq.
-    const uint16_t seq =
-        uint16_t((fec[0].body.u8()[1] << 8) | fec[0].body.u8()[2]);
-    EXPECT_EQ(seq, next);
 }
 
 // Destroyed while its streams' timers are pending on a running reactor.
@@ -529,4 +520,17 @@ TEST(DatagramAirTest, ReconfigureFecIsLiveFromTheNextBlock)
     std::sort(want.begin(), want.end());
     EXPECT_EQ(got, want);
     EXPECT_EQ(b.air->fec_recovered(), 3u);
+}
+
+// Relaxing FEC live while a block of the old settings is open: a datagram
+// too long for that block is refused by the write stream and still counted.
+TEST(DatagramAirTest, OversizeInTheOldBlockAfterARelaxIsCounted)
+{
+    CvThread cvt;
+    End a(cvt);
+    ASSERT_TRUE(a.start(fec_cfg(3, 4)));
+    a.send(app(1));
+    ASSERT_TRUE(a.air->reconfigure_fec(plain_cfg()));
+    a.send(bytes(k_stream_payload_max, 1));
+    EXPECT_EQ(a.air->app_rx_oversize_pkt(), 1u);
 }

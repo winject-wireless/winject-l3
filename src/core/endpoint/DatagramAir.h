@@ -65,10 +65,6 @@ public:
     // sequences run on; the read stream needs none. False (nothing changes)
     // when they are invalid or the streams are stopped.
     bool reconfigure_fec(const UpstreamConfig& cfg);
-    // Next FEC data shard id. Read or set it only while no data path runs
-    // (before the reactor sees this instance, or after stop()).
-    uint16_t fec_tx_sdu_seq() const;
-    void set_fec_tx_sdu_seq(uint16_t seq);
     // Binds the streams' outputs to the reactor; their callbacks hold owner
     // while they run.
     void set_lifetime(std::weak_ptr<void> owner);
@@ -98,9 +94,13 @@ public:
     {
         return app_rx_packets_acc.load(std::memory_order_relaxed);
     }
+    // Oversize at l3's check, plus datagrams the write stream refused as too
+    // long for the block they fell in (after a live FEC change relaxed the
+    // limit while a block of the old settings was still open).
     uint64_t app_rx_oversize_pkt() const
     {
-        return app_rx_oversize_pkt_acc.load(std::memory_order_relaxed);
+        return app_rx_oversize_pkt_acc.load(std::memory_order_relaxed) +
+               fec_tx_size_drops_acc.load(std::memory_order_relaxed);
     }
     uint64_t app_tx_bytes() const
     {
@@ -214,9 +214,6 @@ private:
     std::unique_ptr<winject::fec::fec_write_stream> tx_stream;
     std::unique_ptr<winject::fec::fec_read_stream> rx_stream;
     bool outputs_bound = false;
-    // The FEC sequence across stop() and a replacement's start().
-    uint16_t fec_seq = 0;
-    bool fec_seq_set = false;
 
     std::atomic<uint64_t> tx_queue_drops_acc{0};
     std::atomic<uint64_t> app_rx_bytes_acc{0};
@@ -232,6 +229,7 @@ private:
     std::atomic<uint64_t> fec_recovered_acc{0};
     std::atomic<uint64_t> fec_decode_fail_acc{0};
     std::atomic<uint64_t> fec_rx_drops_acc{0};
+    std::atomic<uint64_t> fec_tx_size_drops_acc{0};
     std::atomic<uint64_t> fec_missing_data_acc{0};
     std::atomic<uint64_t> fec_given_up_acc{0};
     std::atomic<uint64_t> fec_late_acc{0};

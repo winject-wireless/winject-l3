@@ -79,4 +79,4 @@ bytes (was 1445); an FEC upstream up to **1438** (unchanged).
   slot layout, data-at-once and parity timing, spread, timeout flush, a lossy loopback with
   in-order recovery, give-up on the reactor timer, sequence carry-over and teardown;
   `LCHeaderTest` the wire layout, wrap and unknown types; `UpstreamTest` and `AppShutdownTest`
-  the upstream and hot-swap paths.
+  the upstream and live FEC changes.
