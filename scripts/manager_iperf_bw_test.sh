@@ -66,7 +66,7 @@ BITRATE="20M"        # iperf UDP requires -b; default matches typical bench head
 INTERVAL=1
 IPERF_EXTRA=()
 # Largest user UDP payload the manager accepts (k_stream_payload_max).
-readonly MAX_STREAM_PAYLOAD=1445
+readonly MAX_STREAM_PAYLOAD=1444
 
 usage() {
   cat <<EOF

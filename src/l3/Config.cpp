@@ -1,6 +1,6 @@
 #include "Config.h"
 
-#include "fec/RsBlockErasure.h"
+#include "endpoint/DatagramAir.h"
 #include "radio/PhyAirtime.h"
 #include "utils/NetUtil.h"
 
@@ -460,7 +460,7 @@ bool Config::load(const std::string& path, std::string* error)
             auto fk = parser.as<unsigned>(key_of(i, "fec.k"));
             auto fn = parser.as<unsigned>(key_of(i, "fec.n"));
             if (!fk || !fn || *fk < 1 || *fn <= *fk ||
-                *fn > RsBlockErasure::k_max_n)
+                *fn > static_cast<unsigned>(winject::fec::k_header_k_n_max))
             {
                 *error = "invalid " + key_of(i, "fec.k") + "/" +
                          key_of(i, "fec.n") + " (need 1 <= k < n <= 31)";
@@ -472,12 +472,25 @@ bool Config::load(const std::string& path, std::string* error)
             auto fto = parser.as<int>(key_of(i, "fec.timeout_ms"));
             if (fto)
             {
-                if (*fto < 0)
+                // A block with parity needs a flush to close it short.
+                if (*fto < 1)
                 {
-                    *error = "invalid " + key_of(i, "fec.timeout_ms");
+                    *error = "invalid " + key_of(i, "fec.timeout_ms") +
+                             " (need >= 1)";
                     return false;
                 }
                 u.fec_timeout_ms = *fto;
+            }
+            auto fsp = parser.as<int>(key_of(i, "fec.spread_ms"));
+            if (fsp)
+            {
+                if (*fsp < 0 || *fsp > winject::fec::k_spread_cap_ms)
+                {
+                    *error = "invalid " + key_of(i, "fec.spread_ms") + " (need 0.." +
+                             std::to_string(winject::fec::k_spread_cap_ms) + ")";
+                    return false;
+                }
+                u.fec_spread_ms = *fsp;
             }
         }
 
@@ -672,11 +685,10 @@ bool Config::validate(std::string* error) const
         }
         if (u.fec_type == FecType::RsBlockErasure)
         {
-            RsBlockErasure codec;
-            if (!codec.init(u.fec_k, u.fec_n, u.fec_timeout_ms))
+            if (!DatagramAir::fec_write_config(u, nullptr))
             {
                 return fail("invalid upstream-" + std::to_string(i) +
-                            " fec k/n");
+                            " fec (need 1 <= k < n <= 31, timeout_ms >= 1)");
             }
         }
         else if (u.fec_type != FecType::none)
@@ -829,10 +841,11 @@ bool Config::validate_upstream_update(const UpstreamConfig& current,
     }
     else
     {
-        RsBlockErasure codec;
-        const int timeout =
-            have_fec_timeout ? fec_timeout_ms : out->fec_timeout_ms;
-        if (!codec.init(k, n, timeout))
+        UpstreamConfig trial = *out;
+        trial.fec_type = type;
+        trial.fec_k = k;
+        trial.fec_n = n;
+        if (!DatagramAir::fec_write_config(trial, nullptr))
         {
             if (error != nullptr)
             {

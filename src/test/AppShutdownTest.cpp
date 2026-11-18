@@ -120,7 +120,7 @@ TEST(AppShutdownTest, StopDropsPartialFecUsingSharedReactor)
     up.fec_type = FecType::RsBlockErasure;
     up.fec_k = 2;
     up.fec_n = 3;
-    up.fec_timeout_ms = 0;
+    up.fec_timeout_ms = 20;
     cfg.upstreams.push_back(up);
     {
         App app;
@@ -193,12 +193,14 @@ TEST(AppShutdownTest, StopDropsPartialFecUsingSharedReactor)
                 {
                     continue;
                 }
-                EXPECT_TRUE(LCHeader::read_is_fec(
-                    reinterpret_cast<const uint8_t*>(pdu.data())));
+                EXPECT_TRUE(LCHeader::read_type(reinterpret_cast<const uint8_t*>(pdu.data())) ==
+                    static_cast<uint8_t>(LcType::fec));
                 ++shards;
             }
         }
-        EXPECT_EQ(shards, 0u);
+        // The data shard leaves when it comes (it may or may not have reached
+        // the radio before stop); stop dropped its block's parity.
+        EXPECT_LE(shards, 1u);
     }
     bfc::cv_reactor_registry::get_instance().rem("drain-cv");
     Registry::get_instance().rem("drain-in");
@@ -272,7 +274,8 @@ TEST_P(AppUpstreamReplacementTest,
     upstream.fec_type = FecType::RsBlockErasure;
     upstream.fec_k = 3;
     upstream.fec_n = 4;
-    upstream.fec_timeout_ms = 0;
+    // Long enough that a block's parity can only go by the replacement.
+    upstream.fec_timeout_ms = 2000;
     if (GetParam())
     {
         upstream.mode = UpstreamMode::queue;
@@ -348,11 +351,13 @@ TEST_P(AppUpstreamReplacementTest,
                 1);
         }
     };
+    // A data shard goes out at once; its block's parity waits for the block.
+    // FEC counters are per instance.
     auto wait_partial = [&]
     {
         for (int attempt = 0; attempt < 50; ++attempt)
         {
-            if (exchange("cmd:2 lut").find("tx_pending_pkt=1") !=
+            if (exchange("cmd:2 lut").find("fec_txpkt=1 ") !=
                 std::string::npos)
             {
                 return true;
@@ -374,15 +379,17 @@ TEST_P(AppUpstreamReplacementTest,
     }
     auto reply = exchange("cmd:3 uu id=0 fec=BLOCK k=2 n=3 quanta=512");
     ASSERT_EQ(reply.find("OK:3"), 0u) << reply;
-    // Replacement discards the old partial block; the first new input remains
-    // pending instead of completing the previous encoder's block.
+    // Replacement discards the old partial block (its parity never goes);
+    // the first new input starts a block instead of completing the old one.
     send_input();
     ASSERT_TRUE(wait_partial());
     reply = exchange("cmd:4 uu id=0 fec=BLOCK k=4 n=4");
     EXPECT_EQ(reply.find("NOK:4"), 0u) << reply;
     send_input();
+    // On the air: the old block's data shard, then the new block's two data
+    // shards and its parity. A fifth would be the old block's parity.
     size_t shards = 0;
-    for (int attempt = 0; attempt < 100 && shards < 3; ++attempt)
+    for (int attempt = 0; attempt < 100 && shards < 5; ++attempt)
     {
         pollfd fd{radio.fd(), POLLIN, 0};
         if (::poll(&fd, 1, 10) != 1)
@@ -405,13 +412,13 @@ TEST_P(AppUpstreamReplacementTest,
             auto pdu = static_cast<const Mpdu&>(mpdu).get_slot_payload(slot);
             if (!pdu.empty())
             {
-                EXPECT_TRUE(LCHeader::read_is_fec(
-                    reinterpret_cast<const uint8_t*>(pdu.data())));
+                EXPECT_TRUE(LCHeader::read_type(reinterpret_cast<const uint8_t*>(pdu.data())) ==
+                    static_cast<uint8_t>(LcType::fec));
                 ++shards;
             }
         }
     }
-    EXPECT_EQ(shards, 3u);
+    EXPECT_EQ(shards, 4u);
     app.stop();
     ASSERT_EQ(running.wait_for(std::chrono::seconds(2)),
               std::future_status::ready);

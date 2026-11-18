@@ -8,6 +8,8 @@
 #include "radio/TxMux.h"
 #include "utils/NetUtil.h"
 
+#include <winject_fec/write_stream.hpp>
+
 #include <atomic>
 #include <bfc/socket.hpp>
 #include <chrono>
@@ -28,13 +30,43 @@ Packet lc_packet(const Packet& payload, bool fec = false, uint16_t seq = 0)
 {
     bfc::sized_buffer bytes(LCHeader::k_len + payload.size());
     auto out = reinterpret_cast<uint8_t*>(bytes.data());
-    LCHeader::write(out, 7, seq, fec);
+    LCHeader::write(out, 7, fec ? LcType::fec : LcType::plain, seq);
     memcpy(out + LCHeader::k_len, payload.data(), payload.size());
     return Packet::copy_from(bytes.data(), bytes.size());
 }
 std::vector<uint8_t> bytes(const Packet& p)
 {
     return {p.u8(), p.u8() + p.size()};
+}
+// LC bodies of a k/n FEC block of the payloads, in send order (data, then
+// parity), from a winject-fec write stream in manual mode.
+std::vector<Packet> fec_shards(int k, int n,
+                               const std::vector<std::vector<uint8_t>>& payloads)
+{
+    winject::fec::fec_write_stream ws;
+    winject::fec::fec_write_stream::config c;
+    c.k = k;
+    c.n = n;
+    c.max_datagram = k_stream_payload_max;
+    c.flush_ms = 20;
+    EXPECT_TRUE(ws.configure(c));
+    ws.set_tx_sequence(100);
+    for (const auto& p : payloads)
+    {
+        const size_t off = ws.push_offset();
+        auto buf = Packet::allocate(off + p.size());
+        buf.resize(off + p.size());
+        memcpy(buf.u8() + off, p.data(), p.size());
+        ws.push(std::move(buf));
+    }
+    std::vector<Packet> out;
+    for (auto s = ws.pop(); s.type != winject::fec::shard_type::none;
+         s = ws.pop())
+    {
+        out.push_back(std::move(s.buf));
+    }
+    EXPECT_EQ(out.size(), size_t(payloads.size() == size_t(k) ? n : payloads.size()));
+    return out;
 }
 class UpstreamTest : public ::testing::Test
 {
@@ -151,7 +183,7 @@ TEST_F(UpstreamTest, RadioRxReachesAppWithoutCopy)
     const size_t size = LCHeader::k_len + payload_size;
     auto* storage = new std::byte[size];
     auto* wire = reinterpret_cast<uint8_t*>(storage);
-    LCHeader::write(wire, 7, 1, false);
+    LCHeader::write(wire, 7, LcType::plain, 1);
     for (size_t i = 0; i < payload_size; ++i)
     {
         wire[LCHeader::k_len + i] = uint8_t(i);
@@ -213,7 +245,7 @@ TEST_F(UpstreamTest, AppInputImmediatelyPushesSuppliedTxQueue)
     pump_cv();
     auto sent = tx->pop();
     ASSERT_TRUE(sent);
-    EXPECT_FALSE(LCHeader::read_is_fec(sent->u8()));
+    EXPECT_EQ(LCHeader::read_type(sent->u8()), uint8_t(LcType::plain));
     EXPECT_EQ(bytes(*sent), bytes(lc_packet(packet({4, 5}), false, 0)));
     EXPECT_EQ(up->app_tx_packets(), 1u);
     EXPECT_EQ(up->tx_counters().packets, 1u);
@@ -272,8 +304,8 @@ TEST_F(UpstreamTest, AirLateWithinReorderWindowKeepsReference)
 TEST_F(UpstreamTest, AirSeqWrapIsNotARestart)
 {
     create_queue();
-    rx(packet({1}), false, 32766);
-    rx(packet({2}), false, 32767);
+    rx(packet({1}), false, 65534);
+    rx(packet({2}), false, 65535);
     rx(packet({3}), false, 0);
     rx(packet({4}), false, 1);
     pump_cv();
@@ -285,8 +317,8 @@ TEST_F(UpstreamTest, AirRestartBehindAcrossWrapResyncs)
 {
     create_queue();
     rx(packet({1}), false, 10);
-    rx(packet({2}), false, 32000);  // 778 behind across the wrap
-    rx(packet({3}), false, 32001);
+    rx(packet({2}), false, 65000);  // 546 behind across the wrap
+    rx(packet({3}), false, 65001);
     pump_cv();
     EXPECT_EQ(app_rx_queue->size(), 3u);
     EXPECT_EQ(up->stats().air_rx_resyncs, 1u);
@@ -315,7 +347,6 @@ TEST_F(UpstreamTest, FecEncodePushesShardsWithoutSchedulerPull)
     cfg.fec_type = FecType::RsBlockErasure;
     cfg.fec_k = 2;
     cfg.fec_n = 3;
-    cfg.fec_timeout_ms = 0;
     create_queue();
     app_tx_queue->push(packet({1}));
     app_tx_queue->push(packet({2}));
@@ -323,7 +354,7 @@ TEST_F(UpstreamTest, FecEncodePushesShardsWithoutSchedulerPull)
     EXPECT_EQ(tx->size(), 3u);
     while (auto p = tx->pop())
     {
-        EXPECT_TRUE(LCHeader::read_is_fec(p->u8()));
+        EXPECT_EQ(LCHeader::read_type(p->u8()), uint8_t(LcType::fec));
     }
     EXPECT_EQ(up->fec_air_tx_packets(), 3u);
 }
@@ -336,19 +367,16 @@ TEST_F(UpstreamTest, TxFecTimeoutUsesSuppliedCvReactor)
     create_queue();
     app_tx_queue->push(packet({9}));
     pump_cv(1);
-    EXPECT_FALSE(tx->has_data());
+    EXPECT_EQ(tx->size(), 1u);  // the data shard goes out at once
     pump_cv(15);
-    EXPECT_EQ(tx->size(), 2u);
+    EXPECT_EQ(tx->size(), 2u);  // the flush sends the parity
 }
 TEST_F(UpstreamTest, RxFecRecoversMissingShardOnCvReactor)
 {
     create_queue();
-    RsBlockErasure encoder;
-    ASSERT_TRUE(encoder.init(2, 3, 20));
-    std::vector<std::vector<uint8_t>> shards;
-    ASSERT_TRUE(encoder.encode_block({{1, 2}, {3, 4}}, 100, &shards));
-    rx(Packet::copy_from(shards[2].data(), shards[2].size()), true, 0);
-    rx(Packet::copy_from(shards[1].data(), shards[1].size()), true, 1);
+    const auto shards = fec_shards(2, 3, {{1, 2}, {3, 4}});
+    rx(shards[2], true, 0);  // parity first, data 0 lost
+    rx(shards[1], true, 1);
     EXPECT_FALSE(app_rx_queue->has_data());
     pump_cv();
     ASSERT_EQ(app_rx_queue->size(), 2u);
@@ -359,16 +387,15 @@ TEST_F(UpstreamTest, RxFecRecoversMissingShardOnCvReactor)
 TEST_F(UpstreamTest, RxFecTimerSalvagesWithoutNewRadioPackets)
 {
     create_queue();
-    RsBlockErasure encoder;
-    ASSERT_TRUE(encoder.init(3, 4, 20));
-    std::vector<std::vector<uint8_t>> shards;
-    ASSERT_TRUE(encoder.encode_block({{1}, {2}, {3}}, 100, &shards));
-    rx(Packet::copy_from(shards[1].data(), shards[1].size()), true);
+    const auto shards = fec_shards(3, 4, {{1}, {2}, {3}});
+    rx(shards[0], true, 0);
+    rx(shards[2], true, 1);  // data 1 and the parity lost
     pump_cv(1);
-    EXPECT_FALSE(app_rx_queue->has_data());
-    pump_cv(300);
     ASSERT_EQ(app_rx_queue->size(), 1u);
-    EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{2}));
+    EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{1}));
+    pump_cv(300);  // given up on the reactor timer, nothing more arriving
+    ASSERT_EQ(app_rx_queue->size(), 1u);
+    EXPECT_EQ(bytes(*app_rx_queue->pop()), (std::vector<uint8_t>{3}));
 }
 TEST_F(UpstreamTest, DestructorDropsPartialFecAndPendingRx)
 {
@@ -379,13 +406,14 @@ TEST_F(UpstreamTest, DestructorDropsPartialFecAndPendingRx)
     create_queue();
     app_tx_queue->push(packet({1}));
     pump_cv(1);
+    EXPECT_EQ(tx->size(), 1u);  // the data shard
     auto inbox = up->rx_queue();
     inbox->push(lc_packet(packet({7})));
     std::weak_ptr<UpstreamLink> weak = up;
     up.reset();
     EXPECT_TRUE(weak.expired());
     pump_cv(20);
-    EXPECT_FALSE(tx->has_data());
+    EXPECT_EQ(tx->size(), 1u);  // its parity never comes
     EXPECT_FALSE(app_rx_queue->has_data());
     // Producer can safely retain a shared queue after endpoint destruction.
     inbox->push(lc_packet(packet({8})));
@@ -409,7 +437,7 @@ TEST_F(UpstreamTest, ExtractedFecTimerCannotUseDestroyedEndpoint)
     cv->get_timer().schedule(UpstreamLink::Reactor::timer_t::current_time_us() +
                              1000000);
     EXPECT_FALSE(up);
-    EXPECT_FALSE(tx->has_data());
+    EXPECT_EQ(tx->size(), 1u);  // the data shard; no parity
 }
 TEST_F(UpstreamTest, TeardownReleasesInputClaim)
 {
@@ -463,8 +491,14 @@ struct PushGate
     std::promise<void> release;
     std::shared_future<void> released = release.get_future().share();
     std::atomic<bool> armed{true};
+    // Pushes to let through before the one that blocks.
+    std::atomic<int> skip{0};
     void on_push()
     {
+        if (skip.fetch_sub(1) > 0)
+        {
+            return;
+        }
         if (armed.exchange(false))
         {
             entered.set_value();
@@ -520,6 +554,7 @@ TEST_F(UpstreamTest, TeardownWaitsForFiringFecTimer)
     cfg.fec_k = 3;
     cfg.fec_n = 4;
     cfg.fec_timeout_ms = 5;
+    gate.skip = 1;  // the data shard; block on the parity the timer sends
     create_queue();
     CvWorker worker(cv);
     app_tx_queue->push(packet({1}));  // partial block; the timer flushes it
@@ -576,7 +611,7 @@ TEST_F(UpstreamTest, TeardownDoesNotWaitForBusyReactor)
 
     app_tx_queue->push(packet({1}));  // partial block arms the FEC timer
     ASSERT_TRUE(wait_for([&] { return up->app_tx_packets() == 1u; }));
-    EXPECT_FALSE(tx->has_data());
+    ASSERT_TRUE(wait_for([&] { return tx->size() == 1u; }));  // data shard
 
     blocker->push(packet({0}));
     cv->wake_up();
@@ -594,7 +629,7 @@ TEST_F(UpstreamTest, TeardownDoesNotWaitForBusyReactor)
     release.set_value();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    EXPECT_FALSE(tx->has_data());  // FEC timeout never flushed the block
+    EXPECT_EQ(tx->size(), 1u);  // FEC timeout never flushed the block
     app_tx_queue->push(packet({2}));
     cv->wake_up();
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -620,7 +655,7 @@ TEST_F(UpstreamTest, TeardownWithStoppedReactorReturnsAtOnce)
     up.reset();
     app_tx_queue->push(packet({2}));
     pump_cv(20);  // the FEC timer was cancelled
-    EXPECT_FALSE(tx->has_data());
+    EXPECT_EQ(tx->size(), 1u);  // only the first data shard
     EXPECT_TRUE(app_tx_queue->has_data());
 }
 
@@ -631,11 +666,11 @@ TEST_F(UpstreamTest, ReplacementContinuesTxSequences)
     cfg.fec_type = FecType::RsBlockErasure;
     cfg.fec_k = 2;
     cfg.fec_n = 3;
-    cfg.fec_timeout_ms = 0;
+    // Data shard header: u8 flag | u16 seq.
     auto sdu_base = [](const Packet& p)
     {
         const uint8_t* shard = p.u8() + LCHeader::k_len;
-        return uint16_t((shard[0] << 8) | shard[1]);
+        return uint16_t((shard[1] << 8) | shard[2]);
     };
     create_queue();
     app_tx_queue->push(packet({1}));
@@ -729,7 +764,7 @@ TEST_F(UpstreamTest, TxOverflowKeepsNewestAndCountsDrops)
     uint64_t count = 0, size = 0;
     up->tx_pending_stats(&count, &size);
     EXPECT_EQ(count, 1u);
-    EXPECT_EQ(size, 5u);
+    EXPECT_EQ(size, 6u);  // LC prefix (4) + 2
     EXPECT_EQ(bytes(*tx->pop()),
               bytes(lc_packet(packet({2, 3}), false, 1)));
 }

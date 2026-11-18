@@ -68,14 +68,15 @@ target. Deferred queue leases protect BFC's raw-pointer reactor scan snapshots.
 ## Receive path
 
 RX demux validates and depayloads MPDUs and routes each LC-framed SDU by bus ID.
-It does not strip the LC header, interpret FEC flags, filter sequence numbers,
+It does not strip the LC header, interpret LC types, filter sequence numbers,
 decode FEC or deliver application packets. It pushes the SDU into the registered
 RX queue. The queue is bound using BFC `set_reactor`; push automatically wakes
 the CV reactor.
 
 The upstream's CV callback drains the inbox in turns of at most 32 packets. It
-checks LC sequence numbers, interprets the FEC flag, and feeds `DatagramAir`.
-Both RX recovery timers and TX flush timers use this same CV reactor. Recovered
+checks LC sequence numbers and types, and feeds `DatagramAir`. Its winject-fec
+streams' timers (RX give-up, TX flush and parity release) use this same CV
+reactor. Recovered
 or raw datagrams call the derived `deliver_datagram` method: nonblocking UDP send
 or push into the application output queue.
 

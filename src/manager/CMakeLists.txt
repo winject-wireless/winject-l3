@@ -15,8 +15,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(${WINJECT_SRC}/BfcFetch.cmake)
 
-include(${WINJECT_SRC}/core/fec/IsalEc.cmake)
-winject_add_isal_ec()
+include(${WINJECT_SRC}/../cmake/WinjectFecFetch.cmake)
+winject_add_fec()
 
 include(${WINJECT_SRC}/core/CoreSources.cmake)
 include(${WINJECT_SRC}/l3/L3Sources.cmake)
@@ -41,7 +41,7 @@ target_include_directories(winject-l3-core PUBLIC
     ${BFC_INCLUDE_DIRS}
 )
 target_compile_options(winject-l3-core PRIVATE ${WINJECT_WARNINGS})
-target_link_libraries(winject-l3-core PUBLIC pthread isal_ec)
+target_link_libraries(winject-l3-core PUBLIC pthread winject::fec)
 
 # L3: the l3 applet on top of the core, its public API (include/winject_l3/*.h:
 # winject::L3, managers, handles) and the text console.

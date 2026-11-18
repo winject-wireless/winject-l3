@@ -39,7 +39,8 @@ TEST(ConsoleServiceSocketTest, TaggedPingLuAndBogus)
     EXPECT_EQ(reply.rfind("OK:7 N=", 0), 0u);
     EXPECT_EQ(reply,
               "OK:7 N=1\nupstream id=4 txbus=1 rxbus=2 type=UDP rx= "
-              "tx=127.0.0.1:9 fec=none fec_timeout=20ms quanta=256\n");
+              "tx=127.0.0.1:9 fec=none fec_timeout=20ms fec_spread=0ms "
+              "quanta=256\n");
 
     ASSERT_TRUE(harness.exchange(client, "cmd:7 bogus", &reply));
     EXPECT_STREQ(reply.c_str(), "NOK:7 ENOSYS\n");
@@ -339,7 +340,7 @@ TEST(ConsoleServiceSocketTest, UpstreamCommandsOnTheWire)
     ASSERT_TRUE(harness.exchange(client, au.c_str(), &reply));
     EXPECT_EQ(reply, "OK:1 upstream id=6 txbus=3 rxbus=4 type=UDP rx=" + rx +
                          " tx=127.0.0.1:9 fec=block(2,3) fec_timeout=10ms "
-                         "quanta=128\n");
+                         "fec_spread=0ms quanta=128\n");
     // A port nothing can bind is EIO, as before.
     ASSERT_TRUE(harness.exchange(client,
                                  "cmd:2 au id=7 txbus=5 rxbus=5 type=UDP "

@@ -140,7 +140,7 @@ class Injector:
                 time.sleep(min(0.001, next_t - now))
                 continue
             slot = lc_write(self.bus, self._lc_seq) + filler
-            self._lc_seq = (self._lc_seq + 1) & 0x7FFF
+            self._lc_seq = (self._lc_seq + 1) & 0xFFFF
             frame = build_data_mpdu(self.domain, [slot], self._mpdu_seq)
             self._mpdu_seq = (self._mpdu_seq + 1) & 0x0FFF
             try:

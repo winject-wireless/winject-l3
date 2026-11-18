@@ -67,7 +67,11 @@ struct UpstreamConfig
     FecType fec_type = FecType::none;
     int fec_k = 0;
     int fec_n = 0;
+    // A short block is flushed this long after its first datagram (>= 1).
     int fec_timeout_ms = 20;
+    // Parity spread: a block's data and parity span this long from its first
+    // datagram (0 .. 250; 0 sends parity right behind the block's data).
+    int fec_spread_ms = 0;
 };
 
 }  // namespace winject::core

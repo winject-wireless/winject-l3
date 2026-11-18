@@ -128,9 +128,10 @@ run. Post-FEC loss is the receiver's lost-after-FEC count over application packe
   `cbr_controller`) would then set `S = B · (1 − p) / (t − p)` with a margin, within a latency
   budget, and escalate to more parity and then lower bitrate when S hits the cap. This needs a
   link report format change.
-- **L3 FEC.** The L3 encoder (`RsBlockErasure` in this repo) still sends a block's shards back
-  to back. WireGuard over upstream 0 loses about 20–30 % of pings for that reason; the same
-  spreading in `TxMux` or `Upstream` would apply.
+- **L3 FEC.** L3 now uses the winject-fec write stream, which has the same spread
+  (`upstream-N.fec.spread_ms`, default 0) and sends data shards at once. WireGuard over upstream
+  0 lost about 20–30 % of pings with its 1/3 repetition sent back to back; a spread there is
+  untested.
 - **Raw loss.** About 15 % raw loss on the bench link at short range is high. During the 22–32 ms
   gaps the GS adapter received nothing while an ESP32 sniffer still heard 25–35 frames. This is
   a separate radio-side investigation.

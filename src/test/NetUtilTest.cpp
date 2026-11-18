@@ -7,7 +7,8 @@ using namespace winject::core;
 TEST(NetUtilTest, PayloadLimitsMatchRadioDefs)
 {
     EXPECT_EQ(k_wifi_payload_max, static_cast<size_t>(WIFI_PAYLOAD_MAX));
-    EXPECT_EQ(k_stream_payload_max, 1445u);
+    // 1448 less the 4-byte LC prefix (bus, type, sn).
+    EXPECT_EQ(k_stream_payload_max, 1444u);
     EXPECT_LE(WIFI_RADIO_INJECT_MAX + 28, 1500);
 }
 

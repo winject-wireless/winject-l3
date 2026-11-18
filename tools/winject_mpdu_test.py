@@ -30,6 +30,16 @@ class LcAirRxTrackerTest(unittest.TestCase):
         self.assertEqual(t.gap_events[0].missed_slots, 2)
         self.assertEqual(t.snapshot(), (2, 2))
 
+    def test_wire_layout(self) -> None:
+        self.assertEqual(lc_write(0xC3, 0x1234, True), bytes([0xC3, 1, 0x12, 0x34]))
+        self.assertEqual(lc_write(0xC3, 0xFFFF), bytes([0xC3, 0, 0xFF, 0xFF]))
+
+    def test_wrap_is_not_a_gap(self) -> None:
+        t = LcAirRxTracker(bus=0xB2)
+        for seq in (0xFFFE, 0xFFFF, 0, 1):
+            self.assertTrue(t.accept_slot(lc_write(0xB2, seq, seq % 2 == 0) + b"x"))
+        self.assertEqual(t.snapshot(), (4, 0))
+
     def test_in_order_second_slot_no_gap(self) -> None:
         t = LcAirRxTracker(bus=0xB2)
         t.accept_slot(lc_write(0xB2, 5) + b"a")

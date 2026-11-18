@@ -52,8 +52,8 @@ The two sides are symmetric. Any number of manager/radio pairs can share a chann
 | `RxDemux` | [`RxDemux.*`](../src/core/radio/RxDemux.cpp) | RX: validates domain, splits slots, routes each slot by its LC bus to upstreams |
 | `RadioUpstreamTable` | [`RadioUpstreamTable.*`](../src/core/radio/RadioUpstreamTable.cpp) | Shared bus routing, RX/TX queue handles and weak statistics references, guarded by one mutex |
 | `UpstreamLink` / `UDPUpstream` / `QueueUpstream` | [`UpstreamLink.*`](../src/core/endpoint/UpstreamLink.cpp) | Shared FEC and radio RX queue; separate UDP and queue application transports. Constructor/destructor lifecycle. See [upstream-endpoint.md](upstream-endpoint.md) |
-| `UpstreamStats` | [`UpstreamStats.*`](../src/core/endpoint/UpstreamStats.cpp) | Stamps and checks the LC header (bus, sequence); duplicate drop and gap counting |
-| `RsBlockErasure` | [`fec/`](../src/core/fec/vendor/rs_block_erasure.cpp) | Optional k-of-n Reed–Solomon erasure coding (ISA-L) |
+| `UpstreamStats` | [`UpstreamStats.*`](../src/core/endpoint/UpstreamStats.cpp) | Stamps and checks the LC header (bus, type, sequence); duplicate drop and gap counting |
+| `DatagramAir` | [`DatagramAir.*`](../src/core/endpoint/DatagramAir.cpp) | Runs the upstream's [winject-fec](https://github.com/winject-wireless/winject-fec) write and read streams: plain or k-of-n Reed–Solomon FEC (ISA-L) |
 | `Mpdu` / `Frame` / `LCHeader` | [`frames/`](../src/core/frames/Mpdu.cpp) | On-air framing (see § Framing) |
 | `MetricsRegistry` | [`MetricsRegistry.*`](../src/core/utils/MetricsRegistry.cpp) | Counters exported by `get_metrics` |
 
@@ -77,10 +77,10 @@ Cross-thread socket and registration changes on the main reactor should use
 
 ### Data path: TX
 
-1. An application sends a UDP datagram to `UDPUpstream`; its IO callback enqueues it for the supplied CV reactor (queue upstreams push directly into the host CV reactor). Datagrams over 1445 bytes are dropped and counted (`app_rx_oversize_pkt`).
+1. An application sends a UDP datagram to `UDPUpstream`; its IO callback enqueues it for the supplied CV reactor (queue upstreams push directly into the host CV reactor). Datagrams over 1444 bytes (1438 with FEC) are dropped and counted (`app_rx_oversize_pkt`).
 2. With FEC enabled, the datagram goes into the encoder, which emits k systematic and n−k parity shards; otherwise it is queued as-is.
 3. The TxMux reactor callback picks a primary registered TX queue that has data, then fills the remaining room in the MPDU from other upstreams, up to 5 slots and 1448 body bytes.
-4. Each slot payload is prefixed with the LC header (upstream `tx_bus`, FEC flag, per-bus sequence).
+4. Each slot payload is prefixed with the LC header (upstream `tx_bus`, LC type, per-bus sequence).
 5. The MPDU header gets the domain in Address 3, the slot lengths in Address 1–2, and a 12-bit MPDU sequence.
 6. `WifiUdp::send` sends it as one UDP datagram to `radio.dplane`. Pacing decides when the next MPDU may go.
 7. The radio transmits it unchanged.
@@ -91,7 +91,7 @@ Cross-thread socket and registration changes on the main reactor should use
 2. `RxDemux::on_mpdu` validates the frame (DATA, `CA:FE:BA:BE` prefix, slot sizes fill the body), and drops other domains (`rx_drop_domain`).
 3. For each slot, the LC bus selects every upstream with that `rx_bus`. An unknown bus is counted (`rx_drop_bus`), and bus 0 is ignored.
 4. Demux pushes the intact LC-framed SDU into the registered upstream RX queue. Its CV callback uses `UpstreamStats` to check the LC sequence: it drops duplicates and counts gaps (`air_rx_gap_loss`).
-5. If the LC header FEC flag is set, the upstream runs the FEC decoder; otherwise the payload is the datagram. It sends the resulting datagrams to the application: the configured destination (client mode) or the last sender (server mode).
+5. If the LC type is fec, the upstream's FEC read stream takes the body; a plain body is the datagram. It sends the resulting datagrams to the application: the configured destination (client mode) or the last sender (server mode).
 
 ### Control path
 
@@ -131,12 +131,13 @@ The radio m-plane, d-plane and counters are specified in the winject-radio-esp32
 ### Layering (TX)
 
 ```
-UDP or queue application datagram           (user SDU, ≤ 1445 bytes)
+UDP or queue application datagram           (user SDU, ≤ 1444 bytes; ≤ 1438 with FEC)
         |
-        v  optional RsBlockErasure          (k-of-n Reed–Solomon shards)
-air SDU (FEC shard or raw datagram)
+        v  copied once behind 7 bytes of room: [LC room 4][fec slot 3][datagram]
+        v  winject-fec write stream          (plain, or data shard now + parity later)
+LC body (plain datagram or FEC shard)
         |
-        v  route bus + upstream air header [is_fec 1b | seq 15b, BE] + air SDU
+        v  LC header written into the room: [bus u8 | lc_type u8 | sn u16 BE]
 slot payload                                (per upstream)
         |
         v  Mpdu: up to 5 slots in one 802.11 DATA frame body
@@ -146,7 +147,7 @@ slot payload                                (per upstream)
 radio (raw 802.11 TX)
 ```
 
-RX reverses the chain: demux slots → route by LC bus → check LC seq → FEC decode (if the LC header marks a shard) → deliver a UDP datagram or push one queue entry.
+RX reverses the chain: demux slots → route by LC bus → check LC sn and type → FEC read stream (plain at once; FEC data in sequence) → deliver a UDP datagram or push one queue entry (a view of the radio buffer, no copy).
 
 `QUEUE_FORWARDING` (`upstream-N.mode`) carries the same SDU as UDP, through a pair of host-owned lossy queues instead of a socket. `rx` is what the application sends (a stream sender's `queue_transport_tx`); `tx` is what the application receives (its `queue_transport_rx`). The host runs the named `cv_reactor`. See [mplane.md](mplane.md).
 
@@ -173,7 +174,7 @@ Limits ([`RadioDefs.h`](../src/core/radio/RadioDefs.h), [`NetUtil.h`](../src/cor
 | 802.11 header | **24** bytes | `WIFI_HDR_LEN` |
 | TX frame body (all slots) | **1448** bytes | `WIFI_PAYLOAD_MAX`, `k_wifi_payload_max` |
 | RX frame body | **1476** bytes | `WIFI_RX_PAYLOAD_MAX` |
-| User datagram per slot | **1445** bytes (1448 − 3 LC header) | `k_stream_payload_max` |
+| User datagram per slot | **1444** bytes (1448 − 4 LC header) | `k_stream_payload_max` |
 
 On RX, [`Mpdu::rescan`](../src/core/frames/Mpdu.cpp) accepts only DATA frames with zero flags whose declared slot sizes exactly fill the body.
 
@@ -185,58 +186,50 @@ On TX the mux puts the primary upstream first, then other upstreams with data, w
 
 ### LC header
 
-Every slot payload starts with a 1-byte **route header** (bus) for demux, then a 2-byte **upstream air header** (seq + FEC flag). [`RouteHeader` / `UpstreamAirHeader`](../src/core/frames/LCHeader.h) compose the 3-byte prefix ([`LCHeader`](../src/core/frames/LCHeader.h) is the full prefix on the wire):
+Every slot payload starts with a 1-byte **route header** (bus) for demux, then a 3-byte **upstream air header** (LC type + sn). [`RouteHeader` / `UpstreamAirHeader`](../src/core/frames/LCHeader.h) compose the 4-byte prefix ([`LCHeader`](../src/core/frames/LCHeader.h) is the full prefix on the wire):
 
 ```
- 0               1               2
- 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
-+---------------+-+-----------------------------+------------------+
-|    bus u8     |F|        seq (BE, 15 bit)     | air SDU          |
-+---------------+-+-----------------------------+------------------+
+ 0               1               2               3
+ 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
++---------------+---------------+-------------------------------+------------------+
+|    bus u8     |  lc_type u8   |          sn (BE u16)          | body             |
++---------------+---------------+-------------------------------+------------------+
 ```
 
 - **bus**: the sending upstream's `tx_bus`; selects receiving upstreams by `rx_bus`.
-- **F** (`is_fec`, MSB of the second byte): the air SDU is an FEC shard. This flag is the only thing that sends a payload to the FEC decoder; the receiver never looks inside the SDU to decide.
-- **seq**: per-upstream TX sequence, 15 bits, incremented when upstream stamps each slot payload and wrapping at 32768 ([`stamp_slot_payload`](../src/core/endpoint/UpstreamStats.cpp)); TxMux copies pre-framed slots without interpreting seq/F.
-- RX ([`accept_air_payload`](../src/core/endpoint/UpstreamStats.cpp)) drops a payload with the same seq as the last accepted one (duplicate), counts gaps with 15-bit wrap-aware comparison (forward jumps below 16384; `air_rx_gap_loss`), and passes the bytes after the header on with the F flag.
+- **lc_type**: `0` plain (the body is the datagram), `1` fec (the body is a [winject-fec](https://github.com/winject-wireless/winject-fec) shard). The type is the only thing that sends a body to the FEC read stream; the receiver never looks inside the body to decide. Other values are dropped and counted (`air_rx_lc_type_unknown`); their sn still counts as on the air. No version field: both ends run matching managers.
+- **sn**: per-upstream TX sequence, 16 bits, over every slot the upstream sends on its bus, parity included; incremented as the upstream stamps each slot ([`stamp_slot_prefix`](../src/core/endpoint/UpstreamStats.cpp)) and wrapping at 65536. TxMux moves pre-framed slots without interpreting type or sn.
+- RX ([`accept_air_payload`](../src/core/endpoint/UpstreamStats.cpp)) drops a slot with the same sn as the last accepted one (duplicate), counts gaps with 16-bit wrap-aware comparison (forward jumps below 32768; `air_rx_gap_loss`), takes a jump back past 64 as a peer restart (`air_rx_resyncs`), and passes the body on with its type.
 
-Two sequence numbers exist: the 12-bit **MPDU sequence** in the 802.11 header (per radio, per frame) and the 15-bit **LC sequence** (per bus, per slot). Loss accounting uses the LC sequence.
+Two sequence numbers exist: the 12-bit **MPDU sequence** in the 802.11 header (per radio, per frame) and the 16-bit **LC sn** (per bus, per slot). Loss accounting uses the LC sn.
 
 ### FEC (optional)
 
-Configured per upstream: `upstream-N.fec.type = RS_BLOCK_ERASURE` with `fec.k`, `fec.n` and `fec.timeout_ms` (default 20), or at runtime with `add_upstream` / `update_upstream fec=BLOCK k= n= fec_timeout=` ([mplane.md](mplane.md)). [`RsBlockErasure`](../src/core/fec/RsBlockErasure.h) groups **k** datagrams into **n** shards (`1 ≤ k < n ≤ 31`); any k received shards recover the block (Reed–Solomon erasure, ISA-L).
+Configured per upstream: `upstream-N.fec.type = RS_BLOCK_ERASURE` with `fec.k`, `fec.n`, `fec.timeout_ms` (default 20, at least 1) and `fec.spread_ms` (default 0, up to 250), or at runtime with `add_upstream` / `update_upstream fec=BLOCK k= n= fec_timeout= fec_spread=` ([mplane.md](mplane.md)). Blocks have **k** data shards and **n − k** parity shards (`1 ≤ k < n ≤ 31`); any k received shards recover the block (Reed–Solomon erasure, ISA-L). The streams come from [winject-fec](https://github.com/winject-wireless/winject-fec), pinned in [`cmake/WinjectFecFetch.cmake`](../cmake/WinjectFecFetch.cmake).
 
-- **TX:** datagram → `push_app` → shards pushed into the supplied TX queue → scheduler pop (tagged as FEC) → LC header with F set → slot. A partial block is closed after `fec.timeout_ms`; zero disables automatic closing. Encoded output shares one bounded 1024-packet TX queue with raw datagrams; overflow drops the oldest queued packet and increments `upstream_<id>_tx_queue_drops`.
-- **Codec:** vendored from vstreamer `5cd91b7`, with independent TX and RX state. See [upstream-fec.md](upstream-fec.md) for receive ordering, deadlines, runtime changes and provenance.
-- **RX:** a slot whose LC header has F set → `push_air` → zero or more recovered datagrams. Slots without F always pass straight to the application, whatever their bytes. The decoder reads k/n from each shard header, so peers can use different k/n, and it decodes F slots even on an upstream with FEC disabled; those are counted in `upstream_<id>_air_rx_fec_unexpected` because the two ends disagree on `fec.type`. A shard whose header is invalid is dropped and counted in the decode failures.
+- **TX ([`fec_write_stream`](https://github.com/winject-wireless/winject-fec/blob/main/include/winject_fec/write_stream.hpp)):** each datagram goes out at once as a data shard. A block closes after k datagrams, or `fec.timeout_ms` after its first; its full n − k parity then goes out at its place in the spread: parity row j of a block of c shards at `max(close + j·spread/c, first + (k + j)·spread/c)`, so a block's shards span `fec.spread_ms` from its first datagram. With spread 0 parity follows the block's last data shard. All slots share one bounded 1024-packet radio TX queue; overflow drops the oldest queued packet and increments `upstream_<id>_tx_queue_drops`.
+- **RX ([`fec_read_stream`](https://github.com/winject-wireless/winject-fec/blob/main/include/winject_fec/read_stream.hpp)):** plain bodies go to the app at once. FEC data goes out in sequence: at once when nothing is missing before it; behind a hole when the hole is rebuilt from its block's parity or given up at a deadline learnt from the sender's measured spread and jitter (250 ms after the close until two blocks have been measured). The read stream reads k/n from parity headers, so peers can use different k/n, and it takes fec bodies even on an upstream with FEC disabled; those are counted in `upstream_<id>_air_rx_fec_unexpected` because the two ends disagree on `fec.type`.
 
-Shard header (5 bytes, [`RsBlockErasure::pack_header`](../src/core/fec/vendor/rs_block_erasure.cpp)); the same layout as vstreamer's FEC shard header:
+Shard headers ([winject-fec wire](https://github.com/winject-wireless/winject-fec/blob/main/include/winject_fec/wire.hpp), bits MSB first):
 
 ```
- 0               1               2               3               4
- 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
-+-------------------------------+---------+---------+---------+-+---------+-----+
-|       sdu_base (BE u16)       |    k    |    n    |   idx   |s|  sdu_n  |spare|
-+-------------------------------+---------+---------+---------+-+---------+-----+
+data shard (3 B):    u8  1 | spare 7 (0)          u16 BE sequence number (data shards only)   data
+parity shard (4 B):  u16 BE 0 | n 5 | k 5 | k_i 5  u16 BE first data sequence of the block    parity
 ```
 
-| Field | Bits | Meaning |
-|---|---|---|
-| `sdu_base` | 16 | Datagram sequence of data shard 0; the block id. The TX sequence starts at a random value and advances by `sdu_n` per block, so a restarted peer does not reuse recent ids |
-| `k`, `n` | 5 + 5 | Data and total shards |
-| `idx` | 5 | Shard index; `idx ≥ k` is parity |
-| `sdu_n` | 5 | Datagrams in the block (`1 ≤ sdu_n ≤ k`). A block closed by `fec.timeout_ms` has `sdu_n < k`: data slots `sdu_n … k−1` are empty pads that are not sent, and the receiver rebuilds them, so any `sdu_n` received shards recover the block |
-| `s`, spare | 1 + 3 | Zero; a non-zero spare bit makes the header invalid |
+| Field | Meaning |
+|---|---|
+| data sequence | One counter over data shards; starts at a random value so a restarted peer does not reuse recent ids, and continues across an upstream hot-swap |
+| `n`, `k`, `k_i` | The block's parity count, data count and this parity's row; the block covers data `[seq, seq + k)` |
 
-Shard body: 2-byte BE length + original datagram (parity shards are padded for the RS arithmetic). The largest datagram an FEC upstream carries is `k_stream_payload_max − 5 − 2` = **1438** bytes ([`max_original()`](../src/core/fec/vendor/rs_block_erasure.cpp)).
-
-The encoder sends a block's shards back to back. On a link with bursty loss, spreading them over time recovers far more blocks; see [fec-spreading.md](fec-spreading.md).
+Parity is computed over rows of `[u16 BE length | data | zero pad]`, so a rebuilt row carries its own length; the length is never sent with a data shard. The largest datagram an FEC upstream carries is `k_stream_payload_max − 4 − 2` = **1438** bytes. On a link with bursty loss, a parity spread recovers far more blocks; see [fec-spreading.md](fec-spreading.md).
 
 ### Byte layout of one slot
 
 ```
-with FEC:     [ LC bus 1 B ][ F=1 + LC seq 2 B ][ FEC hdr 5 B ][ len 2 B ][ datagram ... ]
-without FEC:  [ LC bus 1 B ][ F=0 + LC seq 2 B ][ datagram ... ]
+plain:        [ bus 1 B ][ type=0 1 B ][ sn 2 B ][ datagram ... ]
+fec data:     [ bus 1 B ][ type=1 1 B ][ sn 2 B ][ 0x80 1 B ][ data seq 2 B ][ datagram ... ]
+fec parity:   [ bus 1 B ][ type=1 1 B ][ sn 2 B ][ n|k|k_i 2 B ][ block seq 2 B ][ parity ... ]
 ```
 
 An MPDU is the 24-byte 802.11 header followed by up to five such slots.

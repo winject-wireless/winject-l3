@@ -10,14 +10,12 @@ include(${WINJECT_L3_DIR}/L3Sources.cmake)
 list(TRANSFORM WINJECT_CORE_SOURCES PREPEND ${WINJECT_CORE_DIR}/)
 list(TRANSFORM WINJECT_L3_SOURCES PREPEND ${WINJECT_L3_DIR}/)
 
-# BFC (header-only) and ISA-L's portable erasure code, pinned once in
-# src/BfcFetch.cmake and fec/IsalEc.cmake. Not fetched during IDF's early
-# requirement scan.
+# BFC (header-only), pinned once in src/BfcFetch.cmake. Not fetched during
+# IDF's early requirement scan. FEC is the winject_fec component (winject-fec's
+# idf/winject_fec, at the pin in cmake/WinjectFecFetch.cmake), which the
+# project adds to EXTRA_COMPONENT_DIRS.
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     include(${WINJECT_L3_ROOT}/src/BfcFetch.cmake)
-    include(${WINJECT_CORE_DIR}/fec/IsalEc.cmake)
-    winject_fetch_isal()
-    FetchContent_GetProperties(isa-l)
 
     include(${WINJECT_L3_ROOT}/cmake/WinjectVersion.cmake)
     configure_file(${WINJECT_CORE_DIR}/WinjectBuildVersion.h.in
@@ -27,7 +25,6 @@ endif()
 idf_component_register(
     SRCS ${WINJECT_CORE_SOURCES}
          ${WINJECT_L3_SOURCES}
-         ${isa-l_SOURCE_DIR}/erasure_code/ec_base.c
          port/pipe.c
     # compat: <poll.h> for BFC's reactor, which the public Console.h uses.
     # bfc is public: include/winject_l3/Console.h uses its reactor.
@@ -37,9 +34,8 @@ idf_component_register(
                  ${WINJECT_L3_DIR}
                  compat
     PRIV_INCLUDE_DIRS ${WINJECT_L3_ROOT}/src
-                      ${isa-l_SOURCE_DIR}/include
-                      ${isa-l_SOURCE_DIR}/erasure_code
                       ${CMAKE_CURRENT_BINARY_DIR}/generated
+    REQUIRES winject_fec
     PRIV_REQUIRES lwip pthread vfs
 )
 
@@ -49,5 +45,3 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     # BFC throws on fatal errors; with IDF's C++ exceptions off a throw aborts.
     $<$<COMPILE_LANGUAGE:CXX>:-fexceptions>
 )
-set_source_files_properties(${isa-l_SOURCE_DIR}/erasure_code/ec_base.c
-    PROPERTIES COMPILE_DEFINITIONS NDEBUG)

@@ -278,6 +278,13 @@ TEST(L3ApiTest, ApplyBuildsTheConfigAndHandlesWork)
     fec.n = 3;
     EXPECT_TRUE(up.set_fec(fec).ok());
     EXPECT_EQ(up.fec().value.n, 3);
+    EXPECT_EQ(up.fec().value.spread.count(), 0);
+    fec.spread = std::chrono::milliseconds(25);
+    EXPECT_TRUE(up.set_fec(fec).ok());
+    EXPECT_EQ(up.fec().value.spread.count(), 25);
+    fec.spread = std::chrono::milliseconds(251);
+    EXPECT_EQ(up.set_fec(fec).error, "EINVAL");
+    fec.spread = std::chrono::milliseconds(0);
     fec.n = 99;
     EXPECT_EQ(up.set_fec(fec).error, "EINVAL");
 

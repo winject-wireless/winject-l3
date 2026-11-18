@@ -6,8 +6,21 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <winject_fec/wire.hpp>
+
 namespace winject::core
 {
+
+// The LC (logical channel) prefix of every slot payload:
+//
+//   u8 bus | u8 lc_type | u16 sn (big endian) | body
+//
+// lc_type 0 (plain): the body is the app datagram. lc_type 1 (fec): the body
+// is a winject-fec shard (data or parity). Other types are dropped. sn counts
+// every slot an upstream sends on its bus, parity included, so the receiver
+// sees air gaps and duplicates whatever the type. No version field: both ends
+// run matching managers.
+using LcType = winject::fec::lc_type;
 
 // Demux/radio routing: first byte of each slot payload.
 struct RouteHeader
@@ -25,40 +38,36 @@ struct RouteHeader
     }
 };
 
-// UpstreamLink-owned air metadata before the SDU (bytes 1..2 of the slot
-// prefix).
+// UpstreamLink-owned air metadata before the body (bytes 1..3 of the slot
+// prefix): the LC type and the sequence number.
 struct UpstreamAirHeader
 {
-    static constexpr size_t k_len = 2;
-    static_assert(k_len == sizeof(BEU16UA), "UpstreamAirHeader layout");
-    static constexpr uint16_t k_fec_flag = 0x8000;
-    static constexpr uint16_t k_seq_mask = 0x7FFF;
+    static constexpr size_t k_len = 3;
+    static_assert(sizeof(BEU16UA) == 2, "UpstreamAirHeader layout");
     // Forward distances below this are gaps; at or above, the slot is old.
-    static constexpr uint16_t k_seq_half = 0x4000;
+    static constexpr uint16_t k_seq_half = 0x8000;
 
-    static void write(uint8_t* out, uint16_t seq, bool is_fec)
+    static void write(uint8_t* out, LcType type, uint16_t seq)
     {
-        BEU16UA* word = reinterpret_cast<BEU16UA*>(out);
-        *word = static_cast<uint16_t>((seq & k_seq_mask) |
-                                      (is_fec ? k_fec_flag : 0));
+        out[0] = static_cast<uint8_t>(type);
+        *reinterpret_cast<BEU16UA*>(out + 1) = seq;
+    }
+
+    static uint8_t read_type(const uint8_t* slot_payload)
+    {
+        return slot_payload[RouteHeader::k_len];
     }
 
     static uint16_t read_seq(const uint8_t* slot_payload)
     {
-        return static_cast<uint16_t>(read_word(slot_payload) & k_seq_mask);
+        return static_cast<uint16_t>(*reinterpret_cast<const BEU16UA*>(
+            slot_payload + RouteHeader::k_len + 1));
     }
 
-    static bool read_is_fec(const uint8_t* slot_payload)
+    static bool known_type(uint8_t type)
     {
-        return (read_word(slot_payload) & k_fec_flag) != 0;
-    }
-
-private:
-    static uint16_t read_word(const uint8_t* slot_payload)
-    {
-        const BEU16UA* word =
-            reinterpret_cast<const BEU16UA*>(slot_payload + RouteHeader::k_len);
-        return static_cast<uint16_t>(*word);
+        return type == static_cast<uint8_t>(LcType::plain) ||
+               type == static_cast<uint8_t>(LcType::fec);
     }
 };
 
@@ -69,14 +78,12 @@ inline constexpr size_t k_slot_prefix_len =
 struct LCHeader
 {
     static constexpr size_t k_len = k_slot_prefix_len;
-    static constexpr uint16_t k_fec_flag = UpstreamAirHeader::k_fec_flag;
-    static constexpr uint16_t k_seq_mask = UpstreamAirHeader::k_seq_mask;
     static constexpr uint16_t k_seq_half = UpstreamAirHeader::k_seq_half;
 
-    static void write(uint8_t* out, uint8_t bus, uint16_t seq, bool is_fec)
+    static void write(uint8_t* out, uint8_t bus, LcType type, uint16_t seq)
     {
         RouteHeader::write(out, bus);
-        UpstreamAirHeader::write(out + RouteHeader::k_len, seq, is_fec);
+        UpstreamAirHeader::write(out + RouteHeader::k_len, type, seq);
     }
 
     static uint8_t read_bus(const uint8_t* data)
@@ -84,14 +91,14 @@ struct LCHeader
         return RouteHeader::read_bus(data);
     }
 
+    static uint8_t read_type(const uint8_t* data)
+    {
+        return UpstreamAirHeader::read_type(data);
+    }
+
     static uint16_t read_seq(const uint8_t* data)
     {
         return UpstreamAirHeader::read_seq(data);
-    }
-
-    static bool read_is_fec(const uint8_t* data)
-    {
-        return UpstreamAirHeader::read_is_fec(data);
     }
 };
 

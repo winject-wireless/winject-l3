@@ -1,4 +1,4 @@
-# winject-l3 core sources: the data path (frames, FEC, radio mux/demux,
+# winject-l3 core sources: the data path (frames, radio mux/demux,
 # upstreams) and the radio m-plane client. Relative to this directory; shared
 # by src/manager/CMakeLists.txt (Linux), src/test and the ESP-IDF component.
 set(WINJECT_CORE_SOURCES
@@ -11,11 +11,6 @@ set(WINJECT_CORE_SOURCES
     mplane/MplaneText.cpp
     frames/Frame.cpp
     frames/Mpdu.cpp
-    fec/vendor/rs_block_erasure.cpp
-    fec/vendor/rs_block_erasure_rx.cpp
-    fec/vendor/rs_encode_scalar.cpp
-    fec/FecTx.cpp
-    fec/FecRx.cpp
     radio/WifiUdp.cpp
     radio/WifiQueue.cpp
     radio/WifiFcs.cpp

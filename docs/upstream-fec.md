@@ -1,80 +1,80 @@
 # Upstream FEC
 
-Winject uses a local vendor copy of vstreamer's RS codec from commit
-`5cd91b7e8dfb5190ca08852b6e066147be780921`. Provenance, source hashes and local
-adaptations are recorded in [the vendor README](../src/core/fec/vendor/README.md).
-A shared library extraction is deferred to a separate task; this build does not
-depend on a vstreamer checkout.
+Each upstream carries its datagrams through a [winject-fec](https://github.com/winject-wireless/winject-fec)
+write stream (TX) and read stream (RX), the library vstreamer also moves to. The pin is in
+[`cmake/WinjectFecFetch.cmake`](../cmake/WinjectFecFetch.cmake); the streams run on the
+upstream's CV reactor. [`DatagramAir`](../src/core/endpoint/DatagramAir.h) connects them to the
+app and the radio.
 
-## Wire compatibility and telemetry
+## LC framing
 
-Winject's existing three-byte LC header still carries the bus, FEC flag and
-sequence number. RS shards retain their five-byte header and two-byte original
-length prefix. The existing shard budget is 1445 bytes, allowing application
-payloads up to 1438 bytes with upstream FEC. Configuration still requires
-`1 <= k < n <= 31`.
+Every slot is `u8 bus | u8 lc_type | u16 sn (BE) | body` (see [winject.md](winject.md#lc-header)):
 
-The LC FEC flag alone selects decoding. Raw datagrams are passed through
-unchanged. Vstreamer data and telemetry headers remain part of the opaque
-application payload; their shared transport does not require winject to inspect
-or rewrite them. This change does not introduce a winject telemetry protocol or
-add vstreamer's outer four-byte header to the winject air protocol.
+- `lc_type` 0 (plain): the body is the app datagram. 1 (fec): a winject-fec shard. Other types
+  are dropped and counted (`air_rx_lc_type_unknown`).
+- `sn` counts every slot an upstream sends on its bus, plain, data and parity alike, so the
+  receiver sees air gaps and duplicates whatever the type.
+- The type, not the body, decides decoding: app bytes are never inspected (the 0xF1 outage of
+  v1.0.0 cannot come back).
+- No version field: both ends run matching managers. This layout replaces the 3-byte header
+  (`bus | is_fec:1 seq:15`); older managers do not interoperate with it.
+
+The prefix takes one byte more than before: a plain upstream carries datagrams up to **1444**
+bytes (was 1445); an FEC upstream up to **1438** (unchanged).
 
 ## Sending
 
-The encoder collects up to k originals, then returns systematic and parity
-shards. Partial blocks flush at their actual codec deadline, defaulting to 20 ms.
-A zero timeout disables automatic flush. Destruction and instance replacement
-discard pending originals. Short blocks omit their virtual zero-pad data shards.
-
-Raw datagrams and encoded shards share one 1024-packet queue. Overflow drops
-the oldest queued packet and increments `upstream_<id>_tx_queue_drops`. This is
-packet-level loss and can remove individual shards from a block. Packet sizes
-are bounded by the fixed air MTU; pending unencoded input is limited to one
-partial block. Pending statistics include those originals as well as queued
-output.
-
-Encoding and timer processing run on the supplied upstream CV reactor. Encoded
-output is pushed into the caller-supplied reactive TX queue; the scheduler
-consumes it directly. Management FEC changes replace the upstream instance,
-discarding old pending state and resetting per-instance counters. Invalid changes
-leave the active instance intact. The scheduler's per-bus air sequence continues.
+- The upstream copies each app datagram once into a buffer with 7 bytes of room in front:
+  `[LC room 4][fec slot 3][datagram]`. The write stream writes its data header into the slot
+  and the upstream writes the LC header into the room, so a data shard goes to the radio queue
+  without another copy. Plain datagrams lose the unused fec slot from the front of the view.
+- Data shards go out at once; they never wait for parity or for the block to fill.
+- A block closes after k datagrams or `fec.timeout_ms` after its first one. It always sends its
+  full n − k parity, also when the timeout closed it short.
+- Parity row j of a block of c shards is released at
+  `max(close + j·spread/c, first + (k + j)·spread/c)`. With `fec.spread_ms` = 0 (the default)
+  that is right after the block's last data shard. With a spread, a block's shards span about
+  `fec.spread_ms` from its first datagram, and consecutive blocks interleave. See
+  [fec-spreading.md](fec-spreading.md) for when that helps: against fades in time, not against
+  bursts that take back-to-back datagrams.
+- Raw and FEC slots share one 1024-packet radio TX queue; overflow drops the oldest
+  (`upstream_<id>_tx_queue_drops`).
+- Parity waiting for its release time lives in the write stream and is not in `tx_pending_*`,
+  which now reports the radio queue only.
 
 ## Receiving
 
-Each instance owns RX codec state; instance replacement discards it. Shard headers determine
-receive k/n, including on an upstream whose local TX FEC is disabled. Such input
-continues to increment the existing unexpected-FEC metric.
+- Plain bodies go to the app at once, as a view of the radio buffer.
+- FEC data shards go out in sequence: at once when nothing before them is missing. Behind a
+  hole they wait until the hole is rebuilt from its block's parity, or given up. The order
+  matters to consumers such as an RTP depacketizer, which drops a packet that arrives after a
+  later one.
+- A hole is given up at a deadline learnt from the sender's measured spread, bias and jitter;
+  until two blocks have been measured it is 250 ms after the block's close. Without parity (a
+  data-only stream) a hole is given up as soon as later data shows the sender is past it.
+- k/n come from each parity header, so the receiver needs no FEC configuration. An upstream
+  with FEC off still decodes fec bodies and counts them in `upstream_<id>_air_rx_fec_unexpected`.
+- `fec_rec` counts data shards rebuilt from parity; `fec_lost` counts blocks that lost data
+  (given up, failed or evicted) plus malformed and k/n-mismatched shards.
 
-The receiver emits a contiguous systematic prefix of the current head block
-without waiting for recovery. Later block output waits for that head to complete
-or reach its deadline. At give-up, surviving systematic packets are released
-and missing originals are counted. Packets emitted early are not emitted again
-when recovery completes. This changes receive ordering/latency compared with
-the previous block-at-once implementation.
+## Lifecycle
 
-Deadlines follow the vendored codec's measured sender spread/jitter policy:
-initially it assumes a 250 ms spread cap plus a minimum 5 ms margin. The adapter
-polls pending receive state on the supplied CV reactor every 10 ms, so buffered
-output can advance even if no further datagrams arrive. Loss-free head packets
-can still leave immediately. No intentional TX shard spreading is added here;
-the existing TxMux airtime pacing remains responsible for sending MPDUs.
-
-Receive and transmit state belong to the upstream CV reactor. Timers and queue
-callbacks acquire weak upstream references before processing. Destruction
-invalidates extracted callbacks, cancels timers, and removes queue registrations.
-Deferred queue leases keep raw reactor scan pointers alive until their scan ends.
-See [upstream-endpoint.md](upstream-endpoint.md) for ownership and replacement.
+- A FEC change replaces the upstream (hot-swap). The old streams go with their pending parity
+  and held RX data. The air sn and the FEC data sequence continue into the replacement, so the
+  peer sees one stream.
+- `stop()` may run on any thread but the CV reactor's; it waits out an in-flight data-path call,
+  and the streams' timers hold the streams only weakly.
 
 ## Builds and tests
 
-Linux builds use the existing ISA-L NEON backend on aarch64 and the vendored
-portable encoder elsewhere. The ESP-IDF component builds the same sources with
-portable ISA-L math and optional ESP32-P4 PIE parity encoding, controlled by
-`CONFIG_WINJECT_RS_PIE`.
-
-Tests include the vendored receive sequencing/deadline suite, prior winject
-recovery/MTU tests, golden shard bytes from the previous winject codec, bounded
-backlog, runtime timeout/k/n changes, receive expiry without new arrivals,
-early-delivery deduplication, opaque telemetry forwarding, concurrent ingestion
-and reconfiguration, and callbacks extracted before destruction.
+- Host builds add winject-fec as a subdirectory (`winject::fec`, which brings ISA-L with NEON on
+  aarch64). The ESP-IDF component requires the `winject_fec` component: a project adds
+  `${WINJECT_FEC_SOURCE_DIR}/idf/winject_fec` to `EXTRA_COMPONENT_DIRS` after including
+  `src/BfcFetch.cmake` and `cmake/WinjectFecFetch.cmake` (see `idf/example`). Its Kconfig has
+  the PIE encode kernel and the PSRAM row options (`WINJECT_FEC_*`), which replace
+  `CONFIG_WINJECT_RS_PIE`.
+- winject-fec has its own codec, stream and full-path tests. Here, `DatagramAirTest` covers the
+  slot layout, data-at-once and parity timing, spread, timeout flush, a lossy loopback with
+  in-order recovery, give-up on the reactor timer, sequence carry-over and teardown;
+  `LCHeaderTest` the wire layout, wrap and unknown types; `UpstreamTest` and `AppShutdownTest`
+  the upstream and hot-swap paths.
