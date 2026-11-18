@@ -60,6 +60,11 @@ public:
                UpstreamStats* tx_stats, std::mutex* tx_stats_mu,
                DeliverOwnedApp deliver_owned_app = {});
     void stop();
+    // New FEC settings on the running streams (any thread): the write stream
+    // takes them from its next block, so nothing in flight is dropped and the
+    // sequences run on; the read stream needs none. False (nothing changes)
+    // when they are invalid or the streams are stopped.
+    bool reconfigure_fec(const UpstreamConfig& cfg);
     // Next FEC data shard id. Read or set it only while no data path runs
     // (before the reactor sees this instance, or after stop()).
     uint16_t fec_tx_sdu_seq() const;

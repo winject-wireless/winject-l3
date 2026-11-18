@@ -97,6 +97,10 @@ public:
     UpstreamStats stats() const;
     uint64_t collect_air_seq_loss_delta();
     void get_fec(FecType* type, int* k, int* n) const;
+    // FEC type, k/n, timeout and spread from next, on the running upstream
+    // (l3's thread): no restart, nothing in flight dropped. False (nothing
+    // changes) when they are invalid.
+    bool set_fec(const UpstreamConfig& next);
     int fec_timeout_ms() const
     {
         return config().fec_timeout_ms;

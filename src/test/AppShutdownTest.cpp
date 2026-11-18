@@ -215,7 +215,7 @@ class AppUpstreamReplacementTest : public ::testing::TestWithParam<bool>
 };
 
 TEST_P(AppUpstreamReplacementTest,
-       FecUpdateReconstructsEndpointAndKeepsForwarding)
+       FecUpdateAppliesLiveAndKeepsForwarding)
 {
     using Queue = ReactiveLossyQueue;
     using Registry =
@@ -351,45 +351,48 @@ TEST_P(AppUpstreamReplacementTest,
                 1);
         }
     };
-    // A data shard goes out at once; its block's parity waits for the block.
-    // FEC counters are per instance.
-    auto wait_partial = [&]
+    // The upstream's FEC TX count; it runs on across FEC changes (no restart).
+    auto wait_fec_tx = [&](int n)
     {
-        for (int attempt = 0; attempt < 50; ++attempt)
+        const std::string want = "fec_txpkt=" + std::to_string(n) + " ";
+        for (int attempt = 0; attempt < 100; ++attempt)
         {
-            if (exchange("cmd:2 lut").find("fec_txpkt=1 ") !=
-                std::string::npos)
+            if (exchange("cmd:2 lut").find(want) != std::string::npos)
             {
                 return true;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         return false;
     };
     send_input();
-    ASSERT_TRUE(wait_partial());
+    ASSERT_TRUE(wait_fec_tx(1));  // the data shard of a 3/4 block
     if (GetParam())
     {
-        // A host can temporarily remove a registry binding. Both replacement
-        // and rollback then fail; the next valid update must recover the slot.
+        // The update does not rebuild the upstream, so it does not need the
+        // host's registry bindings.
         Registry::get_instance().rem("replace-in");
-        const auto unavailable = exchange("cmd:9 uu id=0 fec=BLOCK k=2 n=3");
-        EXPECT_EQ(unavailable.find("NOK:9 EIO"), 0u) << unavailable;
-        ASSERT_TRUE(Registry::get_instance().add("replace-in", input));
     }
     auto reply = exchange("cmd:3 uu id=0 fec=BLOCK k=2 n=3 quanta=512");
     ASSERT_EQ(reply.find("OK:3"), 0u) << reply;
-    // Replacement discards the old partial block (its parity never goes);
-    // the first new input starts a block instead of completing the old one.
+    if (GetParam())
+    {
+        ASSERT_TRUE(Registry::get_instance().add("replace-in", input));
+    }
+    // The open block finishes under its own 3/4: two more data shards, then
+    // its parity. The next block is 2/3.
     send_input();
-    ASSERT_TRUE(wait_partial());
+    send_input();
+    ASSERT_TRUE(wait_fec_tx(4));
     reply = exchange("cmd:4 uu id=0 fec=BLOCK k=4 n=4");
     EXPECT_EQ(reply.find("NOK:4"), 0u) << reply;
     send_input();
-    // On the air: the old block's data shard, then the new block's two data
-    // shards and its parity. A fifth would be the old block's parity.
+    send_input();
+    ASSERT_TRUE(wait_fec_tx(7));
+    // On the air: the 3/4 block (3 data, 1 parity) and the 2/3 block (2 data,
+    // 1 parity), nothing dropped.
     size_t shards = 0;
-    for (int attempt = 0; attempt < 100 && shards < 5; ++attempt)
+    for (int attempt = 0; attempt < 100 && shards < 8; ++attempt)
     {
         pollfd fd{radio.fd(), POLLIN, 0};
         if (::poll(&fd, 1, 10) != 1)
@@ -418,7 +421,7 @@ TEST_P(AppUpstreamReplacementTest,
             }
         }
     }
-    EXPECT_EQ(shards, 4u);
+    EXPECT_EQ(shards, 7u);
     app.stop();
     ASSERT_EQ(running.wait_for(std::chrono::seconds(2)),
               std::future_status::ready);

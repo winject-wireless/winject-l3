@@ -241,6 +241,19 @@ void UpstreamLink::get_fec(FecType* type, int* k, int* n) const
         *n = upstream_config.fec_type == FecType::none ? 0 : upstream_config.fec_n;
     }
 }
+bool UpstreamLink::set_fec(const UpstreamConfig& next)
+{
+    if (!air.reconfigure_fec(next))
+    {
+        return false;
+    }
+    upstream_config.fec_type = next.fec_type;
+    upstream_config.fec_k = next.fec_k;
+    upstream_config.fec_n = next.fec_n;
+    upstream_config.fec_timeout_ms = next.fec_timeout_ms;
+    upstream_config.fec_spread_ms = next.fec_spread_ms;
+    return true;
+}
 void UpstreamLink::tx_pending_stats(uint64_t* packets, uint64_t* bytes) const
 {
     uint64_t p = 0, b = 0, qp = 0, qb = 0;

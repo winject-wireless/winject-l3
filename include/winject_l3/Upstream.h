@@ -65,8 +65,8 @@ struct UpstreamSpec
     Fec fec;
     size_t quanta = 256;  // scheduler budget, bytes per turn
     size_t rx_queue_capacity = 1024;
-    // If set, a queue upstream hands the app its end here, at add and again
-    // on every hot-swap, on l3's thread: store the queue only, l3 calls
+    // If set, a queue upstream hands the app its end here, at add, on l3's
+    // thread: store the queue only, l3 calls
     // from here return EDEADLK. With rx, tx and reactor all empty, l3 owns
     // the queues and this is required (EINVAL).
     std::function<void(std::shared_ptr<UpstreamQueue>)> on_queue;
@@ -114,7 +114,9 @@ struct UpstreamTxStats
     uint64_t pending_packets = 0;
 };
 
-// Several fields, one hot-swap.
+// Several fields, applied together to the running upstream. Only these change
+// at runtime; reactors, queues, endpoint and buses are fixed for an upstream's
+// life (remove and add for another).
 struct UpstreamPatch
 {
     std::optional<Fec> fec;
@@ -122,8 +124,8 @@ struct UpstreamPatch
 };
 
 // A handle to one upstream, by id. Cheap to copy, safe from any thread
-// (see winject::L3::run). An FEC change hot-swaps the data path underneath and
-// the handle keeps working. After remove its calls return ENOENT; if the same
+// (see winject::L3::run). An FEC change applies to the running data path (from
+// the next FEC block; nothing restarts or is dropped). After remove its calls return ENOENT; if the same
 // id is added again, the handle reaches the new upstream. A default handle is
 // attached to nothing: calls return ESRCH.
 class Upstream
@@ -139,11 +141,11 @@ public:
 
     Result<UpstreamSpec> spec() const;  // full snapshot (on_queue left empty)
     Result<Fec> fec() const;
-    Status set_fec(const Fec& fec);  // hot-swap, keeps the air sequence
+    Status set_fec(const Fec& fec);  // live, from the next FEC block
     Result<size_t> quanta() const;
     Status set_quanta(size_t quanta);
-    // fec set, alone or with quanta: one hot-swap. Only quanta: no hot-swap,
-    // as set_quanta. Neither: EINVAL.
+    // fec and/or quanta, applied to the running upstream (no restart).
+    // Neither: EINVAL.
     Result<UpstreamSpec> update(const UpstreamPatch& patch);
 
     Result<UpstreamRxStats> rx_stats() const;

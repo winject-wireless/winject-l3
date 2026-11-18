@@ -328,17 +328,12 @@ void L3Impl::apply_configured_fcs()
 
 std::shared_ptr<UpstreamLink> L3Impl::construct_upstream(
     const UpstreamConfig& uc,
-    const std::shared_ptr<BoundedLossyQueue>& tx_queue,
-    const UpstreamLink::TxSequences* resume)
+    const std::shared_ptr<BoundedLossyQueue>& tx_queue)
 {
     if (uc.mode != UpstreamMode::queue)
     {
         auto up = std::make_shared<UDPUpstream>(upstream_reactor, reactor, uc,
                                                 tx_queue);
-        if (resume)
-        {
-            up->resume_tx_sequences(*resume);
-        }
         up->bind_callbacks();
         return up;
     }
@@ -361,10 +356,6 @@ std::shared_ptr<UpstreamLink> L3Impl::construct_upstream(
     }
     auto up = std::make_shared<QueueUpstream>(cv, uc, tx_queue, app_tx_queue,
                                               app_rx_queue);
-    if (resume)
-    {
-        up->resume_tx_sequences(*resume);
-    }
     up->bind_callbacks();
     if (publish != on_queue.end() && publish->second)
     {
@@ -372,65 +363,6 @@ std::shared_ptr<UpstreamLink> L3Impl::construct_upstream(
         publish->second(up->app_transport());
     }
     return up;
-}
-
-bool L3Impl::replace_upstream(size_t index, const UpstreamConfig& uc,
-                              std::string* error)
-{
-    const auto original = cfg.upstreams[index];
-    {
-        std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
-        radio_upstream_table.entries()[index] = {};
-    }
-    // The peer's sequencers see one unbroken stream across the swap.
-    std::optional<UpstreamLink::TxSequences> sequences;
-    if (upstreams[index])
-    {
-        upstreams[index]->teardown();
-        sequences = upstreams[index]->tx_sequences();
-    }
-    upstreams[index].reset();
-    auto install = [&](const UpstreamConfig& config)
-    {
-        auto queue = tx_mux.make_tx_queue();
-        auto up = construct_upstream(config, queue,
-                                     sequences ? &*sequences : nullptr);
-        {
-            std::lock_guard<std::mutex> lock(radio_upstream_table.mutex());
-            radio_upstream_table.entries()[index] =
-                RadioUpstreamEntry{up,
-                                   up->rx_queue(),
-                                   up->rx_queue_eviction_counter(),
-                                   queue,
-                                   radio,
-                                   config.bus_tx,
-                                   config.bus_rx,
-                                   config.scheduler_budget};
-        }
-        upstreams[index] = std::move(up);
-    };
-    try
-    {
-        install(uc);
-    }
-    catch (const std::exception& e)
-    {
-        if (error)
-        {
-            *error = k_eio;
-        }
-        LOG_ERR("upstream replacement failed: %s", e.what());
-        try
-        {
-            install(original);
-        }
-        catch (const std::exception& rollback)
-        {
-            LOG_ERR("upstream restore failed: %s", rollback.what());
-        }
-        return false;
-    }
-    return true;
 }
 
 bool L3Impl::set_upstream_scheduler_budget(size_t index, size_t budget,
@@ -670,14 +602,17 @@ L3Impl::Result<api::UpstreamSpec> L3Impl::update_upstream(
     std::string err;
     if (have_fec)
     {
-        if (!replace_upstream(index, candidate, &err))
+        // Applied to the running upstream: the write stream takes the new
+        // settings from its next block; nothing is restarted or dropped.
+        UpstreamLink* endpoint =
+            index < upstreams.size() ? upstreams[index].get() : nullptr;
+        if (endpoint == nullptr || !endpoint->set_fec(candidate))
         {
-            return error_result<api::UpstreamSpec>(err.empty() ? k_eio
-                                                               : err.c_str());
+            return error_result<api::UpstreamSpec>(endpoint ? k_einval : k_eio);
         }
     }
-    else if (!set_upstream_scheduler_budget(index, candidate.scheduler_budget,
-                                            &err))
+    if (patch.quanta &&
+        !set_upstream_scheduler_budget(index, candidate.scheduler_budget, &err))
     {
         return error_result<api::UpstreamSpec>(err);
     }

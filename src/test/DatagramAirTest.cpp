@@ -2,6 +2,7 @@
 #include "frames/LCHeader.h"
 #include "utils/NetUtil.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -462,4 +463,70 @@ TEST(DatagramAirTest, GiveUpWithNothingToReleaseIsCounted)
     ASSERT_TRUE(wait_for([&] { return b.air->fec_decode_fail() >= 1u; },
                          milliseconds(1000)));
     EXPECT_EQ(b.received_count(), 1u);
+}
+
+// A FEC change applies to the running streams: the open block finishes under
+// the settings it started with (its parity still goes), the next block takes
+// the new ones, and the data sequence runs on. Off and on again likewise.
+TEST(DatagramAirTest, ReconfigureFecIsLiveFromTheNextBlock)
+{
+    CvThread cvt;
+    End a(cvt);
+    End b(cvt);
+    ASSERT_TRUE(a.start(fec_cfg(3, 4)));
+    ASSERT_TRUE(b.start(plain_cfg()));
+    std::vector<bytes> sent;
+    auto send = [&](uint8_t i)
+    {
+        sent.push_back(app(i, 12));
+        a.send(sent.back());
+    };
+    send(0);
+    EXPECT_FALSE(a.air->reconfigure_fec(fec_cfg(4, 4)));  // invalid: no change
+    ASSERT_TRUE(a.air->reconfigure_fec(fec_cfg(2, 3)));
+    send(1);
+    send(2);  // closes the 3/4 block: its parity follows
+    send(3);
+    send(4);  // a 2/3 block
+    ASSERT_TRUE(a.air->reconfigure_fec(plain_cfg()));
+    send(5);  // plain
+    ASSERT_TRUE(a.air->reconfigure_fec(fec_cfg(2, 3)));
+    send(6);
+    send(7);
+    std::vector<Slot> slots;
+    ASSERT_TRUE(wait_for(
+        [&]
+        {
+            for (auto& s : a.pull())
+            {
+                slots.push_back(std::move(s));
+            }
+            return slots.size() == 11;
+        }));
+    // d0 d1 d2 p | d3 d4 p | plain | d6 d7 p
+    size_t fec = 0;
+    for (size_t i = 0; i < slots.size(); ++i)
+    {
+        EXPECT_EQ(uint16_t(slots[i].sn - slots[0].sn), i);
+        fec += slots[i].type == static_cast<uint8_t>(LcType::fec) ? 1 : 0;
+    }
+    EXPECT_EQ(fec, 10u);  // 3+1, 2+1, then 2+1; one plain
+    EXPECT_EQ(slots[7].type, static_cast<uint8_t>(LcType::plain));
+    // Data shards keep one sequence across all of it; lose one of each FEC
+    // block and the receiver rebuilds it.
+    for (size_t i = 0; i < slots.size(); ++i)
+    {
+        if (i == 1 || i == 5 || i == 9)
+        {
+            continue;
+        }
+        b.receive(slots[i]);
+    }
+    ASSERT_TRUE(wait_for([&] { return b.received_count() == sent.size(); }));
+    auto got = b.received();
+    std::sort(got.begin(), got.end());
+    auto want = sent;
+    std::sort(want.begin(), want.end());
+    EXPECT_EQ(got, want);
+    EXPECT_EQ(b.air->fec_recovered(), 3u);
 }

@@ -113,6 +113,23 @@ bool DatagramAir::start(std::shared_ptr<BoundedLossyQueue> tx_queue,
     return true;
 }
 
+bool DatagramAir::reconfigure_fec(const UpstreamConfig& cfg)
+{
+    std::lock_guard<std::mutex> lock(mu);
+    fec_write_stream::config wcfg;
+    if (!tx_stream || !fec_write_config(cfg, &wcfg) ||
+        !tx_stream->configure(wcfg))
+    {
+        return false;
+    }
+    // A block the old settings opened finishes under them; the write stream
+    // drops (and counts) a datagram too long for it.
+    fec_tx_on = wcfg.k > 0;
+    max_app_datagram = fec_tx_on ? fec_write_stream::max_original(wcfg)
+                                 : k_stream_payload_max;
+    return true;
+}
+
 void DatagramAir::stop()
 {
     std::lock_guard<std::mutex> lock(mu);

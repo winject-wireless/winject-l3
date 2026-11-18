@@ -14,19 +14,27 @@ then call `bind_callbacks()` before publishing the instance. `UpstreamLink` inhe
 `enable_shared_from_this`; binding requires shared ownership so callbacks can
 retain weak references. Repeated binding is harmless.
 
-There are no public open, close, stop-input, drain or FEC reconfiguration methods.
-Reconfigure by replacing the instance. Management FEC updates do this; invalid
-configuration is rejected before replacement. An instance replacement resets
-learned UDP peers, receive sequence state, codec state and per-instance counters.
-The TX air sequence and FEC SDU sequence carry over (`tx_sequences()` after
-`teardown()`, `resume_tx_sequences()` before `bind_callbacks()`), so the peer's
-duplicate filter and FEC sequencer see one unbroken stream.
-Scheduler-budget updates alone do not require replacement.
+There are no public open, close, stop-input or drain methods. What is fixed and
+what is not:
+
+- Fixed for the instance's life: its reactors, its queues, its endpoint (UDP
+  address or queue names, and so its mode) and its buses. There is no reason
+  to change them on a running link; a different value is a different upstream
+  (remove and add).
+- Changed at runtime: FEC type, k/n, timeout and spread (`set_fec()`; the write
+  stream takes them from its next block, the block in flight keeps its parity,
+  nothing restarts, invalid settings change nothing) and the scheduler budget.
+
+Replacing an instance resets learned UDP peers, receive sequence state, FEC
+state and per-instance counters;
+`tx_sequences()` after `teardown()` and `resume_tx_sequences()` before
+`bind_callbacks()` carry the TX air and FEC sequences into a replacement, so the
+peer's duplicate filter and FEC receiver see one unbroken stream.
 
 ### Teardown and destruction
 
 Call `teardown()` from the **IO reactor thread** (manager console path) before
-dropping the last `shared_ptr` on hot-swap (`L3Impl::replace_upstream`). It never
+dropping the last `shared_ptr` (upstream removal or replacement). It never
 waits for the CV reactor, which may be stopped or busy in another handler:
 
 - It marks the instance inactive and synchronously deregisters the CV queue
