@@ -262,6 +262,7 @@ TEST(DatagramAirTest, LoopbackRecoversLostDataInOrder)
     EXPECT_EQ(b.air->fec_decode_fail(), 0u);
     // b sends plain: FEC from the peer is counted as unexpected.
     EXPECT_EQ(b.air->fec_air_rx_unexpected(), 10u);
+    EXPECT_EQ(b.air->air_rx_packets(), 10u);
 }
 
 // A hole with no parity to rebuild it is given up on the reactor timer, with

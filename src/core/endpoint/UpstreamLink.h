@@ -120,6 +120,14 @@ public:
     {
         return air.app_tx_packets();
     }
+    uint64_t air_rx_packets() const
+    {
+        return air.air_rx_packets();
+    }
+    uint64_t air_rx_bytes() const
+    {
+        return air.air_rx_bytes();
+    }
     uint64_t fec_air_rx_bytes() const
     {
         return air.fec_air_rx_bytes();

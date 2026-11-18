@@ -271,6 +271,8 @@ void DatagramAir::on_radio_rx(bfc::shared_sized_buffer body, LcType type)
     {
         return;
     }
+    air_rx_packets_acc.fetch_add(1, std::memory_order_relaxed);
+    air_rx_bytes_acc.fetch_add(body.size(), std::memory_order_relaxed);
     if (type == LcType::fec)
     {
         fec_air_rx_bytes_acc.fetch_add(body.size(), std::memory_order_relaxed);

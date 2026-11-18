@@ -110,6 +110,15 @@ public:
     {
         return app_tx_packets_acc.load(std::memory_order_relaxed);
     }
+    // Every slot body taken from the air, plain and FEC.
+    uint64_t air_rx_packets() const
+    {
+        return air_rx_packets_acc.load(std::memory_order_relaxed);
+    }
+    uint64_t air_rx_bytes() const
+    {
+        return air_rx_bytes_acc.load(std::memory_order_relaxed);
+    }
     uint64_t fec_air_rx_bytes() const
     {
         return fec_air_rx_bytes_acc.load(std::memory_order_relaxed);
@@ -221,6 +230,8 @@ private:
     std::atomic<uint64_t> app_rx_oversize_pkt_acc{0};
     std::atomic<uint64_t> app_tx_bytes_acc{0};
     std::atomic<uint64_t> app_tx_packets_acc{0};
+    std::atomic<uint64_t> air_rx_packets_acc{0};
+    std::atomic<uint64_t> air_rx_bytes_acc{0};
     std::atomic<uint64_t> fec_air_rx_bytes_acc{0};
     std::atomic<uint64_t> fec_air_rx_packets_acc{0};
     std::atomic<uint64_t> fec_air_rx_unexpected_acc{0};

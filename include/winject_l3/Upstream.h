@@ -101,6 +101,10 @@ struct UpstreamRxStats
     // measured them (ms); 250 / 0 until it has measured two blocks.
     double fec_spread_est_ms = 0.;
     double fec_jitter_est_ms = 0.;
+    // Every slot taken from the air (plain and FEC, before FEC recovery) and
+    // its body bytes: with air_gap, the link's own receive counters.
+    uint64_t air_packets = 0;
+    uint64_t air_bytes = 0;
 };
 
 struct UpstreamTxStats

@@ -659,6 +659,8 @@ L3Impl::Result<api::UpstreamRxStats> L3Impl::upstream_rx_stats(uint8_t id) const
         s.fec_spread_est_ms = f.spread_est_ms;
         s.fec_jitter_est_ms = f.jitter_est_ms;
         s.fec_bytes = endpoint->fec_air_rx_bytes();
+        s.air_packets = endpoint->air_rx_packets();
+        s.air_bytes = endpoint->air_rx_bytes();
         s.fec_packets = endpoint->fec_air_rx_packets();
         s.push_drops = endpoint->rx_counters().queue_evictions;
     }
